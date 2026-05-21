@@ -1420,6 +1420,10 @@
             setSync({ status: 'signed-out', uid: null, email: null });
             return;
           }
+          if (user.isAnonymous) {
+            try { await auth.signOut(); } catch {}
+            return;
+          }
           setSync({ status: 'loading', uid: user.uid, email: user.email });
           try {
             const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
