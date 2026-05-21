@@ -153,6 +153,42 @@
     const FONT_FAMILIES = ['Calibri','Arial','Helvetica','Times New Roman','Georgia','Verdana','Tahoma','Trebuchet MS','Courier New','Consolas','Comic Sans MS'];
     const FONT_SIZES = [8,9,10,11,12,14,16,18,20,24,28,32];
 
+    const DATE_FORMATS = [
+      { value: 'yyyy-mm-dd',         sample: '2026-06-01' },
+      { value: 'yyyy/mm/dd',         sample: '2026/06/01' },
+      { value: 'mm/dd/yyyy',         sample: '06/01/2026' },
+      { value: 'dd/mm/yyyy',         sample: '01/06/2026' },
+      { value: 'd-mmm-yy',           sample: '1-Jun-26' },
+      { value: 'd-mmm-yyyy',         sample: '1-Jun-2026' },
+      { value: 'mmm d, yyyy',        sample: 'Jun 1, 2026' },
+      { value: 'mmmm d, yyyy',       sample: 'June 1, 2026' },
+      { value: 'd mmmm yyyy',        sample: '1 June 2026' },
+      { value: 'dddd, mmmm d, yyyy', sample: 'Monday, June 1, 2026' },
+    ];
+    const DATE_FORMAT_VALUES = new Set(DATE_FORMATS.map(d => d.value));
+
+    function previewDateFormat(d, fmt) {
+      const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const day = d.getDate();
+      const wd = d.getDay();
+      const tokens = {
+        yyyy: String(y),
+        yy:   String(y).slice(-2),
+        mmmm: months[m],
+        mmm:  months[m].slice(0, 3),
+        mm:   String(m + 1).padStart(2, '0'),
+        m:    String(m + 1),
+        dddd: dayNames[wd],
+        ddd:  dayNames[wd].slice(0, 3),
+        dd:   String(day).padStart(2, '0'),
+        d:    String(day),
+      };
+      return String(fmt || '').replace(/yyyy|yy|mmmm|mmm|mm|dddd|ddd|dd|m|d/g, t => tokens[t] ?? t);
+    }
+
     const DEFAULT_NOTE_STYLE = {
       noteFontFamily: 'Calibri',
       noteFontSize: 11,
@@ -283,7 +319,7 @@
 
       // Header row
       const headerRow = ws.getRow(cur);
-      headerRow.values = ['DATE', 'METRIC', ...hours];
+      headerRow.values = [s.dateHeader || 'DATE', s.metricHeader || 'METRIC', ...hours];
       headerRow.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
@@ -314,7 +350,7 @@
           const row = ws.getRow(cur);
           if (mi === 0) {
             row.getCell(1).value = dateObj;
-            row.getCell(1).numFmt = 'yyyy-mm-dd';
+            row.getCell(1).numFmt = s.dateFormat || 'yyyy-mm-dd';
           }
           row.getCell(2).value = s.metrics[mi];
           row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
@@ -813,6 +849,52 @@
           {/* Metrics / Columns */}
           {sheet.layout === 'hourly' ? (
             <>
+              <div>
+                <SectionLabel hint="Shown in the header row above each column">Column headers</SectionLabel>
+                <div className="grid grid-cols-2 gap-3 max-w-lg">
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Date column label</label>
+                    <Input value={sheet.dateHeader ?? 'DATE'} onChange={e => update({ dateHeader: e.target.value })} placeholder="DATE" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Metric column label</label>
+                    <Input value={sheet.metricHeader ?? 'METRIC'} onChange={e => update({ metricHeader: e.target.value })} placeholder="METRIC" />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <SectionLabel hint="Applied to the date column in the .xlsx (Excel & Google Sheets compatible)">Date format</SectionLabel>
+                {(() => {
+                  const fmt = sheet.dateFormat || 'yyyy-mm-dd';
+                  const isCustom = !DATE_FORMAT_VALUES.has(fmt);
+                  const sample = previewDateFormat(new Date(2026, 5, 1), fmt); // June 1, 2026
+                  return (
+                    <div className="space-y-2 max-w-lg">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Preset</label>
+                          <Select value={isCustom ? '__custom__' : fmt}
+                            onChange={e => update({ dateFormat: e.target.value === '__custom__' ? fmt : e.target.value })}>
+                            {DATE_FORMATS.map(d => <option key={d.value} value={d.value}>{d.sample}</option>)}
+                            <option value="__custom__">Custom…</option>
+                          </Select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">{isCustom ? 'Custom format code' : 'Format code'}</label>
+                          <Input value={fmt} onChange={e => update({ dateFormat: e.target.value })} placeholder="yyyy-mm-dd" />
+                        </div>
+                      </div>
+                      <div className="rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 flex items-center justify-between gap-3">
+                        <span className="text-[10px] uppercase tracking-wide text-neutral-600">Preview (Jun 1, 2026)</span>
+                        <span className="text-sm font-mono text-neutral-200">{sample}</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 font-mono">
+                        Tokens: yyyy yy · mmmm mmm mm m · dddd ddd dd d
+                      </p>
+                    </div>
+                  );
+                })()}
+              </div>
               <div>
                 <SectionLabel hint={`${(sheet.metrics || []).length} rows per day block`}>Metric rows</SectionLabel>
                 <ListEditor items={sheet.metrics || []} onChange={(v) => update({ metrics: v })} placeholder="e.g. Active Calls" label="metric" />
