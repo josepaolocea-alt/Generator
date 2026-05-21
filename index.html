@@ -60,7 +60,7 @@
 
   <style>
     html, body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
-    body { background: #0a0a0a; color: #fafafa; -webkit-font-smoothing: antialiased; }
+    body { background: #0a0a0a; color: #fafafa; -webkit-font-smoothing: antialiased; transition: background-color 0.2s, color 0.2s; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #262626; border-radius: 4px; }
@@ -71,6 +71,68 @@
     input[type="color"]::-webkit-color-swatch { border: 1px solid #2a2a2a; border-radius: 4px; }
     .loader { width: 14px; height: 14px; border: 2px solid currentColor; border-bottom-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== Light mode overrides ===== */
+    html.light { color-scheme: light; }
+    html.light body { background: #f6f6f7; color: #18181b; }
+    html.light ::-webkit-scrollbar-thumb { background: #d4d4d8; }
+    html.light ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+    html.light input[type="color"]::-webkit-color-swatch { border-color: #d4d4d8; }
+
+    /* Backgrounds */
+    html.light .bg-\[\#0a0a0a\]            { background-color: #f6f6f7 !important; }
+    html.light .bg-\[\#0a0a0a\]\/95        { background-color: rgba(246,246,247,0.95) !important; }
+    html.light .bg-\[\#0c0c0c\]            { background-color: #ffffff !important; }
+    html.light .bg-\[\#070707\]            { background-color: #fafafa !important; }
+    html.light .bg-\[\#080808\]            { background-color: #f0f0f1 !important; }
+    html.light .bg-neutral-950             { background-color: #ffffff !important; }
+    html.light .bg-neutral-900             { background-color: #f4f4f5 !important; }
+    html.light .bg-neutral-900\/80         { background-color: rgba(244,244,245,0.8) !important; }
+    html.light .bg-neutral-900\/60         { background-color: rgba(244,244,245,0.6) !important; }
+    html.light .bg-neutral-800             { background-color: #e4e4e7 !important; }
+    html.light .hover\:bg-neutral-900:hover     { background-color: #f4f4f5 !important; }
+    html.light .hover\:bg-neutral-900\/60:hover { background-color: rgba(244,244,245,0.6) !important; }
+    html.light .focus\:bg-neutral-900\/50:focus { background-color: rgba(244,244,245,0.5) !important; }
+
+    /* Text */
+    html.light .text-neutral-100 { color: #18181b !important; }
+    html.light .text-neutral-200 { color: #27272a !important; }
+    html.light .text-neutral-300 { color: #3f3f46 !important; }
+    html.light .text-neutral-400 { color: #52525b !important; }
+    html.light .text-neutral-500 { color: #71717a !important; }
+    html.light .text-neutral-600 { color: #a1a1aa !important; }
+    html.light .text-neutral-700 { color: #d4d4d8 !important; }
+    html.light .hover\:text-neutral-200:hover { color: #27272a !important; }
+    html.light .placeholder-neutral-600::placeholder { color: #a1a1aa !important; }
+
+    /* Borders */
+    html.light .border-neutral-900             { border-color: #e4e4e7 !important; }
+    html.light .border-neutral-800             { border-color: #d4d4d8 !important; }
+    html.light .border-neutral-700             { border-color: #a1a1aa !important; }
+    html.light .hover\:border-neutral-700:hover { border-color: #71717a !important; }
+    html.light .divide-neutral-900 > * + *     { border-color: #e4e4e7 !important; }
+
+    /* Primary button: invert (dark button on light surfaces) */
+    html.light .bg-white               { background-color: #18181b !important; }
+    html.light .text-black             { color: #fafafa !important; }
+    html.light .hover\:bg-neutral-200:hover { background-color: #27272a !important; }
+
+    /* Translucent accent surfaces — tone down on light bg */
+    html.light .bg-blue-500\/10        { background-color: rgba(59,130,246,0.12) !important; }
+    html.light .bg-emerald-500\/10     { background-color: rgba(16,185,129,0.12) !important; }
+    html.light .bg-red-500\/5          { background-color: rgba(239,68,68,0.08) !important; }
+    html.light .bg-red-500\/10         { background-color: rgba(239,68,68,0.10) !important; }
+    html.light .text-blue-300          { color: #1d4ed8 !important; }
+    html.light .text-emerald-300       { color: #047857 !important; }
+    html.light .text-emerald-200       { color: #065f46 !important; }
+    html.light .text-red-300           { color: #b91c1c !important; }
+    html.light .text-red-200           { color: #991b1b !important; }
+    html.light .text-amber-300         { color: #b45309 !important; }
+    html.light .border-blue-500\/40    { border-color: rgba(59,130,246,0.45) !important; }
+    html.light .border-emerald-500\/40 { border-color: rgba(16,185,129,0.45) !important; }
+    html.light .border-red-500\/30     { border-color: rgba(239,68,68,0.40) !important; }
+    html.light .border-red-500\/40     { border-color: rgba(239,68,68,0.40) !important; }
+    html.light .bg-red-950\/20         { background-color: rgba(254,226,226,0.6) !important; }
   </style>
 </head>
 <body>
@@ -87,6 +149,40 @@
     const LAYOUT_LABELS = { hourly: 'Hourly Block', flat: 'Flat Table', alarm: 'Alarm Log' };
 
     const FLAT_COLS = ['Date','Time','Trunk ID','Alias','Active Calls','CPS','Peak','CLZ Total','CLZ CPS','15min ASR','15min ACD','15min PDD'];
+
+    const FONT_FAMILIES = ['Calibri','Arial','Helvetica','Times New Roman','Georgia','Verdana','Tahoma','Trebuchet MS','Courier New','Consolas','Comic Sans MS'];
+    const FONT_SIZES = [8,9,10,11,12,14,16,18,20,24,28,32];
+
+    const DEFAULT_NOTE_STYLE = {
+      noteFontFamily: 'Calibri',
+      noteFontSize: 11,
+      noteFontColor: 'FF6B7280',
+      noteBold: false,
+      noteItalic: true,
+      noteUnderline: false,
+      noteAlign: 'left',
+    };
+
+    function applyNoteStyle(ws, rowNum, colSpan, s) {
+      ws.mergeCells(rowNum, 1, rowNum, Math.max(1, colSpan));
+      const c = ws.getCell(rowNum, 1);
+      c.value = s.note;
+      c.font = {
+        name:      s.noteFontFamily || 'Calibri',
+        size:      Number(s.noteFontSize) || 11,
+        color:     { argb: s.noteFontColor || 'FF6B7280' },
+        bold:      !!s.noteBold,
+        italic:    s.noteItalic !== undefined ? !!s.noteItalic : true,
+        underline: !!s.noteUnderline,
+      };
+      c.alignment = {
+        wrapText: true,
+        vertical: 'middle',
+        horizontal: s.noteAlign || 'left',
+      };
+      const sz = Number(s.noteFontSize) || 11;
+      ws.getRow(rowNum).height = Math.max(20, Math.round(sz * 1.8));
+    }
 
     const DEFAULT_SHEETS = [
       { id: 's_alarm',    name: 'SBC ALARM',       layout: 'alarm',  active: true, columns: ['Contains','Severity','Source','Count','Last Occur','SBC','Date Reported','Remarks from L2'], note: '' },
@@ -181,12 +277,7 @@
 
       // Header note
       if (s.note && s.note.trim()) {
-        ws.mergeCells(cur, 1, cur, totalCols);
-        const c = ws.getCell(cur, 1);
-        c.value = s.note;
-        c.font = { italic: true, color: { argb: 'FF6B7280' } };
-        c.alignment = { wrapText: true, vertical: 'middle' };
-        ws.getRow(cur).height = 32;
+        applyNoteStyle(ws, cur, totalCols, s);
         cur += 2;
       }
 
@@ -347,10 +438,7 @@
       const cols = s.columns || [];
       let cur = 1;
       if (s.note && s.note.trim()) {
-        ws.mergeCells(cur, 1, cur, Math.max(1, cols.length));
-        const c = ws.getCell(cur, 1);
-        c.value = s.note;
-        c.font = { italic: true, color: { argb: 'FF6B7280' } };
+        applyNoteStyle(ws, cur, cols.length, s);
         cur += 2;
       }
       const hdr = ws.getRow(cur);
@@ -369,10 +457,7 @@
       const cols = s.columns || [];
       let cur = 1;
       if (s.note && s.note.trim()) {
-        ws.mergeCells(cur, 1, cur, Math.max(1, cols.length));
-        const c = ws.getCell(cur, 1);
-        c.value = s.note;
-        c.font = { italic: true, color: { argb: 'FF6B7280' } };
+        applyNoteStyle(ws, cur, cols.length, s);
         cur += 2;
       }
       const hdr = ws.getRow(cur);
@@ -453,6 +538,8 @@
     function IconX() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>; }
     function IconPlus() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>; }
     function IconDownload() { return <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>; }
+    function IconSun() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>; }
+    function IconMoon() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>; }
 
     /* ============================================================
        Sidebar
@@ -476,6 +563,8 @@
 
     function Sidebar({ state, setState, onGenerate, busy, sync }) {
       const { year, month, sheets, selectedSheetId } = state;
+      const theme = state.theme || 'dark';
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
 
       const updateSheet = (id, patch) => setState(s => ({ ...s, sheets: s.sheets.map(x => x.id === id ? { ...x, ...patch } : x) }));
       const addSheet = () => {
@@ -495,8 +584,16 @@
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
           {/* Brand */}
           <div className="p-5 border-b border-neutral-900">
-            <SyncBadge sync={sync} />
-            <h1 className="text-[17px] font-bold tracking-tight leading-tight">Monthly Report Generator</h1>
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Monthly Report Generator</h1>
             <p className="text-xs text-neutral-500 mt-1">24/7 ops · SIP/FCS hourly record</p>
           </div>
 
@@ -649,6 +746,68 @@
           <div>
             <SectionLabel hint="Shown at top of the generated sheet">Header note</SectionLabel>
             <Textarea rows={2} value={sheet.note || ''} onChange={e => update({ note: e.target.value })} placeholder="Optional instructional note (e.g. 'Highlight peak utilization hours in red')" />
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+              <div className="md:col-span-2">
+                <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Font family</label>
+                <Select value={sheet.noteFontFamily || DEFAULT_NOTE_STYLE.noteFontFamily}
+                  onChange={e => update({ noteFontFamily: e.target.value })}>
+                  {FONT_FAMILIES.map(f => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Size</label>
+                <Select value={sheet.noteFontSize ?? DEFAULT_NOTE_STYLE.noteFontSize}
+                  onChange={e => update({ noteFontSize: Number(e.target.value) })}>
+                  {FONT_SIZES.map(n => <option key={n} value={n}>{n}pt</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Color</label>
+                <div className="flex items-center gap-2 h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2">
+                  <input type="color" value={'#' + (sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor).slice(2).toLowerCase()}
+                    onChange={e => update({ noteFontColor: 'FF' + e.target.value.slice(1).toUpperCase() })}
+                    className="w-6 h-6 cursor-pointer bg-transparent" />
+                  <span className="text-[11px] font-mono text-neutral-400">#{(sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor).slice(2).toUpperCase()}</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Align</label>
+                <Select value={sheet.noteAlign || DEFAULT_NOTE_STYLE.noteAlign}
+                  onChange={e => update({ noteAlign: e.target.value })}>
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </Select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Style</label>
+                <div className="flex gap-1">
+                  <button onClick={() => update({ noteBold: !sheet.noteBold })}
+                    title="Bold"
+                    className={`flex-1 h-9 rounded-md border text-sm font-bold transition-colors ${sheet.noteBold ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-neutral-800 bg-neutral-950 text-neutral-500 hover:text-neutral-200 hover:border-neutral-700'}`}>B</button>
+                  <button onClick={() => update({ noteItalic: !(sheet.noteItalic !== undefined ? sheet.noteItalic : true) })}
+                    title="Italic"
+                    className={`flex-1 h-9 rounded-md border text-sm italic transition-colors ${(sheet.noteItalic !== undefined ? sheet.noteItalic : true) ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-neutral-800 bg-neutral-950 text-neutral-500 hover:text-neutral-200 hover:border-neutral-700'}`}>I</button>
+                  <button onClick={() => update({ noteUnderline: !sheet.noteUnderline })}
+                    title="Underline"
+                    className={`flex-1 h-9 rounded-md border text-sm underline transition-colors ${sheet.noteUnderline ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-neutral-800 bg-neutral-950 text-neutral-500 hover:text-neutral-200 hover:border-neutral-700'}`}>U</button>
+                </div>
+              </div>
+            </div>
+            {sheet.note && sheet.note.trim() && (
+              <div className="mt-3 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wide text-neutral-600 mb-1">Live preview</div>
+                <div style={{
+                  fontFamily: sheet.noteFontFamily || DEFAULT_NOTE_STYLE.noteFontFamily,
+                  fontSize: `${sheet.noteFontSize ?? DEFAULT_NOTE_STYLE.noteFontSize}pt`,
+                  color: '#' + (sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor).slice(2),
+                  fontWeight: sheet.noteBold ? 700 : 400,
+                  fontStyle: (sheet.noteItalic !== undefined ? sheet.noteItalic : true) ? 'italic' : 'normal',
+                  textDecoration: sheet.noteUnderline ? 'underline' : 'none',
+                  textAlign: sheet.noteAlign || 'left',
+                }}>{sheet.note}</div>
+              </div>
+            )}
           </div>
 
           {/* Metrics / Columns */}
@@ -1000,6 +1159,7 @@
       includeIndex: true,
       changelog: '',
       tab: 'config',
+      theme: 'dark',
     };
 
     function App() {
@@ -1020,6 +1180,13 @@
       useEffect(() => {
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
       }, [state]);
+
+      // Apply theme class to <html>
+      useEffect(() => {
+        const root = document.documentElement;
+        if ((state.theme || 'dark') === 'light') root.classList.add('light');
+        else root.classList.remove('light');
+      }, [state.theme]);
 
       // Firebase: sign in anonymously, then hydrate from Firestore
       useEffect(() => {
