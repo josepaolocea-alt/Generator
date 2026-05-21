@@ -63,10 +63,10 @@
 
   <style>
     html, body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
-    body { background: #0a0a0a; color: #fafafa; -webkit-font-smoothing: antialiased; transition: background-color 0.2s, color 0.2s; }
+    body { background: #0a0a0a; color: #fafafa; -webkit-font-smoothing: antialiased; transition: background-color 0.35s cubic-bezier(0.22, 1, 0.36, 1), color 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #262626; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: #262626; border-radius: 4px; transition: background-color 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
     ::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
     ::selection { background: rgba(59, 130, 246, 0.3); }
     input[type="color"] { -webkit-appearance: none; appearance: none; padding: 0; border: 0; }
@@ -74,6 +74,62 @@
     input[type="color"]::-webkit-color-swatch { border: 1px solid #2a2a2a; border-radius: 4px; }
     .loader { width: 14px; height: 14px; border: 2px solid currentColor; border-bottom-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== Smoother global animations =====
+       Override Tailwind's default 150ms / cubic-bezier(0.4,0,0.2,1) with a
+       slightly longer duration and a softer easing curve (ease-out-quint). */
+    *, *::before, *::after {
+      transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+      transition-duration: 220ms;
+    }
+    .transition-colors   { transition-duration: 220ms; }
+    .transition-opacity  { transition-duration: 250ms; }
+    .transition-transform{ transition-duration: 280ms; }
+    .transition-all      { transition-duration: 260ms; }
+    .transition          { transition-duration: 240ms; }
+
+    /* Respect reduced-motion preferences */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+
+    /* Modal / dialog entry animations */
+    @keyframes overlayFadeIn {
+      from { opacity: 0; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); }
+      to   { opacity: 1; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+    }
+    @keyframes panelPopIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .anim-overlay { animation: overlayFadeIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .anim-panel   { animation: panelPopIn   260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    /* Subtle fade-in for tab content swaps */
+    @keyframes contentFadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .anim-fade-in { animation: contentFadeIn 240ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    /* Toast slide-up entry */
+    @keyframes toastSlideIn {
+      from { opacity: 0; transform: translateY(12px) scale(0.96); }
+      to   { opacity: 1; transform: translateY(0)   scale(1); }
+    }
+    .anim-toast { animation: toastSlideIn 280ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    /* Buttons & interactive elements: gentle press feedback */
+    button:not(:disabled):active,
+    [role="button"]:not([aria-disabled="true"]):active,
+    label.cursor-pointer:active {
+      transform: scale(0.97);
+      transition-duration: 80ms;
+    }
 
     /* ===== Light mode overrides ===== */
     html.light { color-scheme: light; }
@@ -471,6 +527,7 @@
       const metricCount = visibleMetrics.length;
       const dataStartRow = cur;
       const weekendRule = rules.find(r => r.type === 'weekend' && r.enabled);
+      const separatorRule = rules.find(r => r.type === 'separator' && r.enabled);
 
       const borderOn = !!s.bordersOnData;
       const borderStyle = s.borderStyle || 'thin';
@@ -511,6 +568,10 @@
           for (let rIdx = blockStart; rIdx < blockStart + metricCount; rIdx++) {
             for (let cIdx = 1; cIdx <= totalCols; cIdx++) ws.getCell(rIdx, cIdx).fill = fill;
           }
+        }
+        if (separatorRule && d < days) {
+          const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: separatorRule.color || 'FFE5E7EB' } };
+          for (let cIdx = 1; cIdx <= totalCols; cIdx++) ws.getCell(cur, cIdx).fill = fill;
         }
         cur += 1; // blank separator
       }
@@ -771,10 +832,10 @@
 
       return (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 anim-overlay"
           onClick={() => onResolve(cancelValue)}>
           <div
-            className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl"
+            className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl anim-panel"
             onClick={e => e.stopPropagation()}>
             {title && <h3 className="text-sm font-bold tracking-tight mb-1.5">{title}</h3>}
             {message && <p className="text-[12.5px] text-neutral-400 leading-relaxed">{message}</p>}
@@ -830,8 +891,8 @@
       };
 
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 anim-overlay">
+          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl anim-panel">
             <div className="flex items-center gap-3 mb-1">
               <svg viewBox="0 0 512 512" className="w-9 h-9 rounded-md shrink-0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <rect width="512" height="512" rx="100" fill="#2196F3"/>
@@ -1456,6 +1517,7 @@
       { value: 'blank',      label: 'Highlight blank cells',        desc: 'Flag missing data' },
       { value: 'zero',       label: 'Highlight zero values' },
       { value: 'weekend',    label: 'Highlight weekend rows',       desc: 'Saturday & Sunday entire row' },
+      { value: 'separator',  label: 'Color separator rows',         desc: 'The blank row between each day block (Hourly Block only)' },
       { value: 'boldMetric', label: 'Bold specific metric rows',    needsMatch: true, desc: 'Static formatting applied at generation' },
     ];
 
@@ -1923,37 +1985,39 @@
 
             {/* Body */}
             <div className="p-8 max-w-6xl w-full">
-              {state.tab === 'config' && (
-                <div className="space-y-12">
-                  <SheetEditor sheet={selected} onChange={updateSelectedSheet} onDelete={deleteSelected} onDuplicate={duplicateSelected} />
-                  <div>
-                    <SectionLabel hint="Save & share full configurations">Templates</SectionLabel>
-                    <TemplateBar state={state} setState={setState} sync={sync} />
+              <div key={state.tab} className="anim-fade-in">
+                {state.tab === 'config' && (
+                  <div className="space-y-12">
+                    <SheetEditor sheet={selected} onChange={updateSelectedSheet} onDelete={deleteSelected} onDuplicate={duplicateSelected} />
+                    <div>
+                      <SectionLabel hint="Save & share full configurations">Templates</SectionLabel>
+                      <TemplateBar state={state} setState={setState} sync={sync} />
+                    </div>
                   </div>
-                </div>
-              )}
-              {state.tab === 'rules' && (
-                <div>
-                  <SectionLabel hint="Formula-based · Google-Sheets-compatible">Formatting rules</SectionLabel>
-                  <FormattingRules rules={state.rules} sheets={state.sheets} onChange={(r) => setState(s => ({ ...s, rules: r }))} />
-                </div>
-              )}
-              {state.tab === 'preview' && (
-                <div>
-                  <SectionLabel hint={selected ? `Showing first 2 days of ${selected.name}` : ''}>Structure preview</SectionLabel>
-                  <Preview sheet={selected} year={state.year} month={state.month} />
-                  {selected?.layout === 'hourly' && (
-                    <p className="text-[11px] text-neutral-600 mt-3 font-mono">Generated sheet will contain {days} day blocks × {visibleItems(selected.metrics).length} metric rows = {days * visibleItems(selected.metrics).length} data rows</p>
-                  )}
-                </div>
-              )}
-              {state.tab === 'notes' && (
-                <div>
-                  <SectionLabel hint="Saved per generation · optionally exported as CHANGELOG sheet">Monthly notes</SectionLabel>
-                  <Textarea rows={12} value={state.changelog} onChange={e => setState(s => ({ ...s, changelog: e.target.value }))}
-                    placeholder={`Notes for ${MONTHS[state.month]} ${state.year}…\n\ne.g. Added NEWCLIENT, UNOBANK now only 6AM–10PM, removed old SBC2.`} />
-                </div>
-              )}
+                )}
+                {state.tab === 'rules' && (
+                  <div>
+                    <SectionLabel hint="Formula-based · Google-Sheets-compatible">Formatting rules</SectionLabel>
+                    <FormattingRules rules={state.rules} sheets={state.sheets} onChange={(r) => setState(s => ({ ...s, rules: r }))} />
+                  </div>
+                )}
+                {state.tab === 'preview' && (
+                  <div>
+                    <SectionLabel hint={selected ? `Showing first 2 days of ${selected.name}` : ''}>Structure preview</SectionLabel>
+                    <Preview sheet={selected} year={state.year} month={state.month} />
+                    {selected?.layout === 'hourly' && (
+                      <p className="text-[11px] text-neutral-600 mt-3 font-mono">Generated sheet will contain {days} day blocks × {visibleItems(selected.metrics).length} metric rows = {days * visibleItems(selected.metrics).length} data rows</p>
+                    )}
+                  </div>
+                )}
+                {state.tab === 'notes' && (
+                  <div>
+                    <SectionLabel hint="Saved per generation · optionally exported as CHANGELOG sheet">Monthly notes</SectionLabel>
+                    <Textarea rows={12} value={state.changelog} onChange={e => setState(s => ({ ...s, changelog: e.target.value }))}
+                      placeholder={`Notes for ${MONTHS[state.month]} ${state.year}…\n\ne.g. Added NEWCLIENT, UNOBANK now only 6AM–10PM, removed old SBC2.`} />
+                  </div>
+                )}
+              </div>
             </div>
 
             <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
@@ -1963,7 +2027,7 @@
           </main>
 
           {toast && (
-            <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+            <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
               {toast.msg}
             </div>
           )}
