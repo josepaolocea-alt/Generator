@@ -246,6 +246,28 @@
        ============================================================ */
     const newId = () => 's_' + Math.random().toString(36).slice(2, 9);
     const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+    /* Items in `metrics` / `columns` can be either a string (visible) or
+       { label, hidden: true } (hidden — kept in config but skipped on generate). */
+    const itemLabel  = (it) => (typeof it === 'string' ? it : (it?.label ?? ''));
+    const itemHidden = (it) => (typeof it === 'string' ? false : !!it?.hidden);
+    const visibleItems  = (arr) => (arr || []).filter(it => !itemHidden(it));
+    const visibleLabels = (arr) => visibleItems(arr).map(itemLabel);
+
+    /* In-app dialog (confirm / alert) — replaces native browser dialogs to match
+       the app UI. App registers a handler at mount; callers get a Promise. */
+    let __dialogHandler = null;
+    function openDialog(opts) {
+      return new Promise((resolve) => {
+        if (!__dialogHandler) {
+          if (opts.kind === 'confirm') resolve(window.confirm(opts.message));
+          else { window.alert(opts.message); resolve(); }
+          return;
+        }
+        __dialogHandler({ ...opts, resolve });
+      });
+    }
+    const confirmDialog = (opts) => openDialog({ ...opts, kind: 'confirm' });
+    const alertDialog   = (opts) => openDialog({ ...opts, kind: 'alert' });
     const pad = (n) => String(n).padStart(2, '0');
     const isWeekend = (y, m, d) => { const wd = new Date(y, m, d).getDay(); return wd === 0 || wd === 6; };
     const colLetter = (n) => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
@@ -274,7 +296,7 @@
           idx.addRow({
             sheet: s.name,
             layout: LAYOUT_LABELS[s.layout],
-            items: ((s.layout === 'hourly' ? s.metrics : s.columns) || []).join(', '),
+            items: visibleLabels(s.layout === 'hourly' ? s.metrics : s.columns).join(', '),
           });
         });
         idx.addRow({});
@@ -338,7 +360,8 @@
       cur += 1;
 
       const days = daysInMonth(year, month);
-      const metricCount = (s.metrics || []).length;
+      const visibleMetrics = visibleLabels(s.metrics);
+      const metricCount = visibleMetrics.length;
       const dataStartRow = cur;
       const weekendRule = rules.find(r => r.type === 'weekend' && r.enabled);
 
@@ -356,7 +379,7 @@
             row.getCell(1).value = dateObj;
             row.getCell(1).numFmt = s.dateFormat || 'yyyy-mm-dd';
           }
-          row.getCell(2).value = s.metrics[mi];
+          row.getCell(2).value = visibleMetrics[mi];
           row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
           for (let h = 0; h < hours.length; h++) {
             row.getCell(3 + h).value = null;
@@ -475,7 +498,7 @@
     }
 
     function buildFlatSheet(ws, s) {
-      const cols = s.columns || [];
+      const cols = visibleLabels(s.columns);
       let cur = 1;
       if (s.note && s.note.trim()) {
         applyNoteStyle(ws, cur, cols.length, s);
@@ -494,7 +517,7 @@
     }
 
     function buildAlarmSheet(ws, s) {
-      const cols = s.columns || [];
+      const cols = visibleLabels(s.columns);
       let cur = 1;
       if (s.note && s.note.trim()) {
         applyNoteStyle(ws, cur, cols.length, s);
@@ -580,6 +603,8 @@
     function IconDownload() { return <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>; }
     function IconSun() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>; }
     function IconMoon() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>; }
+    function IconEye() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>; }
+    function IconEyeOff() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a19.6 19.6 0 0 1 4.22-5.14"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a19.6 19.6 0 0 1-3.16 4.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>; }
 
     /* ============================================================
        Sidebar
@@ -616,6 +641,43 @@
       if (code === 'auth/network-request-failed')  return 'Network error. Check your connection.';
       if (code === 'auth/operation-not-allowed')   return 'Email/password sign-in is disabled in Firebase Console.';
       return e?.message || 'Authentication failed.';
+    }
+
+    function Dialog({ dialog, onResolve }) {
+      useEffect(() => {
+        if (!dialog) return;
+        const onKey = (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); onResolve(dialog.kind === 'confirm' ? false : undefined); }
+          else if (e.key === 'Enter') { e.preventDefault(); onResolve(dialog.kind === 'confirm' ? true : undefined); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [dialog, onResolve]);
+
+      if (!dialog) return null;
+      const { kind, title, message, confirmText = 'OK', cancelText = 'Cancel', tone = 'default' } = dialog;
+      const cancelValue = kind === 'confirm' ? false : undefined;
+      const okValue     = kind === 'confirm' ? true  : undefined;
+      const okVariant   = tone === 'danger' ? 'danger' : 'primary';
+
+      return (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => onResolve(cancelValue)}>
+          <div
+            className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl"
+            onClick={e => e.stopPropagation()}>
+            {title && <h3 className="text-sm font-bold tracking-tight mb-1.5">{title}</h3>}
+            {message && <p className="text-[12.5px] text-neutral-400 leading-relaxed">{message}</p>}
+            <div className="flex justify-end gap-2 mt-5">
+              {kind === 'confirm' && (
+                <Btn variant="ghost" size="md" onClick={() => onResolve(cancelValue)}>{cancelText}</Btn>
+              )}
+              <Btn variant={okVariant} size="md" onClick={() => onResolve(okValue)}>{confirmText}</Btn>
+            </div>
+          </div>
+        </div>
+      );
     }
 
     function AuthModal() {
@@ -760,9 +822,15 @@
               <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
                 <span className="text-[11px] text-neutral-400 truncate" title={sync.email}>{sync.email}</span>
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!window.__fb) return;
-                    if (!confirm('Sign out? Your data stays safely in the cloud and will be there next time you sign in.')) return;
+                    const ok = await confirmDialog({
+                      title: 'Sign out?',
+                      message: 'Your data stays safely in the cloud and will be there next time you sign in.',
+                      confirmText: 'Sign out',
+                      tone: 'danger',
+                    });
+                    if (!ok) return;
                     window.__fb.auth.signOut().catch(() => {});
                   }}
                   title="Sign out"
@@ -834,7 +902,16 @@
     function ListEditor({ items, onChange, placeholder = 'New item', label = 'item' }) {
       const [draft, setDraft] = useState('');
       const add = () => { if (!draft.trim()) return; onChange([...items, draft.trim()]); setDraft(''); };
-      const update = (i, v) => onChange(items.map((x, j) => j === i ? v : x));
+      // Items can be string (visible) or { label, hidden:true }. Updating a label keeps
+      // the hidden flag; un-hiding collapses back to a plain string for cleaner storage.
+      const setLabel = (i, v) => onChange(items.map((x, j) => {
+        if (j !== i) return x;
+        return itemHidden(x) ? { label: v, hidden: true } : v;
+      }));
+      const toggleHidden = (i) => onChange(items.map((x, j) => {
+        if (j !== i) return x;
+        return itemHidden(x) ? itemLabel(x) : { label: itemLabel(x), hidden: true };
+      }));
       const remove = (i) => onChange(items.filter((_, j) => j !== i));
       const move = (i, dir) => {
         const j = i + dir;
@@ -845,17 +922,26 @@
       };
       return (
         <div className="space-y-1.5">
-          {items.map((it, i) => (
-            <div key={i} className="group flex items-center gap-2">
-              <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
-              <Input value={it} onChange={e => update(i, e.target.value)} />
-              <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-neutral-500">
-                <button onClick={() => move(i, -1)} className="p-1.5 hover:text-neutral-200" title="Move up"><IconUp /></button>
-                <button onClick={() => move(i, 1)} className="p-1.5 hover:text-neutral-200" title="Move down"><IconDown /></button>
-                <button onClick={() => remove(i)} className="p-1.5 hover:text-red-400" title="Remove"><IconX /></button>
+          {items.map((it, i) => {
+            const hidden = itemHidden(it);
+            return (
+              <div key={i} className={`group flex items-center gap-2 ${hidden ? 'opacity-50' : ''}`}>
+                <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
+                <Input value={itemLabel(it)} onChange={e => setLabel(i, e.target.value)}
+                  className={hidden ? 'line-through' : ''} />
+                <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-neutral-500">
+                  <button onClick={() => toggleHidden(i)}
+                    className={`p-1.5 ${hidden ? 'text-amber-400 hover:text-amber-300 opacity-100' : 'hover:text-neutral-200'}`}
+                    title={hidden ? 'Show (include in output)' : 'Hide (exclude from output)'}>
+                    {hidden ? <IconEyeOff /> : <IconEye />}
+                  </button>
+                  <button onClick={() => move(i, -1)} className="p-1.5 hover:text-neutral-200" title="Move up"><IconUp /></button>
+                  <button onClick={() => move(i, 1)} className="p-1.5 hover:text-neutral-200" title="Move down"><IconDown /></button>
+                  <button onClick={() => remove(i)} className="p-1.5 hover:text-red-400" title="Remove"><IconX /></button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div className="flex gap-2 pt-2">
             <Input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())} placeholder={placeholder} />
             <Btn variant="ghost" size="md" onClick={add}>Add {label}</Btn>
@@ -901,8 +987,8 @@
               <div className="flex items-center gap-2 mt-3 flex-wrap">
                 <Pill tone="accent">{LAYOUT_LABELS[sheet.layout]}</Pill>
                 <Pill tone={sheet.active ? 'success' : 'muted'}>{sheet.active ? '● Active' : '○ Inactive'}</Pill>
-                {sheet.layout === 'hourly' && <Pill>{(sheet.metrics || []).length} metrics</Pill>}
-                {sheet.layout !== 'hourly' && <Pill>{(sheet.columns || []).length} columns</Pill>}
+                {sheet.layout === 'hourly' && <Pill>{visibleItems(sheet.metrics).length}/{(sheet.metrics || []).length} metrics</Pill>}
+                {sheet.layout !== 'hourly' && <Pill>{visibleItems(sheet.columns).length}/{(sheet.columns || []).length} columns</Pill>}
               </div>
             </div>
             <div className="flex flex-col gap-2 shrink-0 w-44">
@@ -1036,7 +1122,7 @@
                 })()}
               </div>
               <div>
-                <SectionLabel hint={`${(sheet.metrics || []).length} rows per day block`}>Metric rows</SectionLabel>
+                <SectionLabel hint={`${visibleItems(sheet.metrics).length} of ${(sheet.metrics || []).length} rows per day block`}>Metric rows</SectionLabel>
                 <ListEditor items={sheet.metrics || []} onChange={(v) => update({ metrics: v })} placeholder="e.g. Active Calls" label="metric" />
               </div>
               <div>
@@ -1227,7 +1313,7 @@
                   const wk = isWeekend(year, month, dIdx + 1);
                   return (
                     <React.Fragment key={dIdx}>
-                      {(sheet.metrics || []).map((m, mIdx) => (
+                      {visibleLabels(sheet.metrics).map((m, mIdx) => (
                         <tr key={mIdx} className={`border-b border-neutral-900/60 ${wk ? 'bg-red-950/20' : ''}`}>
                           <td className="px-3 py-1.5 text-neutral-400 font-mono sticky left-0 bg-[#0c0c0c]">{mIdx === 0 ? `${year}-${pad(month + 1)}-${pad(dIdx + 1)}` : ''}</td>
                           <td className="px-3 py-1.5 text-neutral-200">{m}</td>
@@ -1248,13 +1334,13 @@
           <table className="min-w-full text-[11px]">
             <thead>
               <tr className="border-b border-neutral-800 bg-neutral-950">
-                {(sheet.columns || []).map(c => <th key={c} className="text-left px-3 py-2.5 font-semibold text-neutral-300">{c}</th>)}
+                {visibleLabels(sheet.columns).map(c => <th key={c} className="text-left px-3 py-2.5 font-semibold text-neutral-300">{c}</th>)}
               </tr>
             </thead>
             <tbody>
               {[...Array(3)].map((_, i) => (
                 <tr key={i} className="border-b border-neutral-900/60">
-                  {(sheet.columns || []).map(c => <td key={c} className="px-3 py-1.5 text-neutral-700">·</td>)}
+                  {visibleLabels(sheet.columns).map(c => <td key={c} className="px-3 py-1.5 text-neutral-700">·</td>)}
                 </tr>
               ))}
             </tbody>
@@ -1330,7 +1416,7 @@
             const parsed = JSON.parse(reader.result);
             if (Array.isArray(parsed.templates)) persist([...templates, ...parsed.templates]);
             else if (parsed.sheets) setState(s => ({ ...s, sheets: parsed.sheets, rules: parsed.rules || s.rules }));
-          } catch { alert('Invalid template file'); }
+          } catch { alertDialog({ title: 'Invalid file', message: "That file isn't a valid template export.", confirmText: 'OK', tone: 'danger' }); }
         };
         reader.readAsText(f);
         e.target.value = '';
@@ -1395,8 +1481,19 @@
       const [busy, setBusy] = useState(false);
       const [toast, setToast] = useState(null);
       const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null, email: null });
+      const [dialog, setDialog] = useState(null);
       const hydratedRef = useRef(false);
       const saveTimerRef = useRef(null);
+
+      useEffect(() => {
+        __dialogHandler = (req) => setDialog(req);
+        return () => { __dialogHandler = null; };
+      }, []);
+      const resolveDialog = (value) => {
+        const d = dialog;
+        setDialog(null);
+        if (d) d.resolve(value);
+      };
 
       // localStorage cache (immediate, offline-safe)
       useEffect(() => {
@@ -1468,9 +1565,15 @@
       const selected = state.sheets.find(s => s.id === state.selectedSheetId) || state.sheets[0];
 
       const updateSelectedSheet = (next) => setState(s => ({ ...s, sheets: s.sheets.map(x => x.id === next.id ? next : x) }));
-      const deleteSelected = () => {
+      const deleteSelected = async () => {
         if (!selected) return;
-        if (!confirm(`Delete "${selected.name}"?`)) return;
+        const ok = await confirmDialog({
+          title: 'Delete sheet?',
+          message: `"${selected.name}" and all of its configuration will be removed. This can't be undone.`,
+          confirmText: 'Delete',
+          tone: 'danger',
+        });
+        if (!ok) return;
         setState(s => {
           const remaining = s.sheets.filter(x => x.id !== selected.id);
           return { ...s, sheets: remaining, selectedSheetId: remaining[0]?.id || null };
@@ -1554,7 +1657,7 @@
                   <SectionLabel hint={selected ? `Showing first 2 days of ${selected.name}` : ''}>Structure preview</SectionLabel>
                   <Preview sheet={selected} year={state.year} month={state.month} />
                   {selected?.layout === 'hourly' && (
-                    <p className="text-[11px] text-neutral-600 mt-3 font-mono">Generated sheet will contain {days} day blocks × {(selected.metrics || []).length} metric rows = {days * (selected.metrics || []).length} data rows</p>
+                    <p className="text-[11px] text-neutral-600 mt-3 font-mono">Generated sheet will contain {days} day blocks × {visibleItems(selected.metrics).length} metric rows = {days * visibleItems(selected.metrics).length} data rows</p>
                   )}
                 </div>
               )}
@@ -1580,6 +1683,8 @@
           )}
 
           {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+
+          <Dialog dialog={dialog} onResolve={resolveDialog} />
         </div>
       );
     }
