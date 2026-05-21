@@ -6,9 +6,8 @@
   <title>Monthly Report Generator</title>
   <meta name="description" content="Generate Google-Sheets-compatible monthly .xlsx reports for 24/7 network monitoring operations." />
 
-  <link rel="icon" type="image/png" href="letter-g.png" />
-  <link rel="shortcut icon" type="image/png" href="letter-g.png" />
-  <link rel="apple-touch-icon" href="letter-g.png" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%232196F3'/><text x='256' y='370' text-anchor='middle' font-family='Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif' font-size='340' font-weight='900' fill='white'>G</text></svg>" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%232196F3'/><text x='256' y='370' text-anchor='middle' font-family='Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif' font-size='340' font-weight='900' fill='white'>G</text></svg>" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -726,7 +725,10 @@
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl">
             <div className="flex items-center gap-3 mb-1">
-              <img src="letter-g.png" alt="" className="w-9 h-9 rounded-md" />
+              <svg viewBox="0 0 512 512" className="w-9 h-9 rounded-md shrink-0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <rect width="512" height="512" rx="100" fill="#2196F3"/>
+                <text x="256" y="370" textAnchor="middle" fontFamily="Inter, system-ui, sans-serif" fontSize="340" fontWeight="900" fill="white">G</text>
+              </svg>
               <div>
                 <h2 className="text-base font-bold tracking-tight">Monthly Report Generator</h2>
                 <p className="text-[11px] text-neutral-500 mt-0.5">Sign in to sync across sessions</p>
