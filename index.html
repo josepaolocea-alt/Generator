@@ -349,7 +349,7 @@
 
       for (let d = 1; d <= days; d++) {
         const blockStart = cur;
-        const dateObj = new Date(year, month, d);
+        const dateObj = new Date(Date.UTC(year, month, d));
         for (let mi = 0; mi < metricCount; mi++) {
           const row = ws.getRow(cur);
           if (mi === 0) {
@@ -586,17 +586,138 @@
        ============================================================ */
     function SyncBadge({ sync }) {
       const map = {
-        connecting: { dot: 'bg-amber-400 animate-pulse',   text: 'Connecting…', color: 'text-amber-300' },
-        loading:    { dot: 'bg-blue-400 animate-pulse',    text: 'Loading…',    color: 'text-blue-300' },
-        saving:     { dot: 'bg-blue-400 animate-pulse',    text: 'Saving…',     color: 'text-blue-300' },
-        synced:     { dot: 'bg-emerald-500',               text: 'Synced',      color: 'text-emerald-300' },
-        offline:    { dot: 'bg-neutral-500',               text: 'Offline',     color: 'text-neutral-400' },
+        connecting:  { dot: 'bg-amber-400 animate-pulse',   text: 'Connecting…', color: 'text-amber-300' },
+        loading:     { dot: 'bg-blue-400 animate-pulse',    text: 'Loading…',    color: 'text-blue-300' },
+        saving:      { dot: 'bg-blue-400 animate-pulse',    text: 'Saving…',     color: 'text-blue-300' },
+        synced:      { dot: 'bg-emerald-500',               text: 'Synced',      color: 'text-emerald-300' },
+        offline:     { dot: 'bg-neutral-500',               text: 'Offline',     color: 'text-neutral-400' },
+        'signed-out':{ dot: 'bg-neutral-500',               text: 'Signed out',  color: 'text-neutral-400' },
       };
       const m = map[sync?.status] || map.offline;
+      const title = sync?.email ? `${sync.email}\nUID: ${sync.uid}` : 'Not signed in';
       return (
-        <div className="flex items-center gap-2 mb-2" title={sync?.uid ? `Firebase UID: ${sync.uid}` : 'Not signed in'}>
+        <div className="flex items-center gap-2 mb-2" title={title}>
           <div className={`w-1.5 h-1.5 rounded-full ${m.dot}`}></div>
           <span className={`text-[10px] uppercase tracking-[0.2em] ${m.color}`}>{m.text}</span>
+        </div>
+      );
+    }
+
+    function humanizeAuthError(e) {
+      const code = e?.code || '';
+      if (code === 'auth/invalid-email')           return 'Invalid email address.';
+      if (code === 'auth/missing-password')        return 'Please enter a password.';
+      if (code === 'auth/invalid-credential' ||
+          code === 'auth/wrong-password')          return 'Email or password is incorrect.';
+      if (code === 'auth/user-not-found')          return 'No account found for that email.';
+      if (code === 'auth/email-already-in-use')    return 'An account with that email already exists.';
+      if (code === 'auth/weak-password')           return 'Password must be at least 6 characters.';
+      if (code === 'auth/too-many-requests')       return 'Too many attempts. Try again later.';
+      if (code === 'auth/network-request-failed')  return 'Network error. Check your connection.';
+      if (code === 'auth/operation-not-allowed')   return 'Email/password sign-in is disabled in Firebase Console.';
+      return e?.message || 'Authentication failed.';
+    }
+
+    function AuthModal() {
+      const [mode, setMode] = useState('signin');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState(null);
+      const [info, setInfo] = useState(null);
+
+      const submit = async (e) => {
+        e.preventDefault();
+        if (!window.__fb) return;
+        setBusy(true); setError(null); setInfo(null);
+        try {
+          const { auth } = window.__fb;
+          if (mode === 'signup') {
+            await auth.createUserWithEmailAndPassword(email.trim(), password);
+          } else {
+            await auth.signInWithEmailAndPassword(email.trim(), password);
+          }
+        } catch (err) {
+          setError(humanizeAuthError(err));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const resetPassword = async () => {
+        if (!window.__fb) return;
+        if (!email.trim()) { setError('Enter your email above first, then click "Forgot password".'); return; }
+        setBusy(true); setError(null); setInfo(null);
+        try {
+          await window.__fb.auth.sendPasswordResetEmail(email.trim());
+          setInfo(`Password reset email sent to ${email.trim()}.`);
+        } catch (err) {
+          setError(humanizeAuthError(err));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-1">
+              <img src="letter-g.png" alt="" className="w-9 h-9 rounded-md" />
+              <div>
+                <h2 className="text-base font-bold tracking-tight">Monthly Report Generator</h2>
+                <p className="text-[11px] text-neutral-500 mt-0.5">Sign in to sync across sessions</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808] mt-5">
+              {[['signin','Sign in'], ['signup','Create account']].map(([m, label]) => (
+                <button key={m} type="button"
+                  onClick={() => { setMode(m); setError(null); setInfo(null); }}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${mode === m ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={submit} className="mt-4 space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1.5">Email</label>
+                <Input type="email" autoComplete="email" required disabled={busy}
+                  value={email} onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com" />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1.5">Password</label>
+                <Input type="password"
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  required minLength={6} disabled={busy}
+                  value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder={mode === 'signup' ? 'At least 6 characters' : 'Your password'} />
+              </div>
+
+              {error && (
+                <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-[12px] text-red-300">
+                  {error}
+                </div>
+              )}
+              {info && (
+                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-[12px] text-emerald-300">
+                  {info}
+                </div>
+              )}
+
+              <Btn type="submit" variant="primary" size="lg" disabled={busy} className="w-full mt-1">
+                {busy ? <><span className="loader"></span> Please wait…</> : (mode === 'signin' ? 'Sign in' : 'Create account')}
+              </Btn>
+
+              {mode === 'signin' && (
+                <button type="button" onClick={resetPassword} disabled={busy}
+                  className="block w-full text-center text-[11px] text-neutral-500 hover:text-neutral-300 transition-colors mt-1 disabled:opacity-40">
+                  Forgot password?
+                </button>
+              )}
+            </form>
+          </div>
         </div>
       );
     }
@@ -635,6 +756,21 @@
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Monthly Report Generator</h1>
             <p className="text-xs text-neutral-500 mt-1">24/7 ops · SIP/FCS hourly record</p>
+            {sync?.email && (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
+                <span className="text-[11px] text-neutral-400 truncate" title={sync.email}>{sync.email}</span>
+                <button
+                  onClick={() => {
+                    if (!window.__fb) return;
+                    if (!confirm('Sign out? Your data stays safely in the cloud and will be there next time you sign in.')) return;
+                    window.__fb.auth.signOut().catch(() => {});
+                  }}
+                  title="Sign out"
+                  className="text-[10px] uppercase tracking-wide text-neutral-500 hover:text-red-300 transition-colors shrink-0">
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Period */}
@@ -1258,7 +1394,7 @@
       });
       const [busy, setBusy] = useState(false);
       const [toast, setToast] = useState(null);
-      const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null });
+      const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null, email: null });
       const hydratedRef = useRef(false);
       const saveTimerRef = useRef(null);
 
@@ -1274,17 +1410,17 @@
         else root.classList.remove('light');
       }, [state.theme]);
 
-      // Firebase: sign in anonymously, then hydrate from Firestore
+      // Firebase: wait for email/password sign-in, then hydrate from Firestore
       useEffect(() => {
         if (!window.__fb) return;
         const { auth, db } = window.__fb;
         const unsub = auth.onAuthStateChanged(async (user) => {
           if (!user) {
-            try { await auth.signInAnonymously(); }
-            catch (e) { console.warn('anon sign-in failed', e); setSync({ status: 'offline', uid: null }); }
+            hydratedRef.current = false;
+            setSync({ status: 'signed-out', uid: null, email: null });
             return;
           }
-          setSync({ status: 'loading', uid: user.uid });
+          setSync({ status: 'loading', uid: user.uid, email: user.email });
           try {
             const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
             const snap = await ref.get();
@@ -1295,11 +1431,11 @@
               }
             }
             hydratedRef.current = true;
-            setSync({ status: 'synced', uid: user.uid });
+            setSync({ status: 'synced', uid: user.uid, email: user.email });
           } catch (e) {
             console.warn('Firestore hydrate failed', e);
             hydratedRef.current = true;
-            setSync({ status: 'offline', uid: user.uid });
+            setSync({ status: 'offline', uid: user.uid, email: user.email });
           }
         });
         return () => unsub();
@@ -1438,6 +1574,8 @@
               {toast.msg}
             </div>
           )}
+
+          {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
         </div>
       );
     }
