@@ -273,6 +273,114 @@
     const safeSheetName = (name) => (name || 'Sheet').replace(/[\\/\?\*\[\]:]/g, '').slice(0, 31) || 'Sheet';
 
     /* ============================================================
+       Import existing .xlsx → sheet configs
+       ============================================================ */
+    const HOUR_LABEL_RE = /^(1[0-2]|[1-9])\s*(AM|PM)$/i;
+    const SKIP_IMPORT_NAMES = /^(index|summary|changelog)$/i;
+
+    function cellText(c) {
+      if (c == null) return '';
+      const v = c.value;
+      if (v == null) return '';
+      if (typeof v === 'object') {
+        if (v.richText) return v.richText.map(p => p.text || '').join('').trim();
+        if (v.text) return String(v.text).trim();
+        if (v.result != null) return String(v.result).trim();
+        return '';
+      }
+      return String(v).trim();
+    }
+
+    function detectHeaderRow(ws) {
+      const maxScan = Math.min(ws.rowCount || 8, 8);
+      for (let r = 1; r <= maxScan; r++) {
+        const row = ws.getRow(r);
+        const cells = [];
+        const colCount = ws.columnCount || 30;
+        for (let c = 1; c <= Math.max(colCount, 2); c++) {
+          const t = cellText(row.getCell(c));
+          if (t) cells.push({ col: c, text: t });
+        }
+        if (cells.length < 2) continue;
+        const labels = cells.map(x => x.text);
+        const lc = labels.map(x => x.toLowerCase());
+        const hourCount = labels.filter(v => HOUR_LABEL_RE.test(v)).length;
+        if (hourCount >= 3) return { row: r, labels, kind: 'hourly' };
+        if (lc.includes('contains') && lc.includes('severity')) return { row: r, labels, kind: 'alarm' };
+        if (lc.includes('date') && lc.includes('time')) return { row: r, labels, kind: 'flat' };
+      }
+      // Fallback: first non-empty row
+      for (let r = 1; r <= maxScan; r++) {
+        const row = ws.getRow(r);
+        const labels = [];
+        const colCount = ws.columnCount || 30;
+        for (let c = 1; c <= Math.max(colCount, 2); c++) {
+          const t = cellText(row.getCell(c));
+          if (t) labels.push(t);
+        }
+        if (labels.length >= 2) return { row: r, labels, kind: 'flat' };
+      }
+      return null;
+    }
+
+    async function parseXlsxToSheets(file) {
+      const buf = await file.arrayBuffer();
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buf);
+      const sheets = [];
+      wb.eachSheet((ws) => {
+        if (SKIP_IMPORT_NAMES.test(ws.name)) return;
+        const hdr = detectHeaderRow(ws);
+        if (!hdr) return;
+
+        if (hdr.kind === 'hourly') {
+          const hourIndices = hdr.labels
+            .filter(v => HOUR_LABEL_RE.test(v))
+            .map(v => HOURS_24.indexOf(v.toUpperCase().replace(/\s+/g, '')))
+            .filter(i => i >= 0)
+            .sort((a, b) => a - b);
+          const hourStart = hourIndices[0] ?? 0;
+          const hourEnd   = (hourIndices[hourIndices.length - 1] ?? 23) + 1;
+
+          // Metrics live in column 2 below the header row; collect uniques in order.
+          const seen = new Set();
+          const metrics = [];
+          const last = Math.min(ws.rowCount || (hdr.row + 400), hdr.row + 400);
+          for (let r = hdr.row + 1; r <= last; r++) {
+            const t = cellText(ws.getRow(r).getCell(2));
+            if (!t) continue;
+            if (HOUR_LABEL_RE.test(t)) continue;
+            if (seen.has(t)) continue;
+            seen.add(t);
+            metrics.push(t);
+            if (metrics.length >= 40) break;
+          }
+          sheets.push({
+            id: newId(),
+            name: ws.name,
+            layout: 'hourly',
+            active: true,
+            metrics: metrics.length ? metrics : ['Metric 1'],
+            hourStart,
+            hourEnd,
+            note: '',
+          });
+        } else {
+          // flat or alarm — columns come from the detected header row
+          sheets.push({
+            id: newId(),
+            name: ws.name,
+            layout: hdr.kind === 'alarm' ? 'alarm' : 'flat',
+            active: true,
+            columns: hdr.labels,
+            note: '',
+          });
+        }
+      });
+      return sheets;
+    }
+
+    /* ============================================================
        Excel Generation (ExcelJS — Google Sheets compatible)
        ============================================================ */
     async function generateWorkbook(state) {
@@ -785,6 +893,116 @@
             </form>
           </div>
         </div>
+      );
+    }
+
+    /* ============================================================
+       Uploaded Sidebar — staging area for sheets parsed from .xlsx
+       ============================================================ */
+    function UploadedSidebar({ state, setState }) {
+      const [collapsed, setCollapsed] = useState(false);
+      const imported = state.imported || [];
+
+      const removeOne = (id) =>
+        setState(s => ({ ...s, imported: (s.imported || []).filter(x => x.id !== id) }));
+
+      const clearAll = async () => {
+        if (!imported.length) return;
+        const ok = await confirmDialog({
+          title: 'Clear uploaded sheets?',
+          message: `${imported.length} imported sheet${imported.length === 1 ? '' : 's'} will be removed from this panel. Your main configuration is not affected.`,
+          confirmText: 'Clear',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setState(s => ({ ...s, imported: [] }));
+      };
+
+      const addToMain = (item) => {
+        setState(s => {
+          const existingNames = new Set(s.sheets.map(x => x.name.toLowerCase()));
+          let name = item.name;
+          if (existingNames.has(name.toLowerCase())) {
+            let n = 2;
+            while (existingNames.has(`${item.name} (${n})`.toLowerCase())) n += 1;
+            name = `${item.name} (${n})`;
+          }
+          const copy = { ...item, id: newId(), name, active: true };
+          return { ...s, sheets: [...s.sheets, copy], selectedSheetId: copy.id };
+        });
+      };
+
+      if (collapsed) {
+        return (
+          <aside className="w-10 shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col items-center py-4 gap-3">
+            <button onClick={() => setCollapsed(false)}
+              title="Expand uploaded sheets"
+              className="text-neutral-500 hover:text-neutral-200 transition-colors">
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <div className="[writing-mode:vertical-rl] rotate-180 text-[10px] uppercase tracking-[0.2em] text-neutral-500 mt-2">
+              Uploaded {imported.length ? `· ${imported.length}` : ''}
+            </div>
+          </aside>
+        );
+      }
+
+      return (
+        <aside className="w-[280px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SectionLabel hint={imported.length ? `${imported.length} sheet${imported.length === 1 ? '' : 's'}` : ''}>Uploaded</SectionLabel>
+              <button onClick={() => setCollapsed(true)}
+                title="Collapse"
+                className="text-neutral-500 hover:text-neutral-200 transition-colors -mt-2">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+            </div>
+            <p className="text-[11px] text-neutral-500 -mt-1">Sheets parsed from an uploaded .xlsx. Add the ones you want into the main sidebar.</p>
+          </div>
+
+          <div className="p-5 flex-1 overflow-y-auto">
+            {imported.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center">
+                <p className="text-[12px] text-neutral-400">No uploaded sheets yet</p>
+                <p className="text-[11px] text-neutral-600 mt-1.5 leading-relaxed">Open the <span className="text-neutral-300">Config</span> tab and use <span className="text-neutral-300">Import .xlsx</span> in the Templates section.</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {imported.map((it) => {
+                  const count = it.layout === 'hourly'
+                    ? `${(it.metrics || []).length} metrics`
+                    : `${(it.columns || []).length} cols`;
+                  return (
+                    <div key={it.id}
+                      className="group rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-2 hover:border-neutral-800 transition-colors">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate text-neutral-100" title={it.name}>{it.name}</div>
+                          <div className="text-[10px] text-neutral-500 mt-0.5 uppercase tracking-wide">{LAYOUT_LABELS[it.layout]} · {count}</div>
+                        </div>
+                        <button onClick={() => removeOne(it.id)}
+                          title="Remove from uploaded"
+                          className="p-1.5 text-neutral-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <IconX />
+                        </button>
+                      </div>
+                      <Btn variant="ghost" size="sm" onClick={() => addToMain(it)} className="w-full mt-2">
+                        <IconPlus /> Add to main
+                      </Btn>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {imported.length > 0 && (
+            <div className="p-5 border-t border-neutral-900">
+              <Btn variant="ghost" size="sm" onClick={clearAll} className="w-full">Clear all</Btn>
+            </div>
+          )}
+        </aside>
       );
     }
 
@@ -1462,6 +1680,27 @@
         e.target.value = '';
       };
 
+      const importXlsx = async (e) => {
+        const f = e.target.files[0];
+        e.target.value = '';
+        if (!f) return;
+        let detected;
+        try {
+          detected = await parseXlsxToSheets(f);
+        } catch (err) {
+          console.warn('xlsx import failed', err);
+          alertDialog({ title: "Couldn't read file", message: "That file couldn't be parsed as an .xlsx workbook.", confirmText: 'OK', tone: 'danger' });
+          return;
+        }
+        if (!detected.length) {
+          alertDialog({ title: 'Nothing to import', message: "No sheets with a recognizable header row were found in that workbook.", confirmText: 'OK' });
+          return;
+        }
+        // Loaded into the Uploaded sidebar — does NOT change the main config.
+        // From there, the user adds individual tabs into the main sidebar.
+        setState(s => ({ ...s, imported: [...(s.imported || []), ...detected] }));
+      };
+
       return (
         <Card className="p-4">
           <div className="flex items-center gap-2 flex-wrap">
@@ -1478,6 +1717,11 @@
             <label className="inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors px-3.5 py-2 text-sm border border-neutral-800 bg-transparent text-neutral-200 hover:bg-neutral-900 hover:border-neutral-700 cursor-pointer">
               Import JSON
               <input type="file" accept=".json,application/json" onChange={importFile} className="hidden" />
+            </label>
+            <label title="Upload an existing .xlsx — auto-detects sheets, layouts, metrics and columns"
+              className="inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors px-3.5 py-2 text-sm border border-neutral-800 bg-transparent text-neutral-200 hover:bg-neutral-900 hover:border-neutral-700 cursor-pointer">
+              Import .xlsx
+              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importXlsx} className="hidden" />
             </label>
           </div>
           {templates.length > 0 && (
@@ -1508,6 +1752,7 @@
       changelog: '',
       tab: 'config',
       theme: 'dark',
+      imported: [],
     };
 
     function App() {
@@ -1653,6 +1898,7 @@
       return (
         <div className="flex min-h-screen text-neutral-100">
           <Sidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
+          <UploadedSidebar state={state} setState={setState} />
           <main className="flex-1 min-w-0 flex flex-col">
             {/* Top bar */}
             <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
