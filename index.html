@@ -1284,6 +1284,164 @@
     }
 
     /* ============================================================
+       Editor module - pasted table editor
+       ============================================================ */
+    const editorRuleId = () => 'er_' + Math.random().toString(36).slice(2, 9);
+    const DEFAULT_EDITOR_STATE = {
+      name: 'Pasted Table',
+      cells: [['']],
+      headerRow: 1,
+      labelColumn: 1,
+      headerFill: '',
+      headerFontColor: '',
+      labelFill: '',
+      labelFontColor: '',
+      rules: [],
+    };
+
+    function editorNormalizeGrid(rows) {
+      const source = Array.isArray(rows) && rows.length ? rows : [['']];
+      const width = Math.max(1, ...source.map(row => Array.isArray(row) ? row.length : 1));
+      return source.map(row => Array.from({ length: width }, (_, col) => String(Array.isArray(row) ? (row[col] ?? '') : (col ? '' : (row ?? '')))));
+    }
+
+    function editorParseGridText(text) {
+      const raw = String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      if (!raw) return [['']];
+      return editorNormalizeGrid(raw.split('\n').map(line => line.split('\t')));
+    }
+
+    function editorHeaderRow(editor, rowCount) {
+      const value = Math.floor(Number(editor?.headerRow));
+      return value > 0 ? Math.min(value, Math.max(1, rowCount)) : 0;
+    }
+
+    function editorLabelColumn(editor, colCount) {
+      const value = Math.floor(Number(editor?.labelColumn));
+      return value > 0 ? Math.min(value, Math.max(1, colCount)) : 0;
+    }
+
+    function editorNumber(value) {
+      const clean = String(value ?? '').replace(/\u00a0/g, ' ').trim().replace(/,/g, '');
+      if (!clean || !/^[-+]?(?:\d+|\d*\.\d+)$/.test(clean)) return null;
+      const n = Number(clean);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function editorEvaluateRule(rule, value, rowValues, dataStartCol) {
+      if (!rule || rule.enabled === false) return false;
+      const n = editorNumber(value);
+      if (n === null) return false;
+      const threshold = (x) => Number.isFinite(Number(x)) ? Number(x) : 0;
+      if (rule.kind === 'maxInRow') {
+        const numericRow = rowValues.slice(Math.max(0, dataStartCol - 1)).map(editorNumber).filter(v => v !== null);
+        return numericRow.length > 0 && n === Math.max(...numericRow);
+      }
+      switch (rule.kind) {
+        case 'between': return n >= threshold(rule.min) && n <= threshold(rule.max);
+        case 'gte':     return n >= threshold(rule.value);
+        case 'lte':     return n <= threshold(rule.value);
+        case 'gt':      return n >  threshold(rule.value);
+        case 'lt':      return n <  threshold(rule.value);
+        case 'eq':      return n === threshold(rule.value);
+        default:        return false;
+      }
+    }
+
+    function editorCellExportValue(value) {
+      const text = String(value ?? '');
+      return text.startsWith('=') && text.length > 1 ? { formula: text.slice(1) } : text;
+    }
+
+    function editorNumericFormula(cellRef) {
+      const clean = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
+      return {
+        hasValue: `LEN(${clean})>0`,
+        value: `IFERROR(VALUE(SUBSTITUTE(${clean},",","")),${cellRef})`,
+      };
+    }
+
+    function editorRuleFormula(rule, cellRef, firstDataCol, lastDataCol, rowNum) {
+      if (rule.kind !== 'maxInRow') return bmrBuildConditionFormula(rule, cellRef);
+      const current = editorNumericFormula(cellRef);
+      const rowRange = `$${firstDataCol}${rowNum}:$${lastDataCol}${rowNum}`;
+      const cleanRange = `TRIM(SUBSTITUTE(${rowRange}&"",CHAR(160),""))`;
+      const numericRange = `IFERROR(VALUE(SUBSTITUTE(${cleanRange},",","")),${rowRange})`;
+      return `AND(${current.hasValue},ISNUMBER(${current.value}),${current.value}=MAX(${numericRange}))`;
+    }
+
+    function editorApplyStaticStyle(cell, fillColor, fontColor, bold = false) {
+      if (fillColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(fillColor) } };
+      if (fontColor || bold) cell.font = { ...(cell.font || {}), ...(fontColor ? { color: { argb: argbHex(fontColor) } } : {}), ...(bold ? { bold: true } : {}) };
+    }
+
+    function buildEditorSheet(ws, editor) {
+      const grid = editorNormalizeGrid(editor?.cells);
+      const rowCount = grid.length;
+      const colCount = grid[0].length;
+      const headerRow = editorHeaderRow(editor, rowCount);
+      const labelCol = editorLabelColumn(editor, colCount);
+      const thinBorder = { style: 'thin', color: { argb: 'FFD4D4D8' } };
+
+      grid.forEach((row, rowIndex) => {
+        row.forEach((value, colIndex) => {
+          const cell = ws.getCell(rowIndex + 1, colIndex + 1);
+          cell.value = editorCellExportValue(value);
+          cell.alignment = { vertical: 'middle', wrapText: true };
+          cell.border = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
+        });
+      });
+
+      if (headerRow) {
+        for (let col = 1; col <= colCount; col++) editorApplyStaticStyle(ws.getCell(headerRow, col), editor.headerFill, editor.headerFontColor, true);
+      }
+      if (labelCol) {
+        for (let row = 1; row <= rowCount; row++) {
+          if (row !== headerRow) editorApplyStaticStyle(ws.getCell(row, labelCol), editor.labelFill, editor.labelFontColor, false);
+        }
+      }
+
+      for (let col = 1; col <= colCount; col++) {
+        const longest = Math.max(...grid.map(row => String(row[col - 1] ?? '').length), 4);
+        ws.getColumn(col).width = Math.min(34, Math.max(col === labelCol ? 14 : 10, longest + 2));
+      }
+
+      const dataStartRow = headerRow ? headerRow + 1 : 1;
+      const dataStartCol = labelCol ? labelCol + 1 : 1;
+      if (dataStartRow <= rowCount && dataStartCol <= colCount) {
+        const firstCol = colLetter(dataStartCol);
+        const lastCol = colLetter(colCount);
+        const ref = `${firstCol}${dataStartRow}:${lastCol}${rowCount}`;
+        (editor.rules || []).filter(rule => rule.enabled !== false).forEach((rule, index) => {
+          ws.addConditionalFormatting({
+            ref,
+            rules: [{
+              type: 'expression',
+              formulae: [editorRuleFormula(rule, `${firstCol}${dataStartRow}`, firstCol, lastCol, dataStartRow)],
+              style: bmrStyleFromRule(rule),
+              priority: index + 1,
+            }],
+          });
+        });
+      }
+
+      ws.views = [{ state: 'frozen', xSplit: labelCol || 0, ySplit: headerRow || 0 }];
+    }
+
+    async function generateEditorWorkbook(state) {
+      const editor = { ...DEFAULT_EDITOR_STATE, ...(state.editor || {}) };
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Table Editor';
+      wb.created = new Date();
+      const ws = wb.addWorksheet(safeSheetName(editor.name || 'Pasted Table'));
+      buildEditorSheet(ws, editor);
+      const buf = await wb.xlsx.writeBuffer();
+      const filename = `Editor_${bmrTodayString()}.xlsx`;
+      saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
+      return filename;
+    }
+
+    /* ============================================================
        UI Primitives
        ============================================================ */
     function Pill({ children, tone = 'default', onClick, className = '' }) {
@@ -4062,6 +4220,290 @@
     }
 
     /* ============================================================
+       Editor - UI Components
+       ============================================================ */
+    function EditorColorSwatch({ value, onChange, title = 'Choose color', allowClear = true, fallback = '#FFFFFF' }) {
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <PresetColorPicker value={value || fallback} onChange={onChange}
+            title={title} showHex={false} buttonClassName="h-8 px-1.5 py-1" />
+          {allowClear && value && (
+            <button onClick={() => onChange('')} className="text-[10px] text-neutral-500 hover:text-red-300 px-1" title={`Clear ${title.toLowerCase()}`}>clear</button>
+          )}
+        </span>
+      );
+    }
+
+    function EditorSidebar({ state, setState, onGenerate, busy, sync }) {
+      const theme = state.theme || 'dark';
+      const editor = { ...DEFAULT_EDITOR_STATE, ...(state.editor || {}) };
+      const grid = editorNormalizeGrid(editor.cells);
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Table Editor</h1>
+            <p className="text-xs text-neutral-500 mt-1">Pasted table workbook</p>
+          </div>
+          <div className="p-5 flex-1">
+            <SectionLabel>Table</SectionLabel>
+            <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
+              <div className="truncate text-sm font-medium text-neutral-100" title={editor.name || 'Pasted Table'}>{editor.name || 'Pasted Table'}</div>
+              <div className="flex flex-wrap gap-1.5">
+                <Pill>{grid.length} rows</Pill>
+                <Pill>{grid[0].length} columns</Pill>
+                <Pill tone={(editor.rules || []).some(rule => rule.enabled !== false) ? 'accent' : 'default'}>{(editor.rules || []).length} rules</Pill>
+              </div>
+            </div>
+          </div>
+          <div className="p-5 border-t border-neutral-900 space-y-3">
+            <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
+              {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Export Editor</>}
+            </Btn>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">.xlsx / Google Sheets compatible</p>
+          </div>
+        </aside>
+      );
+    }
+
+    function EditorPastePanel({ editor, onChange }) {
+      const [pasteText, setPasteText] = useState('');
+      const loadText = (text) => {
+        setPasteText(text);
+        onChange({ ...editor, cells: editorParseGridText(text) });
+      };
+      const paste = (e) => {
+        const text = e.clipboardData?.getData('text/plain');
+        if (text === undefined || text === null || text === '') return;
+        e.preventDefault();
+        loadText(text);
+      };
+      return (
+        <Card className="p-4">
+          <SectionLabel hint="Clipboard table">Paste</SectionLabel>
+          <Textarea rows={4} value={pasteText} onPaste={paste} onChange={e => setPasteText(e.target.value)}
+            placeholder={`Paste cells copied from Google Sheets here`} />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Btn variant="ghost" size="md" onClick={() => loadText(pasteText)} disabled={!pasteText}>Load pasted table</Btn>
+            <span className="text-[11px] text-neutral-500">{editorNormalizeGrid(editor.cells).length} rows / {editorNormalizeGrid(editor.cells)[0].length} columns</span>
+          </div>
+        </Card>
+      );
+    }
+
+    function EditorColorField({ label, value, onChange, title, fallback }) {
+      return (
+        <div>
+          <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">{label}</label>
+          <EditorColorSwatch value={value} onChange={onChange} title={title} fallback={fallback} />
+        </div>
+      );
+    }
+
+    function EditorHeaderSettings({ editor, onChange }) {
+      const update = (patch) => onChange({ ...editor, ...patch });
+      return (
+        <Card className="p-4">
+          <SectionLabel hint="Header setup">Table style</SectionLabel>
+          <div className="grid gap-3 lg:grid-cols-4">
+            <div className="lg:col-span-2">
+              <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Sheet name</label>
+              <Input value={editor.name || ''} onChange={e => update({ name: e.target.value })} placeholder="Pasted Table" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Header row #</label>
+              <Input type="number" min="0" value={editor.headerRow ?? 1} onChange={e => update({ headerRow: Math.max(0, Number(e.target.value) || 0) })} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Date / label col #</label>
+              <Input type="number" min="0" value={editor.labelColumn ?? 1} onChange={e => update({ labelColumn: Math.max(0, Number(e.target.value) || 0) })} />
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <EditorColorField label="Header fill" value={editor.headerFill} onChange={headerFill => update({ headerFill })} title="Choose header fill" />
+            <EditorColorField label="Header font" value={editor.headerFontColor} onChange={headerFontColor => update({ headerFontColor })} title="Choose header font color" fallback="#000000" />
+            <EditorColorField label="Date / label fill" value={editor.labelFill} onChange={labelFill => update({ labelFill })} title="Choose label fill" />
+            <EditorColorField label="Date / label font" value={editor.labelFontColor} onChange={labelFontColor => update({ labelFontColor })} title="Choose label font color" fallback="#000000" />
+          </div>
+        </Card>
+      );
+    }
+
+    function editorCellPreviewStyle(editor, grid, rowIndex, colIndex) {
+      const headerRow = editorHeaderRow(editor, grid.length);
+      const labelCol = editorLabelColumn(editor, grid[0].length);
+      const rowNum = rowIndex + 1;
+      const colNum = colIndex + 1;
+      const style = {};
+      if (headerRow && rowNum === headerRow) {
+        if (editor.headerFill) style.background = editor.headerFill;
+        if (editor.headerFontColor) style.color = editor.headerFontColor;
+        style.fontWeight = 700;
+        return style;
+      }
+      if (labelCol && colNum === labelCol) {
+        if (editor.labelFill) style.background = editor.labelFill;
+        if (editor.labelFontColor) style.color = editor.labelFontColor;
+        return style;
+      }
+      const isData = rowNum > (headerRow || 0) && colNum > (labelCol || 0);
+      if (!isData) return style;
+      (editor.rules || []).forEach((rule) => {
+        if (!editorEvaluateRule(rule, grid[rowIndex][colIndex], grid[rowIndex], labelCol ? labelCol + 1 : 1)) return;
+        if (rule.color) style.background = rule.color;
+        if (rule.fontColor) style.color = rule.fontColor;
+        if (rule.bold) style.fontWeight = 700;
+        if (rule.italic) style.fontStyle = 'italic';
+        if (rule.underline) style.textDecoration = 'underline';
+      });
+      return style;
+    }
+
+    function EditorTable({ editor, onChange }) {
+      const grid = editorNormalizeGrid(editor.cells);
+      const updateCell = (rowIndex, colIndex, value) => {
+        const next = grid.map(row => row.slice());
+        next[rowIndex][colIndex] = value;
+        onChange({ ...editor, cells: next });
+      };
+      const addRow = () => onChange({ ...editor, cells: [...grid, Array(grid[0].length).fill('')] });
+      const addColumn = () => onChange({ ...editor, cells: grid.map(row => [...row, '']) });
+      return (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <SectionLabel hint={`${grid.length} rows x ${grid[0].length} columns`}>Table</SectionLabel>
+            <div className="flex gap-2">
+              <Btn variant="ghost" size="sm" onClick={addRow}><IconPlus /> Row</Btn>
+              <Btn variant="ghost" size="sm" onClick={addColumn}><IconPlus /> Column</Btn>
+            </div>
+          </div>
+          <div className="overflow-auto rounded-md border border-neutral-900">
+            <table className="border-collapse text-xs">
+              <thead>
+                <tr className="bg-neutral-950 text-neutral-500">
+                  <th className="sticky left-0 z-10 min-w-10 border border-neutral-900 bg-neutral-950 px-2 py-1"></th>
+                  {grid[0].map((_, colIndex) => (
+                    <th key={colIndex} className="min-w-[136px] border border-neutral-900 px-2 py-1 font-mono">{colLetter(colIndex + 1)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {grid.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    <th className="sticky left-0 z-10 border border-neutral-900 bg-neutral-950 px-2 py-1 text-neutral-500 font-mono">{rowIndex + 1}</th>
+                    {row.map((value, colIndex) => {
+                      const style = editorCellPreviewStyle(editor, grid, rowIndex, colIndex);
+                      return (
+                        <td key={colIndex} className="border border-neutral-800 p-0" style={style}>
+                          <input value={value} onChange={e => updateCell(rowIndex, colIndex, e.target.value)}
+                            aria-label={`Cell ${colLetter(colIndex + 1)}${rowIndex + 1}`}
+                            className="h-9 w-full min-w-[136px] bg-transparent px-2 text-current outline-none focus:ring-2 focus:ring-blue-500/40" />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      );
+    }
+
+    function EditorRuleEditor({ rule, onChange, onDelete }) {
+      const update = (patch) => onChange({ ...rule, ...patch });
+      return (
+        <Card className="p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <input type="checkbox" checked={rule.enabled !== false} onChange={e => update({ enabled: e.target.checked })}
+              className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+            <Input value={rule.name || ''} onChange={e => update({ name: e.target.value })} placeholder="Rule name" />
+            <button onClick={onDelete} title="Delete rule" className="p-1.5 text-neutral-500 hover:text-red-400"><IconX /></button>
+          </div>
+          <div className="mb-2 grid gap-2 md:grid-cols-[240px_1fr_1fr] items-end">
+            <Select value={rule.kind || 'gte'} onChange={e => update({ kind: e.target.value })}>
+              <option value="gte">greater than or equal to</option>
+              <option value="gt">greater than</option>
+              <option value="lte">less than or equal to</option>
+              <option value="lt">less than</option>
+              <option value="eq">equal to</option>
+              <option value="between">between</option>
+              <option value="maxInRow">highest value in row</option>
+            </Select>
+            {rule.kind === 'maxInRow' ? (
+              <div className="md:col-span-2 h-9 rounded-md border border-neutral-900 bg-neutral-950/60"></div>
+            ) : rule.kind === 'between' ? (
+              <>
+                <div>
+                  <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Min</label>
+                  <Input type="number" step="0.001" value={rule.min ?? ''} onChange={e => update({ min: Number(e.target.value) })} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Max</label>
+                  <Input type="number" step="0.001" value={rule.max ?? ''} onChange={e => update({ max: Number(e.target.value) })} />
+                </div>
+              </>
+            ) : (
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Value</label>
+                <Input type="number" step="0.001" value={rule.value ?? ''} onChange={e => update({ value: Number(e.target.value) })} />
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-neutral-400">
+            <span className="inline-flex items-center gap-1"><span className="text-[10px] uppercase tracking-wide text-neutral-500">Fill</span><EditorColorSwatch value={rule.color} onChange={color => update({ color })} title="Choose rule fill" /></span>
+            <span className="inline-flex items-center gap-1"><span className="text-[10px] uppercase tracking-wide text-neutral-500">Font</span><EditorColorSwatch value={rule.fontColor} onChange={fontColor => update({ fontColor })} title="Choose rule font color" fallback="#000000" /></span>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.bold ? 'text-neutral-100 font-bold' : ''}`}><input type="checkbox" checked={!!rule.bold} onChange={e => update({ bold: e.target.checked })} className="h-3.5 w-3.5" /><span className="font-bold">B</span></label>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.italic ? 'text-neutral-100 italic' : ''}`}><input type="checkbox" checked={!!rule.italic} onChange={e => update({ italic: e.target.checked })} className="h-3.5 w-3.5" /><span className="italic">I</span></label>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.underline ? 'text-neutral-100 underline' : ''}`}><input type="checkbox" checked={!!rule.underline} onChange={e => update({ underline: e.target.checked })} className="h-3.5 w-3.5" /><span className="underline">U</span></label>
+          </div>
+        </Card>
+      );
+    }
+
+    function EditorRulesPanel({ editor, onChange }) {
+      const rules = editor.rules || [];
+      const addRule = (kind = 'gte') => onChange({
+        ...editor,
+        rules: [...rules, {
+          id: editorRuleId(),
+          name: kind === 'maxInRow' ? 'Highest in row' : 'Reached value',
+          kind,
+          value: 5,
+          min: 0,
+          max: 5,
+          color: kind === 'maxInRow' ? '#FACC15' : '#EF4444',
+          fontColor: '#FFFFFF',
+          bold: true,
+          italic: false,
+          underline: false,
+          enabled: true,
+        }],
+      });
+      const updateRule = (id, next) => onChange({ ...editor, rules: rules.map(rule => rule.id === id ? next : rule) });
+      const deleteRule = (id) => onChange({ ...editor, rules: rules.filter(rule => rule.id !== id) });
+      return (
+        <div className="space-y-3">
+          <SectionLabel hint="Data cells">Table rules</SectionLabel>
+          {rules.map(rule => <EditorRuleEditor key={rule.id} rule={rule} onChange={next => updateRule(rule.id, next)} onDelete={() => deleteRule(rule.id)} />)}
+          <div className="flex flex-wrap gap-2">
+            <Btn variant="ghost" size="md" onClick={() => addRule('gte')}><IconPlus /> Value rule</Btn>
+            <Btn variant="ghost" size="md" onClick={() => addRule('maxInRow')}><IconPlus /> Highest in row</Btn>
+          </div>
+        </div>
+      );
+    }
+
+    /* ============================================================
        App
        ============================================================ */
     const DEFAULT_STATE = {
@@ -4078,6 +4520,8 @@
       module: 'sip_fcs',
       bmr: DEFAULT_BMR_STATE,
       bmrTab: 'clients',
+      editor: DEFAULT_EDITOR_STATE,
+      editorTab: 'table',
     };
 
     function App() {
@@ -4086,7 +4530,8 @@
           const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
           if (saved && Array.isArray(saved.sheets)) {
             const bmr = { ...DEFAULT_BMR_STATE, ...(saved.bmr || {}) };
-            return { ...DEFAULT_STATE, ...saved, bmr };
+            const editor = { ...DEFAULT_EDITOR_STATE, ...(saved.editor || {}), cells: editorNormalizeGrid(saved.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
+            return { ...DEFAULT_STATE, ...saved, bmr, editor };
           }
         } catch {}
         return DEFAULT_STATE;
@@ -4146,7 +4591,9 @@
             if (snap.exists) {
               const remote = snap.data();
               if (remote && Array.isArray(remote.sheets)) {
-                setState(s => ({ ...DEFAULT_STATE, ...remote, tab: s.tab }));
+                const remoteBmr = { ...DEFAULT_BMR_STATE, ...(remote.bmr || {}) };
+                const remoteEditor = { ...DEFAULT_EDITOR_STATE, ...(remote.editor || {}), cells: editorNormalizeGrid(remote.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
+                setState(s => ({ ...DEFAULT_STATE, ...remote, bmr: remoteBmr, editor: remoteEditor, tab: s.tab }));
               }
             }
             hydratedRef.current = true;
@@ -4206,7 +4653,10 @@
       const onGenerate = async () => {
         setBusy(true);
         try {
-          if (state.module === 'bmr') {
+          if (state.module === 'editor') {
+            const fn = await generateEditorWorkbook(state);
+            setToast({ type: 'ok', msg: `Generated ${fn}` });
+          } else if (state.module === 'bmr') {
             const fn = await generateBmrWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else {
@@ -4240,11 +4690,18 @@
         { id: 'notes',   label: 'Notes' },
       ];
 
+      const EDITOR_TABS = [
+        { id: 'table', label: 'Table' },
+        { id: 'rules', label: 'Rules' },
+      ];
+
       const MODULES = [
         { id: 'sip_fcs', label: 'SIP / FCS' },
         { id: 'bmr',     label: 'BMR' },
+        { id: 'editor',  label: 'Editor' },
       ];
 
+      const isEditor = state.module === 'editor';
       const isBmr = state.module === 'bmr';
       const bmr = state.bmr || DEFAULT_BMR_STATE;
       const setBmr = useCallback((next) => setState(s => {
@@ -4252,6 +4709,12 @@
         return { ...s, bmr: typeof next === 'function' ? next(prevBmr) : next };
       }), []);
       const bmrTab = state.bmrTab || 'clients';
+      const editor = { ...DEFAULT_EDITOR_STATE, ...(state.editor || {}), cells: editorNormalizeGrid(state.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
+      const setEditor = useCallback((next) => setState(s => {
+        const prevEditor = { ...DEFAULT_EDITOR_STATE, ...(s.editor || {}) };
+        return { ...s, editor: typeof next === 'function' ? next(prevEditor) : next };
+      }), []);
+      const editorTab = state.editorTab || 'table';
 
       const ModuleSwitch = (
         <div className="flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
@@ -4263,6 +4726,68 @@
           ))}
         </div>
       );
+
+      if (isEditor) {
+        const editorGrid = editorNormalizeGrid(editor.cells);
+        const activeEditorRules = (editor.rules || []).filter(rule => rule.enabled !== false).length;
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <EditorSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
+            <main className="flex-1 min-w-0 flex flex-col">
+              <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
+                  <h2 className="truncate text-[22px] font-bold tracking-tight">Editor / {editor.name || 'Pasted Table'}</h2>
+                </div>
+                <div className="hidden md:flex items-center gap-2">
+                  <Pill>{editorGrid.length} rows</Pill>
+                  <Pill>{editorGrid[0].length} columns</Pill>
+                  <Pill tone={activeEditorRules ? 'accent' : 'default'}>{activeEditorRules} rules</Pill>
+                </div>
+                <div className="flex items-center gap-3">
+                  {ModuleSwitch}
+                  <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                    {EDITOR_TABS.map(t => (
+                      <button key={t.id} onClick={() => setState(s => ({ ...s, editorTab: t.id }))}
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </nav>
+                </div>
+              </header>
+              <div className="p-8 max-w-[1500px] w-full">
+                <div key={editorTab} className="anim-fade-in">
+                  {editorTab === 'table' && (
+                    <div className="space-y-4">
+                      <EditorPastePanel editor={editor} onChange={setEditor} />
+                      <EditorHeaderSettings editor={editor} onChange={setEditor} />
+                      <EditorTable editor={editor} onChange={setEditor} />
+                    </div>
+                  )}
+                  {editorTab === 'rules' && (
+                    <div className="space-y-4">
+                      <EditorRulesPanel editor={editor} onChange={setEditor} />
+                      <EditorTable editor={editor} onChange={setEditor} />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+                <span className="font-mono">localStorage / key {STORAGE_KEY}</span>
+                <span>{editorGrid.length} rows / {editorGrid[0].length} columns / {activeEditorRules} active rules</span>
+              </footer>
+            </main>
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
 
       if (isBmr) {
         const visibleClients = (bmr.clients || []).filter(c => !c.hidden).length;
