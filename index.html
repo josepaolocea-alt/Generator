@@ -982,14 +982,15 @@
 
     function bmrBuildConditionFormula(rule, cellRef) {
       const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
+      const hasValue = `LEN(TRIM(${cellRef}&""))>0`;
       const numericRef = `IFERROR(VALUE(${cellRef}),${cellRef})`;
       switch (rule.kind) {
-        case 'between': return `AND(ISNUMBER(${numericRef}),${numericRef}>=${v(rule.min)},${numericRef}<=${v(rule.max)})`;
-        case 'gte':     return `AND(ISNUMBER(${numericRef}),${numericRef}>=${v(rule.value)})`;
-        case 'lte':     return `AND(ISNUMBER(${numericRef}),${numericRef}<=${v(rule.value)})`;
-        case 'gt':      return `AND(ISNUMBER(${numericRef}),${numericRef}>${v(rule.value)})`;
-        case 'lt':      return `AND(ISNUMBER(${numericRef}),${numericRef}<${v(rule.value)})`;
-        case 'eq':      return `AND(ISNUMBER(${numericRef}),${numericRef}=${v(rule.value)})`;
+        case 'between': return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}>=${v(rule.min)},${numericRef}<=${v(rule.max)})`;
+        case 'gte':     return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}>=${v(rule.value)})`;
+        case 'lte':     return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}<=${v(rule.value)})`;
+        case 'gt':      return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}>${v(rule.value)})`;
+        case 'lt':      return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}<${v(rule.value)})`;
+        case 'eq':      return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}=${v(rule.value)})`;
         default:        return 'FALSE';
       }
     }
