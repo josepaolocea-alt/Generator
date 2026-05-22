@@ -2723,13 +2723,14 @@
 
       return (
         <div className="space-y-3">
-          <div className="grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
+          <div className="grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
             <div></div><div></div><div></div>
             <div>Client name</div>
             <div>Allow Bal</div>
             <div>Allow Bal label</div>
             <div className="text-center">Hide</div>
             <div className="text-center">Color</div>
+            <div></div>
           </div>
           <div className="space-y-1">
             {clients.map((c, i) => {
@@ -2744,7 +2745,7 @@
                   onDragLeave={() => { if (overIndex === i) setOverIndex(null); }}
                   onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== i) reorder(dragIndex, i); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
                   onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-                  className={`grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_28px] gap-2 items-center rounded-md px-1 py-1 transition-all ${c.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+                  className={`grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-all ${c.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
                   <span
                     onMouseDown={() => setDragRow(i)}
                     onMouseUp={() => setDragRow(null)}
@@ -2764,11 +2765,10 @@
                     title={c.hidden ? 'Hidden — click to show' : 'Hide row in generated file'}>
                     {c.hidden ? <IconEyeOff /> : <IconEye />}
                   </button>
-                  <span className="flex items-center justify-center gap-1">
-                    <input type="color" value={c.color || '#000000'} onChange={e => updateAt(i, { color: e.target.value.toUpperCase() })}
-                      className="w-6 h-6 rounded border border-neutral-800 bg-neutral-900 cursor-pointer" title="Cell highlight color" />
-                    <button onClick={() => removeAt(i)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove client"><IconX /></button>
+                  <span className="flex items-center justify-center">
+                    <BmrColorSwatch value={c.color} onChange={color => updateAt(i, { color })} />
                   </span>
+                  <button onClick={() => removeAt(i)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove client"><IconX /></button>
                 </div>
               );
             })}
