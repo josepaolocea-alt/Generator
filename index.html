@@ -944,6 +944,7 @@
     const BMR_USAGE_OFFSET  = 10;
     const BMR_TOTAL_OFFSET  = 11;
     const BMR_DECIMAL_OFFSETS = [1, 2, 5, 6, 7, 8, BMR_AMOUNT_OFFSET, BMR_USAGE_OFFSET, BMR_TOTAL_OFFSET];
+    const BMR_PASTE_INPUT_OFFSETS = Array.from({ length: BMR_AMOUNT_OFFSET + 1 }, (_, offset) => offset);
     const BMR_SLOT_COUNT = 25;
 
     function bmrSlotsForShift(shift) {
@@ -982,8 +983,9 @@
 
     function bmrBuildConditionFormula(rule, cellRef) {
       const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
-      const hasValue = `LEN(TRIM(${cellRef}&""))>0`;
-      const numericRef = `IFERROR(VALUE(${cellRef}),${cellRef})`;
+      const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
+      const hasValue = `LEN(${cleanText})>0`;
+      const numericRef = `IFERROR(VALUE(SUBSTITUTE(${cleanText},",","")),${cellRef})`;
       switch (rule.kind) {
         case 'between': return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}>=${v(rule.min)},${numericRef}<=${v(rule.max)})`;
         case 'gte':     return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}>=${v(rule.value)})`;
@@ -1081,6 +1083,17 @@
       }
     }
 
+    function unlockBmrPasteInputCells(ws, dataStartRow, dataEndRow, slotCount) {
+      for (let k = 0; k < slotCount; k++) {
+        const blockStart = 3 + k * BMR_BLOCK_COLS;
+        for (let r = dataStartRow; r <= dataEndRow; r++) {
+          BMR_PASTE_INPUT_OFFSETS.forEach((offset) => {
+            ws.getCell(r, blockStart + offset).protection = { locked: false };
+          });
+        }
+      }
+    }
+
     function buildBmrSheet(ws, bmr, shift) {
       const slots = bmrSlotsForShift(shift);
       const visibleClients = (bmr.clients || []).filter(c => !c.hidden);
@@ -1133,6 +1146,7 @@
           const usageCol = colLetter(baseCol + BMR_USAGE_OFFSET);
           if (k === 0) {
             ws.getCell(r, baseCol + BMR_USAGE_OFFSET).value = 0;
+            ws.getCell(r, baseCol + BMR_TOTAL_OFFSET).value = 0;
           } else {
             const prevAmnt = colLetter(baseCol + BMR_AMOUNT_OFFSET - BMR_BLOCK_COLS);
             ws.getCell(r, baseCol + BMR_USAGE_OFFSET).value = { formula: `${prevAmnt}${r}-${amntCol}${r}` };
@@ -1148,6 +1162,7 @@
       for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
 
       applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length);
+      unlockBmrPasteInputCells(ws, dataStartRow, dataEndRow, slots.length);
       applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
 
       // Conditional formatting — Amnt Receivable target rules for their selected clients
@@ -1232,6 +1247,14 @@
         const name = shift === 'day' ? '7AM-7PM' : '7PM-7AM';
         const ws = wb.addWorksheet(name);
         buildBmrSheet(ws, bmr, shift);
+        await ws.protect('', {
+          formatCells: false,
+          formatColumns: false,
+          formatRows: false,
+          selectLockedCells: true,
+          selectUnlockedCells: true,
+          spinCount: 1,
+        });
       }
       const buf = await wb.xlsx.writeBuffer();
       const filename = `BMR_${bmrTodayString()}.xlsx`;
