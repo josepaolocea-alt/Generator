@@ -945,6 +945,7 @@
     const BMR_TOTAL_OFFSET  = 11;
     const BMR_DECIMAL_OFFSETS = [1, 2, 5, 6, 7, 8, BMR_AMOUNT_OFFSET, BMR_USAGE_OFFSET, BMR_TOTAL_OFFSET];
     const BMR_SLOT_COUNT = 25;
+    const BMR_EXTRA_ROWS = 10;
 
     function bmrSlotsForShift(shift) {
       const slots = [];
@@ -1093,7 +1094,8 @@
       const accountManagersById = bmrAccountManagersById(bmr);
       const totalCols = 2 + slots.length * BMR_BLOCK_COLS;
       const dataStartRow = 3;
-      const dataEndRow   = Math.max(dataStartRow, dataStartRow + visibleClients.length - 1);
+      const dataRowCount = visibleClients.length + BMR_EXTRA_ROWS;
+      const dataEndRow   = dataStartRow + dataRowCount - 1;
 
       // Row 1: time labels merged across each 12-col block
       for (let k = 0; k < slots.length; k++) {
@@ -1123,15 +1125,18 @@
       });
       ws.getRow(2).height = 24;
 
-      // Client rows (blank data with formulas for 30-min usage / total usage)
-      visibleClients.forEach((cl, i) => {
+      // Client rows plus blank allowance rows with formulas for 30-min usage / total usage.
+      for (let i = 0; i < dataRowCount; i++) {
+        const cl = visibleClients[i];
         const r = dataStartRow + i;
-        const clientColor = bmrClientColor(bmr, cl, accountManagersById);
-        ws.getCell(r, 1).value = cl.name;
-        ws.getCell(r, 2).value = cl.allowBalanceLabel || '';
-        if (clientColor) {
-          const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(clientColor) } };
-          ws.getCell(r, 1).fill = fill;
+        if (cl) {
+          const clientColor = bmrClientColor(bmr, cl, accountManagersById);
+          ws.getCell(r, 1).value = cl.name;
+          ws.getCell(r, 2).value = cl.allowBalanceLabel || '';
+          if (clientColor) {
+            const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(clientColor) } };
+            ws.getCell(r, 1).fill = fill;
+          }
         }
         for (let k = 0; k < slots.length; k++) {
           const baseCol = 3 + k * BMR_BLOCK_COLS;
@@ -1147,7 +1152,7 @@
             ws.getCell(r, baseCol + BMR_TOTAL_OFFSET).value = { formula: `${prevTotal}${r}+${usageCol}${r}` };
           }
         }
-      });
+      }
 
       // Column widths
       const carrierNameWidth = bmrCarrierNameWidth(visibleClients);
