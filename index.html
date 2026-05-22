@@ -69,9 +69,6 @@
     ::-webkit-scrollbar-thumb { background: #262626; border-radius: 4px; transition: background-color 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
     ::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
     ::selection { background: rgba(59, 130, 246, 0.3); }
-    input[type="color"] { -webkit-appearance: none; appearance: none; padding: 0; border: 0; }
-    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
-    input[type="color"]::-webkit-color-swatch { border: 1px solid #2a2a2a; border-radius: 4px; }
     .loader { width: 14px; height: 14px; border: 2px solid currentColor; border-bottom-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -136,7 +133,6 @@
     html.light body { background: #f6f6f7; color: #18181b; }
     html.light ::-webkit-scrollbar-thumb { background: #d4d4d8; }
     html.light ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
-    html.light input[type="color"]::-webkit-color-swatch { border-color: #d4d4d8; }
 
     /* Backgrounds */
     html.light .bg-\[\#0a0a0a\]            { background-color: #f6f6f7 !important; }
@@ -1046,6 +1042,71 @@
     function IconEye() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>; }
     function IconEyeOff() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a19.6 19.6 0 0 1 4.22-5.14"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 7 11 7a19.6 19.6 0 0 1-3.16 4.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>; }
 
+    const PRESET_COLOR_ROWS = [
+      ['#000000','#434343','#666666','#999999','#B7B7B7','#CCCCCC','#D9D9D9','#EFEFEF','#F3F3F3','#FFFFFF'],
+      ['#980000','#FF0000','#FF9900','#FFFF00','#00FF00','#00FFFF','#4A86E8','#0000FF','#9900FF','#FF00FF'],
+      ['#E6B8AF','#F4CCCC','#FCE5CD','#FFF2CC','#D9EAD3','#D0E0E3','#C9DAF8','#CFE2F3','#D9D2E9','#EAD1DC'],
+      ['#DD7E6B','#EA9999','#F9CB9C','#FFE599','#B6D7A8','#A2C4C9','#A4C2F4','#9FC5E8','#B4A7D6','#D5A6BD'],
+      ['#CC4125','#E06666','#F6B26B','#FFD966','#93C47D','#76A5AF','#6D9EEB','#6FA8DC','#8E7CC3','#C27BA0'],
+      ['#A61C00','#CC0000','#E69138','#F1C232','#6AA84F','#45818E','#3C78D8','#3D85C6','#674EA7','#A64D79'],
+      ['#85200C','#990000','#B45F06','#BF9000','#38761D','#134F5C','#1155CC','#0B5394','#351C75','#741B47'],
+      ['#5B0F00','#660000','#783F04','#7F6000','#274E13','#0C343D','#1C4587','#073763','#20124D','#4C1130'],
+    ];
+
+    function presetColorHex(value, fallback = '#000000') {
+      const raw = String(value || fallback).replace('#', '').slice(-6).toUpperCase();
+      return /^[0-9A-F]{6}$/.test(raw) ? '#' + raw : fallback;
+    }
+
+    function PresetColorPicker({ value, onChange, title = 'Choose color', showHex = true, className = '', buttonClassName = '' }) {
+      const [open, setOpen] = useState(false);
+      const rootRef = useRef(null);
+      const selected = presetColorHex(value);
+
+      useEffect(() => {
+        if (!open) return;
+        const closeOutside = (e) => {
+          if (!rootRef.current?.contains(e.target)) setOpen(false);
+        };
+        const closeOnEscape = (e) => {
+          if (e.key === 'Escape') setOpen(false);
+        };
+        window.addEventListener('pointerdown', closeOutside);
+        window.addEventListener('keydown', closeOnEscape);
+        return () => {
+          window.removeEventListener('pointerdown', closeOutside);
+          window.removeEventListener('keydown', closeOnEscape);
+        };
+      }, [open]);
+
+      return (
+        <span ref={rootRef} className={`relative inline-flex min-w-0 ${className}`}>
+          <button type="button" onClick={() => setOpen(v => !v)} title={title} aria-label={title} aria-expanded={open}
+            className={`inline-flex min-w-0 items-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-900 transition-colors ${showHex ? 'w-full' : ''} ${buttonClassName}`}>
+            <span className="h-5 w-5 shrink-0 rounded border border-neutral-700" style={{ background: selected }}></span>
+            {showHex && <span className="min-w-0 flex-1 truncate text-left text-[11px] font-mono text-neutral-400">{selected}</span>}
+            <IconDown />
+          </button>
+          {open && (
+            <span className="absolute left-0 top-full z-30 mt-1 w-[254px] rounded-md border border-neutral-800 bg-[#0c0c0c] p-2 shadow-2xl">
+              <span className="block space-y-1">
+                {PRESET_COLOR_ROWS.map((row, rowIndex) => (
+                  <span key={rowIndex} className="grid grid-cols-10 gap-1">
+                    {row.map(color => (
+                      <button key={color} type="button" onClick={() => { onChange(color); setOpen(false); }}
+                        title={color} aria-label={`Use color ${color}`}
+                        className={`h-5 w-5 rounded border transition-transform hover:scale-110 ${selected === color ? 'border-blue-300 ring-2 ring-blue-400/60' : 'border-neutral-700'}`}
+                        style={{ background: color }}></button>
+                    ))}
+                  </span>
+                ))}
+              </span>
+            </span>
+          )}
+        </span>
+      );
+    }
+
     /* ============================================================
        Sidebar
        ============================================================ */
@@ -1711,11 +1772,10 @@
               </div>
               <div>
                 <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Color</label>
-                <div className="flex items-center gap-2 h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2">
-                  <input type="color" value={'#' + (sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor).slice(2).toLowerCase()}
-                    onChange={e => update({ noteFontColor: 'FF' + e.target.value.slice(1).toUpperCase() })}
-                    className="w-6 h-6 cursor-pointer bg-transparent" />
-                  <span className="text-[11px] font-mono text-neutral-400 flex-1">#{(sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor).slice(2).toUpperCase()}</span>
+                <div className="flex items-center gap-1">
+                  <PresetColorPicker value={'#' + (sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor).slice(2)}
+                    onChange={color => update({ noteFontColor: 'FF' + color.slice(1) })}
+                    title="Choose header note font color" className="flex-1" />
                   {(sheet.noteFontColor || DEFAULT_NOTE_STYLE.noteFontColor) !== DEFAULT_NOTE_STYLE.noteFontColor && (
                     <button onClick={() => update({ noteFontColor: DEFAULT_NOTE_STYLE.noteFontColor })}
                       title={`Reset to default (#${DEFAULT_NOTE_STYLE.noteFontColor.slice(2)})`}
@@ -1858,11 +1918,10 @@
                     </div>
                     <div>
                       <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Color</label>
-                      <div className="flex items-center gap-2 h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2">
-                        <input type="color" value={'#' + (sheet.borderColor || 'FF374151').slice(2).toLowerCase()}
-                          onChange={e => update({ borderColor: 'FF' + e.target.value.slice(1).toUpperCase() })}
-                          className="w-6 h-6 cursor-pointer bg-transparent" />
-                        <span className="text-[11px] font-mono text-neutral-400 flex-1">#{(sheet.borderColor || 'FF374151').slice(2).toUpperCase()}</span>
+                      <div className="flex items-center gap-1">
+                        <PresetColorPicker value={'#' + (sheet.borderColor || 'FF374151').slice(2)}
+                          onChange={color => update({ borderColor: 'FF' + color.slice(1) })}
+                          title="Choose border color" className="flex-1" />
                         {(sheet.borderColor || 'FF374151') !== 'FF374151' && (
                           <button onClick={() => update({ borderColor: 'FF374151' })}
                             title="Reset to default (#374151)"
@@ -1956,12 +2015,9 @@
                   </div>
                   <div>
                     <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Background</label>
-                    <div className="flex items-center gap-2 h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2">
-                      <input type="color" value={'#' + r.color.slice(2).toLowerCase()}
-                        onChange={e => update(r.id, { color: 'FF' + e.target.value.slice(1).toUpperCase() })}
-                        className="w-6 h-6 cursor-pointer bg-transparent" />
-                      <span className="text-[11px] font-mono text-neutral-400">#{r.color.slice(2).toUpperCase()}</span>
-                    </div>
+                    <PresetColorPicker value={'#' + (r.color || 'FF166534').slice(2)}
+                      onChange={color => update(r.id, { color: 'FF' + color.slice(1) })}
+                      title="Choose rule background color" className="w-full" />
                   </div>
                   {typeDef?.needsThreshold && (
                     <div>
@@ -2693,8 +2749,8 @@
     function BmrColorSwatch({ value, onChange, allowClear = true }) {
       return (
         <span className="inline-flex items-center gap-1.5">
-          <input type="color" value={value || '#000000'} onChange={e => onChange(e.target.value.toUpperCase())}
-            className="w-7 h-7 rounded border border-neutral-800 bg-neutral-900 cursor-pointer" />
+          <PresetColorPicker value={value || '#000000'} onChange={onChange}
+            title="Choose BMR color" showHex={false} buttonClassName="h-7 px-1.5 py-1" />
           {allowClear && value && (
             <button onClick={() => onChange('')} className="text-[10px] text-neutral-500 hover:text-red-300 px-1" title="Clear color">clear</button>
           )}

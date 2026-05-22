@@ -179,7 +179,7 @@ When `state.module === 'bmr'`, App renders:
   - Quick clients list (read-only summary)
   - Generate button
 - **Main panel** with 4 tabs:
-  - `clients` → `BmrClientsEditor` — drag-and-drop list, hide toggle, color picker per row, **insert at row #** input
+  - `clients` → `BmrClientsEditor` — drag-and-drop list, hide toggle, preset color palette per row, **insert at row #** input
   - `rules`   → `BmrRulesPanel` — two sections: Target column rules + 30-min usage rules
   - `preview` → `BmrPreview` — mini HTML table of first 8 clients × first 3 timeslots, with client colors applied
   - `notes`   → free-form textarea bound to `state.bmr.notes`
