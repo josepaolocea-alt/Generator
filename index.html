@@ -1209,17 +1209,14 @@
         if (bmr.colorBlockCarrierNames !== false) {
           for (let k = 0; k < slots.length; k++) carrierCols.push(colLetter(3 + k * BMR_BLOCK_COLS));
         }
-        carrierCols.forEach((carrierCol) => {
-          const ref = `${carrierCol}${dataStartRow}:${carrierCol}${dataEndRow}`;
-          ws.addConditionalFormatting({
-            ref,
-            rules: [{
-              type: 'expression',
-              formulae: [`EXACT(TRIM(SUBSTITUTE(${carrierCol}${dataStartRow}&"",CHAR(160),"")),"${safe}")`],
-              style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
-              priority: priorityCounter++,
-            }],
-          });
+        ws.addConditionalFormatting({
+          ref: carrierCols.map((carrierCol) => `${carrierCol}${dataStartRow}:${carrierCol}${dataEndRow}`).join(' '),
+          rules: [{
+            type: 'expression',
+            formulae: [`EXACT(TRIM(SUBSTITUTE(A${dataStartRow}&"",CHAR(160),"")),"${safe}")`],
+            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
+            priority: priorityCounter++,
+          }],
         });
       });
 
