@@ -982,13 +982,14 @@
 
     function bmrBuildConditionFormula(rule, cellRef) {
       const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
+      const numericRef = `IFERROR(VALUE(${cellRef}),${cellRef})`;
       switch (rule.kind) {
-        case 'between': return `AND(ISNUMBER(${cellRef}),${cellRef}>=${v(rule.min)},${cellRef}<=${v(rule.max)})`;
-        case 'gte':     return `AND(ISNUMBER(${cellRef}),${cellRef}>=${v(rule.value)})`;
-        case 'lte':     return `AND(ISNUMBER(${cellRef}),${cellRef}<=${v(rule.value)})`;
-        case 'gt':      return `AND(ISNUMBER(${cellRef}),${cellRef}>${v(rule.value)})`;
-        case 'lt':      return `AND(ISNUMBER(${cellRef}),${cellRef}<${v(rule.value)})`;
-        case 'eq':      return `${cellRef}=${v(rule.value)}`;
+        case 'between': return `AND(ISNUMBER(${numericRef}),${numericRef}>=${v(rule.min)},${numericRef}<=${v(rule.max)})`;
+        case 'gte':     return `AND(ISNUMBER(${numericRef}),${numericRef}>=${v(rule.value)})`;
+        case 'lte':     return `AND(ISNUMBER(${numericRef}),${numericRef}<=${v(rule.value)})`;
+        case 'gt':      return `AND(ISNUMBER(${numericRef}),${numericRef}>${v(rule.value)})`;
+        case 'lt':      return `AND(ISNUMBER(${numericRef}),${numericRef}<${v(rule.value)})`;
+        case 'eq':      return `AND(ISNUMBER(${numericRef}),${numericRef}=${v(rule.value)})`;
         default:        return 'FALSE';
       }
     }
@@ -1129,7 +1130,9 @@
           const baseCol = 3 + k * BMR_BLOCK_COLS;
           const amntCol  = colLetter(baseCol + BMR_AMOUNT_OFFSET);
           const usageCol = colLetter(baseCol + BMR_USAGE_OFFSET);
-          if (k > 0) {
+          if (k === 0) {
+            ws.getCell(r, baseCol + BMR_USAGE_OFFSET).value = 0;
+          } else {
             const prevAmnt = colLetter(baseCol + BMR_AMOUNT_OFFSET - BMR_BLOCK_COLS);
             ws.getCell(r, baseCol + BMR_USAGE_OFFSET).value = { formula: `${prevAmnt}${r}-${amntCol}${r}` };
             const prevTotal = colLetter(baseCol + BMR_TOTAL_OFFSET - BMR_BLOCK_COLS);
