@@ -444,6 +444,165 @@
       return sheets;
     }
 
+    const BMR_CLIENT_IMPORT_HEADER_KEYS = {
+      clientname: 'name',
+      client: 'name',
+      carriername: 'name',
+      carrier: 'name',
+      allowbal: 'allowBalanceLabel',
+      allowballabel: 'allowBalanceLabel',
+      allowablebalance: 'allowBalanceLabel',
+      allowablebalancelabel: 'allowBalanceLabel',
+      accountmanager: 'accountManagerName',
+      accountmanagername: 'accountManagerName',
+      manager: 'accountManagerName',
+      am: 'accountManagerName',
+      clientcolor: 'color',
+      clientcolour: 'color',
+      color: 'color',
+      colour: 'color',
+      accountmanagercolor: 'accountManagerColor',
+      accountmanagercolour: 'accountManagerColor',
+      managercolor: 'accountManagerColor',
+      managercolour: 'accountManagerColor',
+      amcolor: 'accountManagerColor',
+      amcolour: 'accountManagerColor',
+      hidden: 'hidden',
+      hide: 'hidden',
+    };
+
+    function bmrImportKey(value) {
+      return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    function bmrImportColor(value) {
+      const raw = String(value || '').trim().replace(/^#/, '');
+      if (/^[0-9a-f]{6}$/i.test(raw)) return '#' + raw.toUpperCase();
+      if (/^[0-9a-f]{8}$/i.test(raw)) return '#' + raw.slice(-6).toUpperCase();
+      return '';
+    }
+
+    function bmrImportHidden(value) {
+      const raw = bmrImportKey(value);
+      if (['1', 'true', 'yes', 'y', 'hide', 'hidden'].includes(raw)) return true;
+      if (['0', 'false', 'no', 'n', 'show', 'visible'].includes(raw)) return false;
+      return undefined;
+    }
+
+    function detectBmrClientHeader(ws) {
+      const rowCount = Math.min(ws.rowCount || 10, 10);
+      const colCount = Math.min(Math.max(ws.columnCount || 12, 12), 80);
+      for (let r = 1; r <= rowCount; r++) {
+        const cols = {};
+        for (let c = 1; c <= colCount; c++) {
+          const field = BMR_CLIENT_IMPORT_HEADER_KEYS[bmrImportKey(cellText(ws.getRow(r).getCell(c)))];
+          if (field && !cols[field]) cols[field] = c;
+        }
+        if (cols.name) return { row: r, cols };
+      }
+      return null;
+    }
+
+    async function parseBmrClientsXlsx(file) {
+      const buf = await file.arrayBuffer();
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buf);
+      const rows = [];
+      wb.eachSheet((ws) => {
+        const header = detectBmrClientHeader(ws);
+        if (!header) return;
+        const lastRow = Math.min(ws.rowCount || header.row, header.row + 5000);
+        for (let r = header.row + 1; r <= lastRow; r++) {
+          const read = (field) => header.cols[field] ? cellText(ws.getRow(r).getCell(header.cols[field])) : undefined;
+          const name = read('name');
+          if (!name) continue;
+          const imported = { name };
+          if (header.cols.allowBalanceLabel) imported.allowBalanceLabel = read('allowBalanceLabel') || '';
+          if (header.cols.accountManagerName) imported.accountManagerName = read('accountManagerName') || '';
+          if (header.cols.color) {
+            const color = bmrImportColor(read('color'));
+            if (color) imported.color = color;
+          }
+          if (header.cols.accountManagerColor) {
+            const accountManagerColor = bmrImportColor(read('accountManagerColor'));
+            if (accountManagerColor) imported.accountManagerColor = accountManagerColor;
+          }
+          if (header.cols.hidden) {
+            const hidden = bmrImportHidden(read('hidden'));
+            if (hidden !== undefined) imported.hidden = hidden;
+          }
+          rows.push(imported);
+        }
+      });
+      return rows;
+    }
+
+    function mergeBmrImportedClients(bmr, importedRows) {
+      const normalizeName = (value) => String(value || '').trim().toLowerCase();
+      const compactRowsByName = new Map();
+      importedRows.forEach((row) => {
+        const key = normalizeName(row.name);
+        if (!key) return;
+        compactRowsByName.set(key, { ...(compactRowsByName.get(key) || {}), ...row });
+      });
+      const rows = Array.from(compactRowsByName.values());
+      const accountManagers = [...(bmr.accountManagers || [])];
+      const managerByName = new Map(accountManagers.map(manager => [normalizeName(manager.name), manager]));
+      const ensureManager = (name, color) => {
+        const key = normalizeName(name);
+        if (!key) return null;
+        let manager = managerByName.get(key);
+        if (!manager) {
+          manager = { id: bmrId('am'), name: String(name).trim(), color: color || '' };
+          accountManagers.push(manager);
+          managerByName.set(key, manager);
+        } else if (color && manager.color !== color) {
+          manager = { ...manager, color };
+          const index = accountManagers.findIndex(item => item.id === manager.id);
+          accountManagers[index] = manager;
+          managerByName.set(key, manager);
+        }
+        return manager;
+      };
+
+      const clients = [...(bmr.clients || [])];
+      const clientIndexByName = new Map(clients.map((client, index) => [normalizeName(client.name), index]));
+      let added = 0;
+      let updated = 0;
+
+      rows.forEach((row) => {
+        const key = normalizeName(row.name);
+        const accountManager = row.accountManagerName ? ensureManager(row.accountManagerName, row.accountManagerColor) : null;
+        const patch = {};
+        if (Object.prototype.hasOwnProperty.call(row, 'allowBalanceLabel')) patch.allowBalanceLabel = row.allowBalanceLabel;
+        if (row.color) patch.color = row.color;
+        if (Object.prototype.hasOwnProperty.call(row, 'hidden')) patch.hidden = row.hidden;
+        if (accountManager) patch.accountManagerId = accountManager.id;
+
+        if (clientIndexByName.has(key)) {
+          const index = clientIndexByName.get(key);
+          clients[index] = { ...clients[index], ...patch, name: row.name };
+          updated += 1;
+        } else {
+          clients.push({
+            id: bmrId(),
+            name: row.name,
+            color: row.color || '',
+            allowBalanceLabel: Object.prototype.hasOwnProperty.call(row, 'allowBalanceLabel') ? row.allowBalanceLabel : '',
+            accountManagerId: accountManager?.id || '',
+            hidden: row.hidden === true,
+          });
+          clientIndexByName.set(key, clients.length - 1);
+          added += 1;
+        }
+      });
+
+      return {
+        bmr: { ...bmr, clients, accountManagers },
+        stats: { rows: rows.length, added, updated },
+      };
+    }
+
     /* ============================================================
        Excel Generation (ExcelJS — Google Sheets compatible)
        ============================================================ */
@@ -1067,6 +1226,7 @@
     function IconX() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>; }
     function IconPlus() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>; }
     function IconDownload() { return <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>; }
+    function IconUpload() { return <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>; }
     function IconSun() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>; }
     function IconMoon() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>; }
     function IconEye() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>; }
@@ -2790,6 +2950,59 @@
       );
     }
 
+    function BmrClientImporter({ bmr, onChange }) {
+      const [busy, setBusy] = useState(false);
+      const [notice, setNotice] = useState('');
+      const importClients = async (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        setBusy(true);
+        setNotice('');
+        try {
+          const rows = await parseBmrClientsXlsx(file);
+          if (!rows.length) {
+            await alertDialog({
+              title: 'No client rows found',
+              message: 'Upload an .xlsx sheet with a Client Name or CarrierName header.',
+              confirmText: 'OK',
+            });
+            return;
+          }
+          const merged = mergeBmrImportedClients(bmr, rows);
+          onChange(merged.bmr);
+          setNotice(`${merged.stats.added} added, ${merged.stats.updated} updated`);
+        } catch (err) {
+          console.warn('BMR client import failed', err);
+          await alertDialog({
+            title: "Couldn't import clients",
+            message: "That file couldn't be read as a client-information .xlsx workbook.",
+            confirmText: 'OK',
+            tone: 'danger',
+          });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      return (
+        <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+          <SectionLabel hint=".xlsx">Client information</SectionLabel>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label
+              title="Required header: Client Name or CarrierName. Optional: Allow Bal label, Account Manager, Client color, Account Manager color, Hidden."
+              className={`inline-flex items-center justify-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-sm font-medium text-neutral-300 transition-colors ${busy ? 'opacity-40 cursor-wait' : 'cursor-pointer hover:border-neutral-700 hover:bg-neutral-900 hover:text-neutral-100'}`}>
+              {busy ? <span className="loader"></span> : <IconUpload />}
+              {busy ? 'Importing' : 'Import clients'}
+              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={importClients} disabled={busy} className="hidden" />
+            </label>
+            {notice && <span className="text-[11px] text-emerald-300">{notice}</span>}
+          </div>
+        </div>
+      );
+    }
+
     function BmrBlockColumnHider({ bmr, onChange }) {
       const hidden = new Set((bmr.hiddenBlockCols || []).map(Number));
       const toggle = (offset) => {
@@ -2968,6 +3181,7 @@
 
       return (
         <div className="space-y-3">
+          <BmrClientImporter bmr={bmr} onChange={onChange} />
           <BmrBlockColumnHider bmr={bmr} onChange={onChange} />
           <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
           <div className="overflow-x-auto pb-1">
