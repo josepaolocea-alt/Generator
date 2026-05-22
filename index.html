@@ -746,6 +746,225 @@
     }
 
     /* ============================================================
+       BMR module — Balance Day & Night daily generator
+       ============================================================ */
+    const BMR_BLOCK_COLS = 12;
+    const BMR_BLOCK_HEADERS = ['CarrierName ','Credit Limit ','Critical Balance ','Billing Cycle ','IsPrepay ','Inv Upto ','Prev Balance ','Pay&Adj ','Current Usage ','Amnt Receivable ','30mins usage','Total usage'];
+    const BMR_AMOUNT_OFFSET = 9;
+    const BMR_USAGE_OFFSET  = 10;
+    const BMR_TOTAL_OFFSET  = 11;
+    const BMR_SLOT_COUNT = 25;
+
+    function bmrSlotsForShift(shift) {
+      const slots = [];
+      const startHour = shift === 'night' ? 19 : 7;
+      for (let i = 0; i < BMR_SLOT_COUNT; i++) {
+        const totalMin = startHour * 60 + i * 30;
+        const h24 = Math.floor(totalMin / 60) % 24;
+        const m = totalMin % 60;
+        const ampm = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 || 12;
+        slots.push(`${h12}:${String(m).padStart(2, '0')}${ampm}`);
+      }
+      return slots;
+    }
+
+    const BMR_TARGET_COL_LETTERS = Array.from({length: BMR_SLOT_COUNT}, (_, k) => colLetter(12 + 12 * k));
+    const BMR_USAGE_COL_LETTERS  = Array.from({length: BMR_SLOT_COUNT}, (_, k) => colLetter(13 + 12 * k));
+
+    function argbHex(hex, fallback = 'FFFFFF00') {
+      if (!hex) return fallback;
+      const h = String(hex).replace('#', '').toUpperCase();
+      if (h.length === 6) return 'FF' + h;
+      if (h.length === 8) return h;
+      return fallback;
+    }
+
+    function bmrBuildConditionFormula(rule, cellRef) {
+      const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
+      switch (rule.kind) {
+        case 'between': return `AND(ISNUMBER(${cellRef}),${cellRef}>=${v(rule.min)},${cellRef}<=${v(rule.max)})`;
+        case 'gte':     return `AND(ISNUMBER(${cellRef}),${cellRef}>=${v(rule.value)})`;
+        case 'lte':     return `AND(ISNUMBER(${cellRef}),${cellRef}<=${v(rule.value)})`;
+        case 'gt':      return `AND(ISNUMBER(${cellRef}),${cellRef}>${v(rule.value)})`;
+        case 'lt':      return `AND(ISNUMBER(${cellRef}),${cellRef}<${v(rule.value)})`;
+        case 'eq':      return `${cellRef}=${v(rule.value)}`;
+        default:        return 'FALSE';
+      }
+    }
+
+    function bmrStyleFromRule(rule) {
+      const style = {};
+      if (rule.color)     style.fill = { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(rule.color) } };
+      const fontParts = {};
+      if (rule.fontColor) fontParts.color = { argb: argbHex(rule.fontColor) };
+      if (rule.bold)      fontParts.bold = true;
+      if (rule.italic)    fontParts.italic = true;
+      if (rule.underline) fontParts.underline = true;
+      if (Object.keys(fontParts).length) style.font = fontParts;
+      return style;
+    }
+
+    function bmrEvaluateRule(rule, value) {
+      const n = Number(value);
+      if (!isFinite(n)) return false;
+      const v = (x) => Number(x) || 0;
+      switch (rule.kind) {
+        case 'between': return n >= v(rule.min) && n <= v(rule.max);
+        case 'gte':     return n >= v(rule.value);
+        case 'lte':     return n <= v(rule.value);
+        case 'gt':      return n >  v(rule.value);
+        case 'lt':      return n <  v(rule.value);
+        case 'eq':      return n === v(rule.value);
+        default:        return false;
+      }
+    }
+
+    function bmrTodayString() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function buildBmrSheet(ws, bmr, shift) {
+      const slots = bmrSlotsForShift(shift);
+      const visibleClients = (bmr.clients || []).filter(c => !c.hidden);
+      const totalCols = 2 + slots.length * BMR_BLOCK_COLS;
+      const dataStartRow = 3;
+      const dataEndRow   = Math.max(dataStartRow, dataStartRow + visibleClients.length - 1);
+
+      // Row 1: time labels merged across each 12-col block
+      for (let k = 0; k < slots.length; k++) {
+        const c = 3 + k * BMR_BLOCK_COLS;
+        const cell = ws.getCell(1, c);
+        cell.value = slots[k];
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        ws.mergeCells(1, c, 1, c + BMR_BLOCK_COLS - 1);
+      }
+      ws.getRow(1).height = 22;
+
+      // Row 2: per-block headers
+      ws.getCell(2, 1).value = 'CarrierName ';
+      ws.getCell(2, 2).value = 'Allow Bal';
+      for (let k = 0; k < slots.length; k++) {
+        const baseCol = 3 + k * BMR_BLOCK_COLS;
+        for (let i = 0; i < BMR_BLOCK_HEADERS.length; i++) {
+          ws.getCell(2, baseCol + i).value = BMR_BLOCK_HEADERS[i];
+        }
+      }
+      ws.getRow(2).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+      ws.getRow(2).height = 24;
+
+      // Client rows (blank data with formulas for 30-min usage / total usage)
+      visibleClients.forEach((cl, i) => {
+        const r = dataStartRow + i;
+        ws.getCell(r, 1).value = cl.name;
+        ws.getCell(r, 2).value = cl.allowBalanceLabel || '';
+        if (cl.color) {
+          const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(cl.color) } };
+          ws.getCell(r, 1).fill = fill;
+        }
+        for (let k = 0; k < slots.length; k++) {
+          const baseCol = 3 + k * BMR_BLOCK_COLS;
+          const amntCol  = colLetter(baseCol + BMR_AMOUNT_OFFSET);
+          const usageCol = colLetter(baseCol + BMR_USAGE_OFFSET);
+          if (k > 0) {
+            const prevAmnt = colLetter(baseCol + BMR_AMOUNT_OFFSET - BMR_BLOCK_COLS);
+            ws.getCell(r, baseCol + BMR_USAGE_OFFSET).value = { formula: `${prevAmnt}${r}-${amntCol}${r}` };
+            const prevTotal = colLetter(baseCol + BMR_TOTAL_OFFSET - BMR_BLOCK_COLS);
+            ws.getCell(r, baseCol + BMR_TOTAL_OFFSET).value = { formula: `${prevTotal}${r}+${usageCol}${r}` };
+          }
+        }
+      });
+
+      // Column widths
+      ws.getColumn(1).width = 22;
+      ws.getColumn(2).width = 22;
+      for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
+
+      // Conditional formatting — Amnt Receivable target rules across all target cols
+      let priorityCounter = 100;
+      (bmr.targetRules || []).filter(r => r.enabled).forEach((rule) => {
+        BMR_TARGET_COL_LETTERS.forEach((cl) => {
+          const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
+          ws.addConditionalFormatting({
+            ref,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
+              style: bmrStyleFromRule(rule),
+              priority: priorityCounter++,
+            }],
+          });
+        });
+      });
+
+      // 30-min usage rules
+      (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
+        BMR_USAGE_COL_LETTERS.forEach((cl) => {
+          const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
+          ws.addConditionalFormatting({
+            ref,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
+              style: bmrStyleFromRule(rule),
+              priority: priorityCounter++,
+            }],
+          });
+        });
+      });
+
+      // Client text-match colouring on col A (in addition to static fill so the rule survives edits)
+      (bmr.clients || []).filter(c => !c.hidden && c.color).forEach((cl) => {
+        const ref = `A${dataStartRow}:A${dataEndRow}`;
+        const safe = (cl.name || '').replace(/"/g, '""');
+        ws.addConditionalFormatting({
+          ref,
+          rules: [{
+            type: 'expression',
+            formulae: [`EXACT(A${dataStartRow},"${safe}")`],
+            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(cl.color) } } },
+            priority: priorityCounter++,
+          }],
+        });
+      });
+
+      // Hidden columns
+      (bmr.hiddenCols || []).forEach((c) => {
+        try { ws.getColumn(c).hidden = true; } catch (_) {}
+      });
+
+      // Freeze: top 2 rows + first 2 cols
+      ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
+    }
+
+    async function generateBmrWorkbook(state) {
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'BMR Generator';
+      wb.created = new Date();
+      const bmr = state.bmr;
+      const shifts = [];
+      if (bmr.includeDay !== false)   shifts.push('day');
+      if (bmr.includeNight !== false) shifts.push('night');
+      if (!shifts.length) shifts.push('day');
+      for (const shift of shifts) {
+        const name = shift === 'day' ? '7AM-7PM' : '7PM-7AM';
+        const ws = wb.addWorksheet(name);
+        buildBmrSheet(ws, bmr, shift);
+      }
+      const buf = await wb.xlsx.writeBuffer();
+      const filename = `BMR_${bmrTodayString()}.xlsx`;
+      saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
+      return filename;
+    }
+
+    /* ============================================================
        UI Primitives
        ============================================================ */
     function Pill({ children, tone = 'default', onClick, className = '' }) {
@@ -1956,6 +2175,418 @@
     }
 
     /* ============================================================
+       BMR — UI Components
+       ============================================================ */
+    const bmrId = (p='bc') => p + '_' + Math.random().toString(36).slice(2, 9);
+
+    const DEFAULT_BMR_CLIENTS = [
+      { id: bmrId(), name: 'APNTEL',        color: '#FACC15', allowBalance: 0, allowBalanceLabel: 'Block once debit',  hidden: false },
+      { id: bmrId(), name: 'ASIACON',       color: '',        allowBalance: 0, allowBalanceLabel: '',                   hidden: false },
+      { id: bmrId(), name: 'COMMSOL-DID',   color: '#60A5FA', allowBalance: 5, allowBalanceLabel: '$5 debit poc',       hidden: false },
+      { id: bmrId(), name: 'CYN ACOM',      color: '#34D399', allowBalance: 700, allowBalanceLabel: '$700 debit / month', hidden: false },
+    ];
+
+    const DEFAULT_BMR_STATE = {
+      clients: DEFAULT_BMR_CLIENTS,
+      // Rules for Amnt Receivable target columns (L, X, AJ, ...)
+      targetRules: [
+        { id: bmrId('tr'), name: 'Reached allowable balance', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true },
+      ],
+      // Rules for 30-min usage columns (M, Y, AK, ...)
+      usageRules: [
+        { id: bmrId('ur'), name: 'Heavy debit (-0.001 to -49)', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true },
+      ],
+      hiddenCols: [],
+      includeDay:   true,
+      includeNight: true,
+      notes: '',
+    };
+
+    function BmrColorSwatch({ value, onChange, allowClear = true }) {
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <input type="color" value={value || '#000000'} onChange={e => onChange(e.target.value.toUpperCase())}
+            className="w-7 h-7 rounded border border-neutral-800 bg-neutral-900 cursor-pointer" />
+          {allowClear && value && (
+            <button onClick={() => onChange('')} className="text-[10px] text-neutral-500 hover:text-red-300 px-1" title="Clear color">clear</button>
+          )}
+        </span>
+      );
+    }
+
+    function BmrClientsEditor({ bmr, onChange }) {
+      const [draftName, setDraftName] = useState('');
+      const [insertAt, setInsertAt] = useState('');
+      const [dragIndex, setDragIndex] = useState(null);
+      const [overIndex, setOverIndex] = useState(null);
+      const [dragRow, setDragRow]   = useState(null);
+
+      const clients = bmr.clients || [];
+      const setClients = (next) => onChange({ ...bmr, clients: next });
+      const updateAt = (i, patch) => setClients(clients.map((c, j) => j === i ? { ...c, ...patch } : c));
+      const removeAt = (i) => setClients(clients.filter((_, j) => j !== i));
+      const addClient = (pos) => {
+        const name = draftName.trim();
+        if (!name) return;
+        const newC = { id: bmrId(), name, color: '', allowBalance: 0, allowBalanceLabel: '', hidden: false };
+        if (pos == null || pos < 0 || pos > clients.length) setClients([...clients, newC]);
+        else setClients([...clients.slice(0, pos), newC, ...clients.slice(pos)]);
+        setDraftName('');
+        setInsertAt('');
+      };
+      const reorder = (from, to) => {
+        if (from === to || to < 0 || to >= clients.length) return;
+        const arr = [...clients];
+        const [moved] = arr.splice(from, 1);
+        arr.splice(to, 0, moved);
+        setClients(arr);
+      };
+
+      return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
+            <div></div><div></div><div></div>
+            <div>Client name</div>
+            <div>Allow Bal</div>
+            <div>Allow Bal label</div>
+            <div className="text-center">Hide</div>
+            <div className="text-center">Color</div>
+          </div>
+          <div className="space-y-1">
+            {clients.map((c, i) => {
+              const isDragging = dragIndex === i;
+              const above = overIndex === i && dragIndex !== null && dragIndex !== i && dragIndex > i;
+              const below = overIndex === i && dragIndex !== null && dragIndex !== i && dragIndex < i;
+              return (
+                <div key={c.id}
+                  draggable={dragRow === i}
+                  onDragStart={(e) => { setDragIndex(i); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(i)); } catch (_) {} }}
+                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overIndex !== i) setOverIndex(i); }}
+                  onDragLeave={() => { if (overIndex === i) setOverIndex(null); }}
+                  onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== i) reorder(dragIndex, i); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
+                  onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
+                  className={`grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_28px] gap-2 items-center rounded-md px-1 py-1 transition-all ${c.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+                  <span
+                    onMouseDown={() => setDragRow(i)}
+                    onMouseUp={() => setDragRow(null)}
+                    onTouchStart={() => setDragRow(i)}
+                    onTouchEnd={() => setDragRow(null)}
+                    className="cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none"
+                    title="Drag to reorder">
+                    <IconGrip />
+                  </span>
+                  <span className="text-[10px] text-neutral-600 font-mono text-right">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="w-6 h-6 rounded border border-neutral-800" style={c.color ? { background: c.color } : {}} title={c.color || 'no color'}></span>
+                  <Input value={c.name} onChange={e => updateAt(i, { name: e.target.value })} placeholder="Client name" className={c.hidden ? 'line-through' : ''} />
+                  <Input type="number" step="0.01" value={c.allowBalance ?? ''} onChange={e => updateAt(i, { allowBalance: e.target.value === '' ? 0 : Number(e.target.value) })} />
+                  <Input value={c.allowBalanceLabel || ''} onChange={e => updateAt(i, { allowBalanceLabel: e.target.value })} placeholder="e.g. Block once debit" />
+                  <button onClick={() => updateAt(i, { hidden: !c.hidden })}
+                    className={`p-1 rounded ${c.hidden ? 'text-amber-400' : 'text-neutral-500 hover:text-neutral-200'}`}
+                    title={c.hidden ? 'Hidden — click to show' : 'Hide row in generated file'}>
+                    {c.hidden ? <IconEyeOff /> : <IconEye />}
+                  </button>
+                  <span className="flex items-center justify-center gap-1">
+                    <input type="color" value={c.color || '#000000'} onChange={e => updateAt(i, { color: e.target.value.toUpperCase() })}
+                      className="w-6 h-6 rounded border border-neutral-800 bg-neutral-900 cursor-pointer" title="Cell highlight color" />
+                    <button onClick={() => removeAt(i)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove client"><IconX /></button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="pt-3 border-t border-neutral-900 space-y-2">
+            <div className="flex items-end gap-2 flex-wrap">
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">New client name</label>
+                <Input value={draftName} onChange={e => setDraftName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addClient(insertAt === '' ? null : Number(insertAt) - 1))}
+                  placeholder="e.g. ABC" />
+              </div>
+              <div className="w-32">
+                <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Insert at row #</label>
+                <Input type="number" min="1" max={clients.length + 1} value={insertAt}
+                  onChange={e => setInsertAt(e.target.value)}
+                  placeholder="(end)" />
+              </div>
+              <Btn variant="primary" size="md" onClick={() => addClient(insertAt === '' ? null : Number(insertAt) - 1)} disabled={!draftName.trim()}>
+                <IconPlus /> Insert
+              </Btn>
+            </div>
+            <p className="text-[10px] text-neutral-600 leading-relaxed">
+              Leave row # empty to append at the bottom. Use a row # to insert between existing clients (e.g. <span className="text-neutral-400">4</span> inserts between current rows 3 and 4).
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    function BmrRuleEditor({ rule, onChange, onDelete, kind = 'target' }) {
+      const ops = kind === 'target'
+        ? [{v:'gte',l:'≥'},{v:'gt',l:'>'},{v:'lte',l:'≤'},{v:'lt',l:'<'},{v:'eq',l:'='},{v:'between',l:'between'}]
+        : [{v:'between',l:'between'},{v:'gte',l:'≥'},{v:'gt',l:'>'},{v:'lte',l:'≤'},{v:'lt',l:'<'},{v:'eq',l:'='}];
+      const set = (patch) => onChange({ ...rule, ...patch });
+      return (
+        <Card className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <input type="checkbox" checked={rule.enabled !== false} onChange={e => set({ enabled: e.target.checked })}
+              className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+            <Input value={rule.name || ''} onChange={e => set({ name: e.target.value })} placeholder="Rule name" />
+            <button onClick={onDelete} className="p-1.5 text-neutral-500 hover:text-red-400" title="Delete rule"><IconX /></button>
+          </div>
+          <div className="grid grid-cols-[100px_1fr_1fr] gap-2 items-end mb-2">
+            <Select value={rule.kind} onChange={e => set({ kind: e.target.value })}>
+              {ops.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+            </Select>
+            {rule.kind === 'between' ? (
+              <>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Min</label>
+                  <Input type="number" step="0.001" value={rule.min ?? ''} onChange={e => set({ min: Number(e.target.value) })} />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Max</label>
+                  <Input type="number" step="0.001" value={rule.max ?? ''} onChange={e => set({ max: Number(e.target.value) })} />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="col-span-2">
+                  <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Value</label>
+                  <Input type="number" step="0.001" value={rule.value ?? ''} onChange={e => set({ value: Number(e.target.value) })} />
+                </div>
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-neutral-400">
+            <span className="inline-flex items-center gap-1">
+              <span className="text-[10px] uppercase tracking-wide text-neutral-500">Fill</span>
+              <BmrColorSwatch value={rule.color} onChange={v => set({ color: v })} />
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="text-[10px] uppercase tracking-wide text-neutral-500">Font</span>
+              <BmrColorSwatch value={rule.fontColor} onChange={v => set({ fontColor: v })} />
+            </span>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.bold ? 'text-neutral-100 font-bold' : ''}`}>
+              <input type="checkbox" checked={!!rule.bold} onChange={e => set({ bold: e.target.checked })} className="w-3.5 h-3.5" />
+              <span className="font-bold">B</span>
+            </label>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.italic ? 'text-neutral-100 italic' : ''}`}>
+              <input type="checkbox" checked={!!rule.italic} onChange={e => set({ italic: e.target.checked })} className="w-3.5 h-3.5" />
+              <span className="italic">I</span>
+            </label>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.underline ? 'text-neutral-100 underline' : ''}`}>
+              <input type="checkbox" checked={!!rule.underline} onChange={e => set({ underline: e.target.checked })} className="w-3.5 h-3.5" />
+              <span className="underline">U</span>
+            </label>
+          </div>
+        </Card>
+      );
+    }
+
+    function BmrRulesPanel({ bmr, onChange }) {
+      const addTarget = () => onChange({ ...bmr, targetRules: [...(bmr.targetRules || []), { id: bmrId('tr'), name: 'New rule', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true }] });
+      const addUsage  = () => onChange({ ...bmr, usageRules:  [...(bmr.usageRules  || []), { id: bmrId('ur'), name: 'New rule', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true }] });
+      const updT = (id, next) => onChange({ ...bmr, targetRules: bmr.targetRules.map(r => r.id === id ? next : r) });
+      const updU = (id, next) => onChange({ ...bmr, usageRules:  bmr.usageRules.map(r  => r.id === id ? next : r) });
+      const delT = (id) => onChange({ ...bmr, targetRules: bmr.targetRules.filter(r => r.id !== id) });
+      const delU = (id) => onChange({ ...bmr, usageRules:  bmr.usageRules.filter(r  => r.id !== id) });
+
+      return (
+        <div className="space-y-10">
+          <div>
+            <SectionLabel hint={`Applies to all 25 Amnt Receivable columns (L, X, AJ, …, KN)`}>Target column rules · Amnt Receivable</SectionLabel>
+            <div className="space-y-2">
+              {(bmr.targetRules || []).map(r => (
+                <BmrRuleEditor key={r.id} rule={r} kind="target" onChange={(next) => updT(r.id, next)} onDelete={() => delT(r.id)} />
+              ))}
+              <Btn variant="ghost" size="sm" onClick={addTarget}><IconPlus /> Add target rule</Btn>
+            </div>
+          </div>
+          <div>
+            <SectionLabel hint={`Applies to all 25 "30mins usage" columns (M, Y, AK, …, KO)`}>30-min usage column rules</SectionLabel>
+            <div className="space-y-2">
+              {(bmr.usageRules || []).map(r => (
+                <BmrRuleEditor key={r.id} rule={r} kind="usage" onChange={(next) => updU(r.id, next)} onDelete={() => delU(r.id)} />
+              ))}
+              <Btn variant="ghost" size="sm" onClick={addUsage}><IconPlus /> Add usage rule</Btn>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function BmrPreview({ bmr }) {
+      const visibleClients = (bmr.clients || []).filter(c => !c.hidden).slice(0, 8);
+      const slots = bmrSlotsForShift('day').slice(0, 3); // first 3 timeslots
+      return (
+        <Card className="p-4 overflow-x-auto">
+          <p className="text-[10px] text-neutral-600 mb-3 font-mono">Day sheet preview · first {visibleClients.length} client(s) × {slots.length} timeslot(s)</p>
+          <table className="min-w-full text-[11px] border-collapse">
+            <thead>
+              <tr className="bg-neutral-900 text-neutral-300">
+                <th className="px-2 py-1 border border-neutral-800 text-left">CarrierName</th>
+                <th className="px-2 py-1 border border-neutral-800 text-left">Allow Bal</th>
+                {slots.map((s, i) => (
+                  <th key={i} colSpan={3} className="px-2 py-1 border border-neutral-800 text-center">{s}</th>
+                ))}
+              </tr>
+              <tr className="bg-neutral-950 text-neutral-500 text-[10px]">
+                <th className="px-2 py-1 border border-neutral-800"></th>
+                <th className="px-2 py-1 border border-neutral-800"></th>
+                {slots.map((_, i) => (
+                  <React.Fragment key={i}>
+                    <th className="px-2 py-1 border border-neutral-800">Amnt Rcv</th>
+                    <th className="px-2 py-1 border border-neutral-800">30min</th>
+                    <th className="px-2 py-1 border border-neutral-800">Total</th>
+                  </React.Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleClients.map((c) => (
+                <tr key={c.id}>
+                  <td className="px-2 py-1 border border-neutral-800" style={c.color ? { background: c.color, color: '#000' } : {}}>{c.name}</td>
+                  <td className="px-2 py-1 border border-neutral-800 text-neutral-500">{c.allowBalanceLabel || '—'}</td>
+                  {slots.map((_, i) => (
+                    <React.Fragment key={i}>
+                      <td className="px-2 py-1 border border-neutral-800 text-neutral-700">·</td>
+                      <td className="px-2 py-1 border border-neutral-800 text-neutral-700">·</td>
+                      <td className="px-2 py-1 border border-neutral-800 text-neutral-700">·</td>
+                    </React.Fragment>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[10px] text-neutral-600 mt-3 leading-relaxed">
+            Generated file: 2 sheets (<span className="text-neutral-400">7AM-7PM</span> and <span className="text-neutral-400">7PM-7AM</span>), 25 timeslots × 12 cols each, <span className="text-neutral-400">{(bmr.clients || []).filter(c => !c.hidden).length}</span> visible client rows. 30-min usage and Total usage are auto-formulas referencing the previous slot.
+          </p>
+        </Card>
+      );
+    }
+
+    function BmrSidebar({ state, setState, onGenerate, busy, sync }) {
+      const theme = state.theme || 'dark';
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      const bmr = state.bmr || DEFAULT_BMR_STATE;
+      const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
+
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">BMR Generator</h1>
+            <p className="text-xs text-neutral-500 mt-1">Daily · Balance Day &amp; Night</p>
+            {sync?.email && (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
+                <span className="text-[11px] text-neutral-400 truncate" title={sync.email}>{sync.email}</span>
+                <button
+                  onClick={async () => {
+                    if (!window.__fb) return;
+                    const ok = await confirmDialog({
+                      title: 'Sign out?',
+                      message: 'Your data stays safely in the cloud and will be there next time you sign in.',
+                      confirmText: 'Sign out',
+                      tone: 'danger',
+                    });
+                    if (!ok) return;
+                    window.__fb.auth.signOut().catch(() => {});
+                  }}
+                  title="Sign out"
+                  className="text-[10px] uppercase tracking-wide text-neutral-500 hover:text-red-300 transition-colors shrink-0">
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="p-5 border-b border-neutral-900">
+            <SectionLabel>Today</SectionLabel>
+            <div className="text-2xl font-bold tracking-tight">{bmrTodayString()}</div>
+            <p className="text-[11px] text-neutral-500 mt-1 font-mono">Daily generation</p>
+          </div>
+
+          <div className="p-5 border-b border-neutral-900 space-y-2">
+            <SectionLabel>Shifts</SectionLabel>
+            <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <input type="checkbox" checked={bmr.includeDay !== false}
+                onChange={e => setBmr({ ...bmr, includeDay: e.target.checked })}
+                className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+              <span>7AM–7PM (Day)</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <input type="checkbox" checked={bmr.includeNight !== false}
+                onChange={e => setBmr({ ...bmr, includeNight: e.target.checked })}
+                className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+              <span>7PM–7AM (Night)</span>
+            </label>
+          </div>
+
+          <div className="p-5 border-b border-neutral-900">
+            <SectionLabel>Hidden columns</SectionLabel>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {(bmr.hiddenCols || []).length === 0 && <span className="text-[11px] text-neutral-600">None</span>}
+              {(bmr.hiddenCols || []).map(c => (
+                <span key={c} className="inline-flex items-center gap-1 rounded-full border border-neutral-800 bg-neutral-950 pl-2 pr-1 py-0.5 text-[10px] text-neutral-300 font-mono">
+                  {c}
+                  <button onClick={() => setBmr({ ...bmr, hiddenCols: bmr.hiddenCols.filter(x => x !== c) })}
+                    className="text-neutral-500 hover:text-red-400 p-0.5"><IconX /></button>
+                </span>
+              ))}
+            </div>
+            <BmrHiddenColInput bmr={bmr} setBmr={setBmr} />
+          </div>
+
+          <div className="p-5 flex-1 overflow-y-auto">
+            <SectionLabel hint={`${(bmr.clients || []).filter(c => !c.hidden).length}/${(bmr.clients || []).length} visible`}>Clients quick view</SectionLabel>
+            <div className="space-y-0.5 max-h-[40vh] overflow-y-auto">
+              {(bmr.clients || []).map((c, i) => (
+                <div key={c.id} className={`flex items-center gap-2 rounded px-1.5 py-1 ${c.hidden ? 'opacity-40' : ''}`}>
+                  <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={c.color ? { background: c.color } : {}}></span>
+                  <span className="text-[11px] text-neutral-300 truncate flex-1">{c.name}</span>
+                  <span className="text-[10px] text-neutral-600 font-mono">{c.allowBalance || ''}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-5 border-t border-neutral-900 space-y-3">
+            <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
+              {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR · {bmrTodayString()}</>}
+            </Btn>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">.xlsx · Google Sheets compatible</p>
+          </div>
+        </aside>
+      );
+    }
+
+    function BmrHiddenColInput({ bmr, setBmr }) {
+      const [v, setV] = useState('');
+      const add = () => {
+        const raw = v.trim().toUpperCase();
+        if (!raw) return;
+        const list = raw.split(/[\s,]+/).filter(Boolean);
+        const next = Array.from(new Set([...(bmr.hiddenCols || []), ...list]));
+        setBmr({ ...bmr, hiddenCols: next });
+        setV('');
+      };
+      return (
+        <div className="flex gap-1">
+          <Input value={v} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())} placeholder="e.g. L, X, AJ" />
+          <Btn variant="ghost" size="sm" onClick={add}>Hide</Btn>
+        </div>
+      );
+    }
+
+    /* ============================================================
        App
        ============================================================ */
     const DEFAULT_STATE = {
@@ -1969,13 +2600,19 @@
       tab: 'config',
       theme: 'dark',
       imported: [],
+      module: 'sip_fcs',
+      bmr: DEFAULT_BMR_STATE,
+      bmrTab: 'clients',
     };
 
     function App() {
       const [state, setState] = useState(() => {
         try {
           const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-          if (saved && Array.isArray(saved.sheets)) return { ...DEFAULT_STATE, ...saved };
+          if (saved && Array.isArray(saved.sheets)) {
+            const bmr = { ...DEFAULT_BMR_STATE, ...(saved.bmr || {}) };
+            return { ...DEFAULT_STATE, ...saved, bmr };
+          }
         } catch {}
         return DEFAULT_STATE;
       });
@@ -2089,8 +2726,13 @@
       const onGenerate = async () => {
         setBusy(true);
         try {
-          await generateWorkbook(state);
-          setToast({ type: 'ok', msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
+          if (state.module === 'bmr') {
+            const fn = await generateBmrWorkbook(state);
+            setToast({ type: 'ok', msg: `Generated ${fn}` });
+          } else {
+            await generateWorkbook(state);
+            setToast({ type: 'ok', msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
+          }
         } catch (e) {
           console.error(e);
           setToast({ type: 'err', msg: 'Generation failed: ' + (e.message || e) });
@@ -2111,6 +2753,108 @@
         { id: 'notes',   label: 'Notes' },
       ];
 
+      const BMR_TABS = [
+        { id: 'clients', label: 'Clients' },
+        { id: 'rules',   label: 'Rules' },
+        { id: 'preview', label: 'Preview' },
+        { id: 'notes',   label: 'Notes' },
+      ];
+
+      const MODULES = [
+        { id: 'sip_fcs', label: 'SIP / FCS' },
+        { id: 'bmr',     label: 'BMR' },
+      ];
+
+      const isBmr = state.module === 'bmr';
+      const bmr = state.bmr || DEFAULT_BMR_STATE;
+      const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
+      const bmrTab = state.bmrTab || 'clients';
+
+      const ModuleSwitch = (
+        <div className="flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
+          {MODULES.map(m => (
+            <button key={m.id} onClick={() => setState(s => ({ ...s, module: m.id }))}
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors ${state.module === m.id || (m.id === 'sip_fcs' && !state.module) ? 'bg-blue-500/20 text-blue-200 border border-blue-500/40' : 'text-neutral-500 hover:text-neutral-200'}`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      );
+
+      if (isBmr) {
+        const visibleClients = (bmr.clients || []).filter(c => !c.hidden).length;
+        const activeBmrRules = ((bmr.targetRules || []).filter(r => r.enabled).length) + ((bmr.usageRules || []).filter(r => r.enabled).length);
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <BmrSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
+            <main className="flex-1 min-w-0 flex flex-col">
+              <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
+                  <h2 className="text-[22px] font-bold tracking-tight">BMR · {bmrTodayString()}</h2>
+                </div>
+                <div className="hidden md:flex items-center gap-2">
+                  <Pill>{visibleClients} clients</Pill>
+                  <Pill>{(bmr.includeDay !== false ? 1 : 0) + (bmr.includeNight !== false ? 1 : 0)} shifts</Pill>
+                  <Pill tone={activeBmrRules > 0 ? 'accent' : 'default'}>{activeBmrRules} rules</Pill>
+                </div>
+                <div className="flex items-center gap-3">
+                  {ModuleSwitch}
+                  <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                    {BMR_TABS.map(t => (
+                      <button key={t.id} onClick={() => setState(s => ({ ...s, bmrTab: t.id }))}
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrTab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </nav>
+                </div>
+              </header>
+
+              <div className="p-8 max-w-6xl w-full">
+                <div key={bmrTab} className="anim-fade-in">
+                  {bmrTab === 'clients' && (
+                    <div className="space-y-6">
+                      <SectionLabel hint="Drag to reorder · insert at row # · hide rows">Clients</SectionLabel>
+                      <BmrClientsEditor bmr={bmr} onChange={setBmr} />
+                    </div>
+                  )}
+                  {bmrTab === 'rules' && (
+                    <BmrRulesPanel bmr={bmr} onChange={setBmr} />
+                  )}
+                  {bmrTab === 'preview' && (
+                    <div className="space-y-3">
+                      <SectionLabel hint="Live preview · first few clients × first 3 timeslots">Structure preview</SectionLabel>
+                      <BmrPreview bmr={bmr} />
+                    </div>
+                  )}
+                  {bmrTab === 'notes' && (
+                    <div>
+                      <SectionLabel hint="Free-form notes carried with the BMR config">Notes</SectionLabel>
+                      <Textarea rows={12} value={bmr.notes || ''} onChange={e => setBmr({ ...bmr, notes: e.target.value })}
+                        placeholder={`Notes for BMR…\n\ne.g. Added APNTEL with debit-on-zero rule, hid CYN ACOM for the week.`} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+                <span className="font-mono">localStorage · key {STORAGE_KEY}</span>
+                <span>{visibleClients} visible clients · {activeBmrRules} active rules · {bmrTodayString()}</span>
+              </footer>
+            </main>
+
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
+
       return (
         <div className="flex min-h-screen text-neutral-100">
           <Sidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
@@ -2127,14 +2871,17 @@
                 <Pill>{days} days</Pill>
                 <Pill tone={activeRules > 0 ? 'accent' : 'default'}>{activeRules} rules</Pill>
               </div>
-              <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
-                {TABS.map(t => (
-                  <button key={t.id} onClick={() => setState(s => ({ ...s, tab: t.id }))}
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
-                    {t.label}
-                  </button>
-                ))}
-              </nav>
+              <div className="flex items-center gap-3">
+                {ModuleSwitch}
+                <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  {TABS.map(t => (
+                    <button key={t.id} onClick={() => setState(s => ({ ...s, tab: t.id }))}
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                      {t.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
             </header>
 
             {/* Body */}
