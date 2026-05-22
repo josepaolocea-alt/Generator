@@ -3332,9 +3332,9 @@
     }
 
     const BmrClientRow = React.memo(function BmrClientRow({
-      client, accountManagers, index, dragIndex, overIndex, dragRow,
+      client, accountManagers, index, selected, dragIndex, overIndex, dragRow,
       setDragIndex, setOverIndex, setDragRow,
-      reorder, updateClient, removeClient,
+      reorder, updateClient, removeClient, toggleSelected,
     }) {
       const isDragging = dragIndex === index;
       const above = overIndex === index && dragIndex !== null && dragIndex !== index && dragIndex > index;
@@ -3350,7 +3350,10 @@
           onDragLeave={() => { if (overIndex === index) setOverIndex(null); }}
           onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== index) reorder(dragIndex, index); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
           onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-          className={`grid grid-cols-[20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+          className={`grid grid-cols-[20px_20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${selected ? 'bg-blue-500/10' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+          <input type="checkbox" checked={selected} onChange={() => toggleSelected(client.id)}
+            title="Select client"
+            className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
           <span
             onMouseDown={() => setDragRow(index)}
             onMouseUp={() => setDragRow(null)}
@@ -3385,21 +3388,46 @@
       const [draftName, setDraftName] = useState('');
       const [insertAt, setInsertAt] = useState('');
       const [managerFilter, setManagerFilter] = useState('__all__');
+      const [clientSearch, setClientSearch] = useState('');
+      const [selectedClientIds, setSelectedClientIds] = useState([]);
+      const [bulkManagerId, setBulkManagerId] = useState('__unchanged__');
+      const [bulkColor, setBulkColor] = useState('#FACC15');
       const [dragIndex, setDragIndex] = useState(null);
       const [overIndex, setOverIndex] = useState(null);
       const [dragRow, setDragRow]   = useState(null);
 
       const clients = bmr.clients || [];
       const accountManagers = bmr.accountManagers || [];
+      const accountManagersById = useMemo(() => new Map(accountManagers.map(manager => [manager.id, manager])), [accountManagers]);
       useEffect(() => {
         if (managerFilter === '__all__' || managerFilter === '__none__') return;
         if (!accountManagers.some(manager => manager.id === managerFilter)) setManagerFilter('__all__');
       }, [accountManagers, managerFilter]);
+      useEffect(() => {
+        if (bulkManagerId === '__unchanged__' || bulkManagerId === '__none__') return;
+        if (!accountManagers.some(manager => manager.id === bulkManagerId)) setBulkManagerId('__unchanged__');
+      }, [accountManagers, bulkManagerId]);
+      useEffect(() => {
+        const clientIds = new Set(clients.map(client => client.id));
+        setSelectedClientIds((ids) => {
+          const kept = ids.filter(id => clientIds.has(id));
+          return kept.length === ids.length ? ids : kept;
+        });
+      }, [clients]);
+      const clientSearchTerm = clientSearch.trim().toLowerCase();
       const filteredClients = clients
         .map((client, index) => ({ client, index }))
-        .filter(({ client }) => managerFilter === '__all__'
-          || (managerFilter === '__none__' ? !client.accountManagerId : client.accountManagerId === managerFilter)
-        );
+        .filter(({ client }) => {
+          const managerMatches = managerFilter === '__all__'
+            || (managerFilter === '__none__' ? !client.accountManagerId : client.accountManagerId === managerFilter);
+          if (!managerMatches || !clientSearchTerm) return managerMatches;
+          const managerName = accountManagersById.get(client.accountManagerId)?.name || '';
+          return [client.name, client.allowBalanceLabel, managerName]
+            .some(value => String(value || '').toLowerCase().includes(clientSearchTerm));
+        });
+      const selectedClientIdSet = new Set(selectedClientIds);
+      const visibleClientIds = filteredClients.map(({ client }) => client.id);
+      const allVisibleSelected = visibleClientIds.length > 0 && visibleClientIds.every(id => selectedClientIdSet.has(id));
       const setClients = useCallback((next) => onChange((prev) => ({
         ...prev,
         clients: typeof next === 'function' ? next(prev.clients || []) : next,
@@ -3426,6 +3454,23 @@
         arr.splice(to, 0, moved);
         return arr;
       }), [setClients]);
+      const toggleSelected = useCallback((id) => setSelectedClientIds((ids) =>
+        ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id]
+      ), []);
+      const toggleVisibleSelection = () => setSelectedClientIds((ids) => {
+        const next = new Set(ids);
+        if (allVisibleSelected) visibleClientIds.forEach(id => next.delete(id));
+        else visibleClientIds.forEach(id => next.add(id));
+        return Array.from(next);
+      });
+      const updateSelectedClients = (patch) => {
+        if (!selectedClientIds.length) return;
+        setClients((list) => list.map(client => selectedClientIdSet.has(client.id) ? { ...client, ...patch } : client));
+      };
+      const applyBulkManager = () => {
+        if (bulkManagerId === '__unchanged__') return;
+        updateSelectedClients({ accountManagerId: bulkManagerId === '__none__' ? '' : bulkManagerId });
+      };
 
       return (
         <div className="space-y-3">
@@ -3435,19 +3480,55 @@
           <BmrBorderSettings bmr={bmr} onChange={onChange} />
           <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
           <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
-            <div className="w-full max-w-xs">
-              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Account manager filter</label>
-              <Select value={managerFilter} onChange={e => setManagerFilter(e.target.value)}>
-                <option value="__all__">All account managers</option>
-                <option value="__none__">No manager</option>
-                {accountManagers.map(manager => <option key={manager.id} value={manager.id}>{manager.name || 'Unnamed manager'}</option>)}
-              </Select>
+            <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
+              <div className="w-full max-w-xs">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search clients</label>
+                <Input value={clientSearch} onChange={e => setClientSearch(e.target.value)} placeholder="Client, label, or manager" />
+              </div>
+              <div className="w-full max-w-xs">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Account manager filter</label>
+                <Select value={managerFilter} onChange={e => setManagerFilter(e.target.value)}>
+                  <option value="__all__">All account managers</option>
+                  <option value="__none__">No manager</option>
+                  {accountManagers.map(manager => <option key={manager.id} value={manager.id}>{manager.name || 'Unnamed manager'}</option>)}
+                </Select>
+              </div>
             </div>
             <span className="pb-2 text-[11px] text-neutral-500">{filteredClients.length}/{clients.length} clients shown</span>
           </div>
+          {selectedClientIds.length > 0 && (
+            <div className="rounded-md border border-blue-500/40 bg-blue-500/10 p-3">
+              <SectionLabel hint={`${selectedClientIds.length} selected`}>Bulk edit</SectionLabel>
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="w-full max-w-xs">
+                  <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Account manager</label>
+                  <Select value={bulkManagerId} onChange={e => setBulkManagerId(e.target.value)}>
+                    <option value="__unchanged__">Choose manager</option>
+                    <option value="__none__">No manager</option>
+                    {accountManagers.map(manager => <option key={manager.id} value={manager.id}>{manager.name || 'Unnamed manager'}</option>)}
+                  </Select>
+                </div>
+                <Btn variant="ghost" size="md" onClick={applyBulkManager} disabled={bulkManagerId === '__unchanged__'}>Apply manager</Btn>
+                <span className="inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2">
+                  <span className="text-[10px] uppercase tracking-wide text-neutral-500">Client color</span>
+                  <BmrColorSwatch value={bulkColor} onChange={setBulkColor} allowClear={false} />
+                </span>
+                <Btn variant="ghost" size="md" onClick={() => updateSelectedClients({ color: bulkColor })}>Apply color</Btn>
+                <Btn variant="ghost" size="md" onClick={() => updateSelectedClients({ color: '' })}>Clear colors</Btn>
+                <Btn variant="ghost" size="md" onClick={() => updateSelectedClients({ hidden: true })}>Hide</Btn>
+                <Btn variant="ghost" size="md" onClick={() => updateSelectedClients({ hidden: false })}>Show</Btn>
+                <Btn variant="ghost" size="md" onClick={() => setSelectedClientIds([])}>Clear selection</Btn>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto pb-1">
-            <div className="min-w-[780px]">
-              <div className="grid grid-cols-[20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
+            <div className="min-w-[820px]">
+              <div className="grid grid-cols-[20px_20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
+                <div className="flex items-center">
+                  <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleSelection}
+                    disabled={!visibleClientIds.length} title="Select shown clients"
+                    className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" />
+                </div>
                 <div></div><div></div><div></div>
                 <div>Client name</div>
                 <div>Allow Bal label</div>
@@ -3462,6 +3543,7 @@
                     client={c}
                     accountManagers={accountManagers}
                     index={i}
+                    selected={selectedClientIdSet.has(c.id)}
                     dragIndex={dragIndex}
                     overIndex={overIndex}
                     dragRow={dragRow}
@@ -3470,7 +3552,8 @@
                     setDragRow={setDragRow}
                     reorder={reorder}
                     updateClient={updateClient}
-                    removeClient={removeClient} />
+                    removeClient={removeClient}
+                    toggleSelected={toggleSelected} />
                 ))}
               </div>
             </div>
@@ -3576,7 +3659,9 @@
     }
 
     function BmrRulesPanel({ bmr, onChange }) {
+      const [ruleSearch, setRuleSearch] = useState('');
       const targetClients = bmr.clients || [];
+      const targetClientsById = useMemo(() => new Map(targetClients.map(client => [client.id, client])), [targetClients]);
       const defaultTargetClient = targetClients.find(c => !c.hidden) || targetClients[0];
       const addTarget = () => onChange({ ...bmr, targetRules: [...(bmr.targetRules || []), { id: bmrId('tr'), name: 'New client rule', clientId: defaultTargetClient?.id || '', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true }] });
       const addUsage  = () => onChange({ ...bmr, usageRules:  [...(bmr.usageRules  || []), { id: bmrId('ur'), name: 'New rule', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true }] });
@@ -3584,13 +3669,33 @@
       const updU = (id, next) => onChange({ ...bmr, usageRules:  bmr.usageRules.map(r  => r.id === id ? next : r) });
       const delT = (id) => onChange({ ...bmr, targetRules: bmr.targetRules.filter(r => r.id !== id) });
       const delU = (id) => onChange({ ...bmr, usageRules:  bmr.usageRules.filter(r  => r.id !== id) });
+      const ruleSearchTerm = ruleSearch.trim().toLowerCase();
+      const ruleMatches = (rule, clientName = '') => !ruleSearchTerm || [
+        rule.name,
+        clientName,
+        rule.kind,
+        rule.value,
+        rule.min,
+        rule.max,
+      ].some(value => String(value ?? '').toLowerCase().includes(ruleSearchTerm));
+      const targetRules = bmr.targetRules || [];
+      const usageRules = bmr.usageRules || [];
+      const filteredTargetRules = targetRules.filter(rule => ruleMatches(rule, targetClientsById.get(rule.clientId)?.name || ''));
+      const filteredUsageRules = usageRules.filter(rule => ruleMatches(rule));
 
       return (
         <div className="space-y-10">
+          <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+            <div className="w-full max-w-sm">
+              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search rules</label>
+              <Input value={ruleSearch} onChange={e => setRuleSearch(e.target.value)} placeholder="Rule name, client, or value" />
+            </div>
+            <span className="pb-2 text-[11px] text-neutral-500">{filteredTargetRules.length}/{targetRules.length} client rules / {filteredUsageRules.length}/{usageRules.length} usage rules</span>
+          </div>
           <div>
             <SectionLabel hint={`Each rule targets one client across all 25 Amnt Receivable columns (L, X, AJ, ..., KN)`}>Target column rules · Amnt Receivable</SectionLabel>
             <div className="space-y-2">
-              {(bmr.targetRules || []).map(r => (
+              {filteredTargetRules.map(r => (
                 <BmrRuleEditor key={r.id} rule={r} kind="target" clients={targetClients} onChange={(next) => updT(r.id, next)} onDelete={() => delT(r.id)} />
               ))}
               <Btn variant="ghost" size="sm" onClick={addTarget}><IconPlus /> Add target rule</Btn>
@@ -3600,7 +3705,7 @@
           <div>
             <SectionLabel hint={`Applies to all 25 "30mins usage" columns (M, Y, AK, …, KO)`}>30-min usage column rules</SectionLabel>
             <div className="space-y-2">
-              {(bmr.usageRules || []).map(r => (
+              {filteredUsageRules.map(r => (
                 <BmrRuleEditor key={r.id} rule={r} kind="usage" onChange={(next) => updU(r.id, next)} onDelete={() => delU(r.id)} />
               ))}
               <Btn variant="ghost" size="sm" onClick={addUsage}><IconPlus /> Add usage rule</Btn>
