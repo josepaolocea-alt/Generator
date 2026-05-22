@@ -603,29 +603,51 @@
       };
     }
 
-    async function downloadBmrClientImportSample() {
+    const BMR_CLIENT_IMPORT_COLUMNS = [
+      { header: 'Client Name', key: 'name', width: 24 },
+      { header: 'Allow Bal label', key: 'allowBalanceLabel', width: 32 },
+      { header: 'Account Manager', key: 'accountManagerName', width: 24 },
+      { header: 'Client color', key: 'color', width: 16 },
+      { header: 'Account Manager color', key: 'accountManagerColor', width: 24 },
+      { header: 'Hidden', key: 'hidden', width: 12 },
+    ];
+
+    async function downloadBmrClientImportWorkbook(sheetName, rows, filename) {
       const wb = new ExcelJS.Workbook();
       wb.creator = 'BMR Generator';
       wb.created = new Date();
-      const ws = wb.addWorksheet('Client Import Sample');
-      ws.columns = [
-        { header: 'Client Name', key: 'name', width: 24 },
-        { header: 'Allow Bal label', key: 'allowBalanceLabel', width: 32 },
-        { header: 'Account Manager', key: 'accountManagerName', width: 24 },
-        { header: 'Client color', key: 'color', width: 16 },
-        { header: 'Account Manager color', key: 'accountManagerColor', width: 24 },
-        { header: 'Hidden', key: 'hidden', width: 12 },
-      ];
-      ws.addRows([
-        { name: 'SAMPLE CLIENT A', allowBalanceLabel: 'Block once debit', accountManagerName: 'Jason Cruz', color: '', accountManagerColor: '#60A5FA', hidden: 'No' },
-        { name: 'SAMPLE CLIENT B', allowBalanceLabel: '$5 debit poc', accountManagerName: 'Jason Cruz', color: '#FACC15', accountManagerColor: '#60A5FA', hidden: 'No' },
-      ]);
+      const ws = wb.addWorksheet(sheetName);
+      ws.columns = BMR_CLIENT_IMPORT_COLUMNS;
+      ws.addRows(rows);
       ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
       ws.getRow(1).alignment = { vertical: 'middle' };
       ws.views = [{ state: 'frozen', ySplit: 1 }];
       const buf = await wb.xlsx.writeBuffer();
-      saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'BMR_Client_Import_Sample.xlsx');
+      saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
+    }
+
+    async function downloadBmrClientImportSample() {
+      await downloadBmrClientImportWorkbook('Client Import Sample', [
+        { name: 'SAMPLE CLIENT A', allowBalanceLabel: 'Block once debit', accountManagerName: 'Jason Cruz', color: '', accountManagerColor: '#60A5FA', hidden: 'No' },
+        { name: 'SAMPLE CLIENT B', allowBalanceLabel: '$5 debit poc', accountManagerName: 'Jason Cruz', color: '#FACC15', accountManagerColor: '#60A5FA', hidden: 'No' },
+      ], 'BMR_Client_Import_Sample.xlsx');
+    }
+
+    async function downloadBmrClientData(bmr) {
+      const accountManagersById = bmrAccountManagersById(bmr);
+      const rows = (bmr.clients || []).map((client) => {
+        const manager = accountManagersById.get(client.accountManagerId);
+        return {
+          name: client.name || '',
+          allowBalanceLabel: client.allowBalanceLabel || '',
+          accountManagerName: manager?.name || '',
+          color: client.color || '',
+          accountManagerColor: manager?.color || '',
+          hidden: client.hidden ? 'Yes' : 'No',
+        };
+      });
+      await downloadBmrClientImportWorkbook('Current Client Data', rows, `BMR_Client_Data_${bmrTodayString()}.xlsx`);
     }
 
     /* ============================================================
@@ -3055,6 +3077,7 @@
 
     function BmrClientImporter({ bmr, onChange }) {
       const [busy, setBusy] = useState(false);
+      const [downloadBusy, setDownloadBusy] = useState(false);
       const [sampleBusy, setSampleBusy] = useState(false);
       const [notice, setNotice] = useState('');
       const importClients = async (e) => {
@@ -3104,6 +3127,22 @@
           setSampleBusy(false);
         }
       };
+      const downloadData = async () => {
+        setDownloadBusy(true);
+        try {
+          await downloadBmrClientData(bmr);
+        } catch (err) {
+          console.warn('BMR client data download failed', err);
+          await alertDialog({
+            title: "Couldn't download data",
+            message: "The current client-data workbook couldn't be generated.",
+            confirmText: 'OK',
+            tone: 'danger',
+          });
+        } finally {
+          setDownloadBusy(false);
+        }
+      };
 
       return (
         <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
@@ -3117,6 +3156,10 @@
               <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={importClients} disabled={busy} className="hidden" />
             </label>
+            <Btn variant="ghost" size="md" onClick={downloadData} disabled={downloadBusy}>
+              {downloadBusy ? <span className="loader"></span> : <IconDownload />}
+              {downloadBusy ? 'Downloading' : 'Download data'}
+            </Btn>
             <Btn variant="ghost" size="md" onClick={downloadSample} disabled={sampleBusy}>
               {sampleBusy ? <span className="loader"></span> : <IconDownload />}
               {sampleBusy ? 'Creating' : 'Sample format'}
