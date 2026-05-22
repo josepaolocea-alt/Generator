@@ -786,6 +786,15 @@
       return fallback;
     }
 
+    function bmrAccountManagersById(bmr) {
+      return new Map((bmr.accountManagers || []).map(manager => [manager.id, manager]));
+    }
+
+    function bmrClientColor(bmr, client, accountManagersById = bmrAccountManagersById(bmr)) {
+      const manager = accountManagersById.get(client.accountManagerId);
+      return manager?.color || client.color || '';
+    }
+
     function bmrBuildConditionFormula(rule, cellRef) {
       const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
       switch (rule.kind) {
@@ -840,6 +849,7 @@
     function buildBmrSheet(ws, bmr, shift) {
       const slots = bmrSlotsForShift(shift);
       const visibleClients = (bmr.clients || []).filter(c => !c.hidden);
+      const accountManagersById = bmrAccountManagersById(bmr);
       const totalCols = 2 + slots.length * BMR_BLOCK_COLS;
       const dataStartRow = 3;
       const dataEndRow   = Math.max(dataStartRow, dataStartRow + visibleClients.length - 1);
@@ -875,10 +885,11 @@
       // Client rows (blank data with formulas for 30-min usage / total usage)
       visibleClients.forEach((cl, i) => {
         const r = dataStartRow + i;
+        const clientColor = bmrClientColor(bmr, cl, accountManagersById);
         ws.getCell(r, 1).value = cl.name;
         ws.getCell(r, 2).value = cl.allowBalanceLabel || '';
-        if (cl.color) {
-          const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(cl.color) } };
+        if (clientColor) {
+          const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(clientColor) } };
           ws.getCell(r, 1).fill = fill;
         }
         for (let k = 0; k < slots.length; k++) {
@@ -936,7 +947,9 @@
       });
 
       // Client text-match colouring on col A (in addition to static fill so the rule survives edits)
-      (bmr.clients || []).filter(c => !c.hidden && c.color).forEach((cl) => {
+      visibleClients.forEach((cl) => {
+        const clientColor = bmrClientColor(bmr, cl, accountManagersById);
+        if (!clientColor) return;
         const ref = `A${dataStartRow}:A${dataEndRow}`;
         const safe = (cl.name || '').replace(/"/g, '""');
         ws.addConditionalFormatting({
@@ -944,7 +957,7 @@
           rules: [{
             type: 'expression',
             formulae: [`EXACT(A${dataStartRow},"${safe}")`],
-            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(cl.color) } } },
+            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
             priority: priorityCounter++,
           }],
         });
@@ -2749,6 +2762,7 @@
 
     const DEFAULT_BMR_STATE = {
       clients: DEFAULT_BMR_CLIENTS,
+      accountManagers: [],
       // Rules for Amnt Receivable target columns (L, X, AJ, ...)
       targetRules: [
         { id: bmrId('tr'), name: 'Reached allowable balance', clientId: DEFAULT_BMR_CLIENTS.find(c => c.name === 'COMMSOL-DID')?.id || DEFAULT_BMR_CLIENTS[0]?.id || '', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true },
@@ -2802,14 +2816,80 @@
       );
     }
 
+    function BmrAccountManagersEditor({ bmr, onChange }) {
+      const [draftName, setDraftName] = useState('');
+      const accountManagers = bmr.accountManagers || [];
+      const clientCountByManager = (bmr.clients || []).reduce((counts, client) => {
+        if (client.accountManagerId) counts[client.accountManagerId] = (counts[client.accountManagerId] || 0) + 1;
+        return counts;
+      }, {});
+      const updateAccountManager = useCallback((id, patch) => onChange((prev) => ({
+        ...prev,
+        accountManagers: (prev.accountManagers || []).map(manager =>
+          manager.id === id ? { ...manager, ...patch } : manager
+        ),
+      })), [onChange]);
+      const removeAccountManager = useCallback((id) => onChange((prev) => ({
+        ...prev,
+        accountManagers: (prev.accountManagers || []).filter(manager => manager.id !== id),
+        clients: (prev.clients || []).map(client =>
+          client.accountManagerId === id ? { ...client, accountManagerId: '' } : client
+        ),
+      })), [onChange]);
+      const addAccountManager = () => {
+        const name = draftName.trim();
+        if (!name) return;
+        const hasName = accountManagers.some(manager => (manager.name || '').trim().toLowerCase() === name.toLowerCase());
+        if (hasName) return;
+        onChange((prev) => ({
+          ...prev,
+          accountManagers: [...(prev.accountManagers || []), { id: bmrId('am'), name, color: '' }],
+        }));
+        setDraftName('');
+      };
+
+      return (
+        <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3 space-y-2">
+          <SectionLabel hint={`${accountManagers.length} saved`}>Account managers</SectionLabel>
+          {accountManagers.length > 0 && (
+            <div className="space-y-1">
+              {accountManagers.map(manager => (
+                <div key={manager.id} className="grid grid-cols-[minmax(180px,1fr)_72px_84px_28px] gap-2 items-center rounded-md px-1 py-1 hover:bg-neutral-900/40">
+                  <Input value={manager.name || ''} onChange={e => updateAccountManager(manager.id, { name: e.target.value })} placeholder="Account manager" />
+                  <span className="text-[10px] uppercase tracking-wide text-neutral-500 text-right">{clientCountByManager[manager.id] || 0} clients</span>
+                  <span className="flex items-center justify-center">
+                    <BmrColorSwatch value={manager.color} onChange={color => updateAccountManager(manager.id, { color })} />
+                  </span>
+                  <button onClick={() => removeAccountManager(manager.id)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove account manager"><IconX /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">New account manager</label>
+              <Input value={draftName} onChange={e => setDraftName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addAccountManager())}
+                placeholder="e.g. Jason Cruz" />
+            </div>
+            <Btn variant="ghost" size="md" onClick={addAccountManager} disabled={!draftName.trim()}>
+              <IconPlus /> Add
+            </Btn>
+          </div>
+        </div>
+      );
+    }
+
     const BmrClientRow = React.memo(function BmrClientRow({
-      client, index, dragIndex, overIndex, dragRow,
+      client, accountManagers, index, dragIndex, overIndex, dragRow,
       setDragIndex, setOverIndex, setDragRow,
       reorder, updateClient, removeClient,
     }) {
       const isDragging = dragIndex === index;
       const above = overIndex === index && dragIndex !== null && dragIndex !== index && dragIndex > index;
       const below = overIndex === index && dragIndex !== null && dragIndex !== index && dragIndex < index;
+      const accountManager = accountManagers.find(manager => manager.id === client.accountManagerId);
+      const clientColor = accountManager?.color || client.color || '';
 
       return (
         <div
@@ -2819,7 +2899,7 @@
           onDragLeave={() => { if (overIndex === index) setOverIndex(null); }}
           onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== index) reorder(dragIndex, index); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
           onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-          className={`grid grid-cols-[20px_28px_28px_1fr_1fr_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+          className={`grid grid-cols-[20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
           <span
             onMouseDown={() => setDragRow(index)}
             onMouseUp={() => setDragRow(null)}
@@ -2830,9 +2910,13 @@
             <IconGrip />
           </span>
           <span className="text-[10px] text-neutral-600 font-mono text-right">{String(index + 1).padStart(2, '0')}</span>
-          <span className="w-6 h-6 rounded border border-neutral-800" style={client.color ? { background: client.color } : {}} title={client.color || 'no color'}></span>
+          <span className="w-6 h-6 rounded border border-neutral-800" style={clientColor ? { background: clientColor } : {}} title={accountManager?.color ? `${accountManager.name || 'Account manager'} color` : (client.color || 'no color')}></span>
           <Input value={client.name} onChange={e => updateClient(client.id, { name: e.target.value })} placeholder="Client name" className={client.hidden ? 'line-through' : ''} />
           <Input value={client.allowBalanceLabel || ''} onChange={e => updateClient(client.id, { allowBalanceLabel: e.target.value })} placeholder="e.g. Block once debit" />
+          <Select value={client.accountManagerId || ''} onChange={e => updateClient(client.id, { accountManagerId: e.target.value })}>
+            <option value="">No manager</option>
+            {accountManagers.map(manager => <option key={manager.id} value={manager.id}>{manager.name || 'Unnamed manager'}</option>)}
+          </Select>
           <button onClick={() => updateClient(client.id, { hidden: !client.hidden })}
             className={`p-1 rounded ${client.hidden ? 'text-amber-400' : 'text-neutral-500 hover:text-neutral-200'}`}
             title={client.hidden ? 'Hidden — click to show' : 'Hide row in generated file'}>
@@ -2854,6 +2938,7 @@
       const [dragRow, setDragRow]   = useState(null);
 
       const clients = bmr.clients || [];
+      const accountManagers = bmr.accountManagers || [];
       const setClients = useCallback((next) => onChange((prev) => ({
         ...prev,
         clients: typeof next === 'function' ? next(prev.clients || []) : next,
@@ -2867,7 +2952,7 @@
       const addClient = (pos) => {
         const name = draftName.trim();
         if (!name) return;
-        const newC = { id: bmrId(), name, color: '', allowBalanceLabel: '', hidden: false };
+        const newC = { id: bmrId(), name, color: '', allowBalanceLabel: '', accountManagerId: '', hidden: false };
         if (pos == null || pos < 0 || pos > clients.length) setClients([...clients, newC]);
         else setClients([...clients.slice(0, pos), newC, ...clients.slice(pos)]);
         setDraftName('');
@@ -2884,29 +2969,36 @@
       return (
         <div className="space-y-3">
           <BmrBlockColumnHider bmr={bmr} onChange={onChange} />
-          <div className="grid grid-cols-[20px_28px_28px_1fr_1fr_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
-            <div></div><div></div><div></div>
-            <div>Client name</div>
-            <div>Allow Bal label</div>
-            <div className="text-center">Hide</div>
-            <div className="text-center">Color</div>
-            <div></div>
-          </div>
-          <div className="space-y-1">
-            {clients.map((c, i) => (
-              <BmrClientRow key={c.id}
-                client={c}
-                index={i}
-                dragIndex={dragIndex}
-                overIndex={overIndex}
-                dragRow={dragRow}
-                setDragIndex={setDragIndex}
-                setOverIndex={setOverIndex}
-                setDragRow={setDragRow}
-                reorder={reorder}
-                updateClient={updateClient}
-                removeClient={removeClient} />
-            ))}
+          <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
+          <div className="overflow-x-auto pb-1">
+            <div className="min-w-[780px]">
+              <div className="grid grid-cols-[20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
+                <div></div><div></div><div></div>
+                <div>Client name</div>
+                <div>Allow Bal label</div>
+                <div>Account manager</div>
+                <div className="text-center">Hide</div>
+                <div className="text-center">Client color</div>
+                <div></div>
+              </div>
+              <div className="space-y-1">
+                {clients.map((c, i) => (
+                  <BmrClientRow key={c.id}
+                    client={c}
+                    accountManagers={accountManagers}
+                    index={i}
+                    dragIndex={dragIndex}
+                    overIndex={overIndex}
+                    dragRow={dragRow}
+                    setDragIndex={setDragIndex}
+                    setOverIndex={setOverIndex}
+                    setDragRow={setDragRow}
+                    reorder={reorder}
+                    updateClient={updateClient}
+                    removeClient={removeClient} />
+                ))}
+              </div>
+            </div>
           </div>
           <div className="pt-3 border-t border-neutral-900 space-y-2">
             <div className="flex items-end gap-2 flex-wrap">
@@ -3044,6 +3136,7 @@
 
     function BmrPreview({ bmr }) {
       const visibleClients = (bmr.clients || []).filter(c => !c.hidden).slice(0, 8);
+      const accountManagersById = bmrAccountManagersById(bmr);
       const slots = bmrSlotsForShift('day').slice(0, 3); // first 3 timeslots
       return (
         <Card className="p-4 overflow-x-auto">
@@ -3072,7 +3165,7 @@
             <tbody>
               {visibleClients.map((c) => (
                 <tr key={c.id}>
-                  <td className="px-2 py-1 border border-neutral-800" style={c.color ? { background: c.color, color: '#000' } : {}}>{c.name}</td>
+                  <td className="px-2 py-1 border border-neutral-800" style={bmrClientColor(bmr, c, accountManagersById) ? { background: bmrClientColor(bmr, c, accountManagersById), color: '#000' } : {}}>{c.name}</td>
                   <td className="px-2 py-1 border border-neutral-800 text-neutral-500">{c.allowBalanceLabel || '—'}</td>
                   {slots.map((_, i) => (
                     <React.Fragment key={i}>
@@ -3096,6 +3189,7 @@
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const bmr = state.bmr || DEFAULT_BMR_STATE;
+      const accountManagersById = bmrAccountManagersById(bmr);
       const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
 
       return (
@@ -3177,7 +3271,7 @@
             <div className="space-y-0.5 max-h-[40vh] overflow-y-auto">
               {(bmr.clients || []).map((c, i) => (
                 <div key={c.id} className={`flex items-center gap-2 rounded px-1.5 py-1 ${c.hidden ? 'opacity-40' : ''}`}>
-                  <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={c.color ? { background: c.color } : {}}></span>
+                  <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={bmrClientColor(bmr, c, accountManagersById) ? { background: bmrClientColor(bmr, c, accountManagersById) } : {}}></span>
                   <span className="text-[11px] text-neutral-300 truncate flex-1">{c.name}</span>
                 </div>
               ))}
