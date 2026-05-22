@@ -313,6 +313,7 @@
     const itemLabel    = (it) => (typeof it === 'string' ? it : (it?.label ?? ''));
     const itemHidden   = (it) => (typeof it === 'string' ? false : !!it?.hidden);
     const itemDropdown = (it) => (typeof it === 'string' || !it) ? [] : (Array.isArray(it.dropdown) ? it.dropdown : []);
+    const itemColor    = (it) => (typeof it === 'string' || !it) ? '' : (it.color || '');
     const visibleItems  = (arr) => (arr || []).filter(it => !itemHidden(it));
     const visibleLabels = (arr) => visibleItems(arr).map(itemLabel);
 
@@ -737,7 +738,7 @@
       cur += 1;
 
       const days = daysInMonth(year, month);
-      const visibleMetrics = visibleLabels(s.metrics);
+      const visibleMetrics = visibleItems(s.metrics);
       const metricCount = visibleMetrics.length;
       const dataStartRow = cur;
       const weekendRule = rules.find(r => r.type === 'weekend' && r.enabled);
@@ -757,8 +758,12 @@
             row.getCell(1).value = dateObj;
             row.getCell(1).numFmt = s.dateFormat || 'yyyy-mm-dd';
           }
-          row.getCell(2).value = visibleMetrics[mi];
+          const metric = visibleMetrics[mi];
+          row.getCell(2).value = itemLabel(metric);
           row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };
+          if (itemColor(metric)) {
+            row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(itemColor(metric)) } };
+          }
           for (let h = 0; h < hours.length; h++) {
             row.getCell(3 + h).value = null;
             row.getCell(3 + h).alignment = { horizontal: 'center' };
@@ -1850,7 +1855,7 @@
     /* ============================================================
        Inline list editor
        ============================================================ */
-    function ListEditor({ items, onChange, placeholder = 'New item', label = 'item', withDropdown = false }) {
+    function ListEditor({ items, onChange, placeholder = 'New item', label = 'item', withDropdown = false, withColor = false }) {
       const [draft, setDraft] = useState('');
       const [dragIndex, setDragIndex] = useState(null);
       const [overIndex, setOverIndex] = useState(null);
@@ -1865,24 +1870,36 @@
       const toggleHidden = (i) => onChange(items.map((x, j) => {
         if (j !== i) return x;
         const dd = itemDropdown(x);
+        const color = itemColor(x);
         if (itemHidden(x)) {
           // unhide
-          if (dd.length) return { label: itemLabel(x), dropdown: dd };
+          if (dd.length || color) return { label: itemLabel(x), ...(dd.length ? { dropdown: dd } : {}), ...(color ? { color } : {}) };
           return itemLabel(x);
         }
         // hide
-        return { label: itemLabel(x), hidden: true, ...(dd.length ? { dropdown: dd } : {}) };
+        return { label: itemLabel(x), hidden: true, ...(dd.length ? { dropdown: dd } : {}), ...(color ? { color } : {}) };
       }));
       const setDropdown = (i, opts) => onChange(items.map((x, j) => {
         if (j !== i) return x;
         const lab = itemLabel(x);
         const hidden = itemHidden(x);
+        const color = itemColor(x);
         const clean = (opts || []).filter(o => String(o).trim() !== '');
         if (!clean.length) {
-          if (hidden) return { label: lab, hidden: true };
+          if (hidden || color) return { label: lab, ...(hidden ? { hidden: true } : {}), ...(color ? { color } : {}) };
           return lab;
         }
-        return { label: lab, ...(hidden ? { hidden: true } : {}), dropdown: clean };
+        return { label: lab, ...(hidden ? { hidden: true } : {}), ...(color ? { color } : {}), dropdown: clean };
+      }));
+      const setColor = (i, color) => onChange(items.map((x, j) => {
+        if (j !== i) return x;
+        return { ...(typeof x === 'string' ? { label: x } : x), color };
+      }));
+      const resetColor = (i) => onChange(items.map((x, j) => {
+        if (j !== i || typeof x === 'string') return x;
+        const { color, ...rest } = x;
+        if (!rest.hidden && !itemDropdown(rest).length) return itemLabel(rest);
+        return rest;
       }));
       const remove = (i) => onChange(items.filter((_, j) => j !== i));
       const reorder = (from, to) => {
@@ -1931,6 +1948,17 @@
                   <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
                   <Input value={itemLabel(it)} onChange={e => setLabel(i, e.target.value)}
                     className={hidden ? 'line-through' : ''} />
+                  {withColor && (
+                    <span className="flex shrink-0 items-center gap-1">
+                      <PresetColorPicker value={itemColor(it) || '#FFFFFF'} onChange={color => setColor(i, color)}
+                        title="Choose metric cell color" showHex={false} buttonClassName="h-8 px-1.5 py-1" />
+                      {itemColor(it) && (
+                        <button onClick={() => resetColor(i)}
+                          title="Reset metric cell color"
+                          className="p-1 text-neutral-500 hover:text-neutral-200 transition-colors"><IconReset /></button>
+                      )}
+                    </span>
+                  )}
                   {withDropdown && !hidden && (
                     <button onClick={() => setExpandedDropdown(isExpanded ? null : i)}
                       title={dropdown.length ? `${dropdown.length} dropdown option${dropdown.length === 1 ? '' : 's'} — click to edit` : 'Add dropdown options'}
@@ -2184,7 +2212,7 @@
               </div>
               <div>
                 <SectionLabel hint={`${visibleItems(sheet.metrics).length} of ${(sheet.metrics || []).length} rows per day block`}>Metric rows</SectionLabel>
-                <ListEditor items={sheet.metrics || []} onChange={(v) => update({ metrics: v })} placeholder="e.g. Active Calls" label="metric" />
+                <ListEditor items={sheet.metrics || []} onChange={(v) => update({ metrics: v })} placeholder="e.g. Active Calls" label="metric" withColor />
               </div>
               <div>
                 <SectionLabel hint="24h = full 24/7 cycle">Hour range</SectionLabel>
@@ -2381,10 +2409,10 @@
                   const wk = isWeekend(year, month, dIdx + 1);
                   return (
                     <React.Fragment key={dIdx}>
-                      {visibleLabels(sheet.metrics).map((m, mIdx) => (
+                      {visibleItems(sheet.metrics).map((m, mIdx) => (
                         <tr key={mIdx} className={`border-b border-neutral-900/60 ${wk ? 'bg-red-950/20' : ''}`}>
                           <td className="px-3 py-1.5 text-neutral-400 font-mono sticky left-0 bg-[#0c0c0c]">{mIdx === 0 ? `${year}-${pad(month + 1)}-${pad(dIdx + 1)}` : ''}</td>
-                          <td className="px-3 py-1.5 text-neutral-200">{m}</td>
+                          <td className="px-3 py-1.5 text-neutral-200" style={itemColor(m) ? { background: itemColor(m) } : {}}>{itemLabel(m)}</td>
                           {hours.map((_, hi) => <td key={hi} className="px-2 py-1.5 text-neutral-700 text-center">·</td>)}
                         </tr>
                       ))}
