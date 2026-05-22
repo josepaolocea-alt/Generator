@@ -746,6 +746,7 @@
        ============================================================ */
     const BMR_BLOCK_COLS = 12;
     const BMR_BLOCK_HEADERS = ['CarrierName ','Credit Limit ','Critical Balance ','Billing Cycle ','IsPrepay ','Inv Upto ','Prev Balance ','Pay&Adj ','Current Usage ','Amnt Receivable ','30mins usage','Total usage'];
+    const BMR_BLOCK_HEADER_OPTIONS = BMR_BLOCK_HEADERS.map((label, offset) => ({ offset, label: label.trim() }));
     const BMR_AMOUNT_OFFSET = 9;
     const BMR_USAGE_OFFSET  = 10;
     const BMR_TOTAL_OFFSET  = 11;
@@ -943,6 +944,13 @@
       // Hidden columns
       (bmr.hiddenCols || []).forEach((c) => {
         try { ws.getColumn(c).hidden = true; } catch (_) {}
+      });
+      (bmr.hiddenBlockCols || []).forEach((offset) => {
+        const colOffset = Number(offset);
+        if (!Number.isInteger(colOffset) || colOffset < 0 || colOffset >= BMR_BLOCK_COLS) return;
+        for (let k = 0; k < slots.length; k++) {
+          ws.getColumn(3 + k * BMR_BLOCK_COLS + colOffset).hidden = true;
+        }
       });
 
       // Freeze: top 2 rows + first 2 cols
@@ -2741,6 +2749,7 @@
         { id: bmrId('ur'), name: 'Heavy debit (-0.001 to -49)', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true },
       ],
       hiddenCols: [],
+      hiddenBlockCols: [],
       includeDay:   true,
       includeNight: true,
       notes: '',
@@ -2755,6 +2764,32 @@
             <button onClick={() => onChange('')} className="text-[10px] text-neutral-500 hover:text-red-300 px-1" title="Clear color">clear</button>
           )}
         </span>
+      );
+    }
+
+    function BmrBlockColumnHider({ bmr, onChange }) {
+      const hidden = new Set((bmr.hiddenBlockCols || []).map(Number));
+      const toggle = (offset) => {
+        const next = hidden.has(offset)
+          ? (bmr.hiddenBlockCols || []).filter(x => Number(x) !== offset)
+          : [...(bmr.hiddenBlockCols || []), offset];
+        onChange({ ...bmr, hiddenBlockCols: next });
+      };
+
+      return (
+        <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+          <SectionLabel hint={`${hidden.size}/${BMR_BLOCK_COLS} hidden in each time block`}>Downloaded columns</SectionLabel>
+          <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+            {BMR_BLOCK_HEADER_OPTIONS.map(col => (
+              <label key={col.offset}
+                className={`flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-xs cursor-pointer transition-colors ${hidden.has(col.offset) ? 'border-amber-500/35 bg-amber-500/10 text-amber-100' : 'border-neutral-900 bg-neutral-950 text-neutral-300 hover:border-neutral-800'}`}>
+                <input type="checkbox" checked={hidden.has(col.offset)} onChange={() => toggle(col.offset)}
+                  className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-amber-500" />
+                <span className="truncate">{col.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
       );
     }
 
@@ -2788,6 +2823,7 @@
 
       return (
         <div className="space-y-3">
+          <BmrBlockColumnHider bmr={bmr} onChange={onChange} />
           <div className="grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
             <div></div><div></div><div></div>
             <div>Client name</div>
@@ -3373,7 +3409,7 @@
                 <div key={bmrTab} className="anim-fade-in">
                   {bmrTab === 'clients' && (
                     <div className="space-y-6">
-                      <SectionLabel hint="Drag to reorder · insert at row # · hide rows">Clients</SectionLabel>
+                      <SectionLabel hint="Drag to reorder · insert at row # · hide rows and columns">Clients</SectionLabel>
                       <BmrClientsEditor bmr={bmr} onChange={setBmr} />
                     </div>
                   )}
