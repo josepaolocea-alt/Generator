@@ -944,7 +944,6 @@
     const BMR_USAGE_OFFSET  = 10;
     const BMR_TOTAL_OFFSET  = 11;
     const BMR_DECIMAL_OFFSETS = [1, 2, 5, 6, 7, 8, BMR_AMOUNT_OFFSET, BMR_USAGE_OFFSET, BMR_TOTAL_OFFSET];
-    const BMR_PASTE_INPUT_OFFSETS = Array.from({ length: BMR_AMOUNT_OFFSET + 1 }, (_, offset) => offset);
     const BMR_SLOT_COUNT = 25;
 
     function bmrSlotsForShift(shift) {
@@ -1083,15 +1082,9 @@
       }
     }
 
-    function unlockBmrPasteInputCells(ws, dataStartRow, dataEndRow, slotCount) {
-      for (let k = 0; k < slotCount; k++) {
-        const blockStart = 3 + k * BMR_BLOCK_COLS;
-        for (let r = dataStartRow; r <= dataEndRow; r++) {
-          BMR_PASTE_INPUT_OFFSETS.forEach((offset) => {
-            ws.getCell(r, blockStart + offset).protection = { locked: false };
-          });
-        }
-      }
+    function bmrCarrierNameWidth(clients) {
+      const longest = (clients || []).reduce((max, client) => Math.max(max, String(client.name || '').length), 0);
+      return Math.max(BMR_BLOCK_HEADERS[0].trim().length + 2, longest + 2);
     }
 
     function buildBmrSheet(ws, bmr, shift) {
@@ -1157,12 +1150,13 @@
       });
 
       // Column widths
-      ws.getColumn(1).width = 22;
+      const carrierNameWidth = bmrCarrierNameWidth(visibleClients);
+      ws.getColumn(1).width = carrierNameWidth;
       ws.getColumn(2).width = 22;
       for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
+      for (let k = 0; k < slots.length; k++) ws.getColumn(3 + k * BMR_BLOCK_COLS).width = carrierNameWidth;
 
       applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length);
-      unlockBmrPasteInputCells(ws, dataStartRow, dataEndRow, slots.length);
       applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
 
       // Conditional formatting — Amnt Receivable target rules for their selected clients
@@ -1201,20 +1195,26 @@
         });
       });
 
-      // Client text-match colouring on col A (in addition to static fill so the rule survives edits)
+      // Client text-match colouring on carrier cells so the color follows pasted names.
       visibleClients.forEach((cl) => {
         const clientColor = bmrClientColor(bmr, cl, accountManagersById);
         if (!clientColor) return;
-        const ref = `A${dataStartRow}:A${dataEndRow}`;
         const safe = (cl.name || '').replace(/"/g, '""');
-        ws.addConditionalFormatting({
-          ref,
-          rules: [{
-            type: 'expression',
-            formulae: [`EXACT(A${dataStartRow},"${safe}")`],
-            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
-            priority: priorityCounter++,
-          }],
+        const carrierCols = ['A'];
+        if (bmr.colorBlockCarrierNames !== false) {
+          for (let k = 0; k < slots.length; k++) carrierCols.push(colLetter(3 + k * BMR_BLOCK_COLS));
+        }
+        carrierCols.forEach((carrierCol) => {
+          const ref = `${carrierCol}${dataStartRow}:${carrierCol}${dataEndRow}`;
+          ws.addConditionalFormatting({
+            ref,
+            rules: [{
+              type: 'expression',
+              formulae: [`EXACT(TRIM(SUBSTITUTE(${carrierCol}${dataStartRow}&"",CHAR(160),"")),"${safe}")`],
+              style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
+              priority: priorityCounter++,
+            }],
+          });
         });
       });
 
@@ -1247,14 +1247,6 @@
         const name = shift === 'day' ? '7AM-7PM' : '7PM-7AM';
         const ws = wb.addWorksheet(name);
         buildBmrSheet(ws, bmr, shift);
-        await ws.protect('', {
-          formatCells: false,
-          formatColumns: false,
-          formatRows: false,
-          selectLockedCells: true,
-          selectUnlockedCells: true,
-          spinCount: 1,
-        });
       }
       const buf = await wb.xlsx.writeBuffer();
       const filename = `BMR_${bmrTodayString()}.xlsx`;
@@ -3037,6 +3029,7 @@
       ],
       hiddenCols: [],
       hiddenBlockCols: [],
+      colorBlockCarrierNames: true,
       bordersOnData: true,
       borderStyle: 'thin',
       timeSeparatorBorderStyle: 'thick',
@@ -3214,6 +3207,21 @@
       );
     }
 
+    function BmrCarrierNameSettings({ bmr, onChange }) {
+      const colorBlockCarrierNames = bmr.colorBlockCarrierNames !== false;
+      return (
+        <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+          <SectionLabel hint="Generated workbook">Carrier names</SectionLabel>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-neutral-300">
+            <input type="checkbox" checked={colorBlockCarrierNames}
+              onChange={e => onChange({ ...bmr, colorBlockCarrierNames: e.target.checked })}
+              className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
+            Match carrier colors in time blocks
+          </label>
+        </div>
+      );
+    }
+
     function BmrAccountManagersEditor({ bmr, onChange }) {
       const [draftName, setDraftName] = useState('');
       const accountManagers = bmr.accountManagers || [];
@@ -3368,6 +3376,7 @@
         <div className="space-y-3">
           <BmrClientImporter bmr={bmr} onChange={onChange} />
           <BmrBlockColumnHider bmr={bmr} onChange={onChange} />
+          <BmrCarrierNameSettings bmr={bmr} onChange={onChange} />
           <BmrBorderSettings bmr={bmr} onChange={onChange} />
           <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
           <div className="overflow-x-auto pb-1">
