@@ -943,6 +943,7 @@
     const BMR_AMOUNT_OFFSET = 9;
     const BMR_USAGE_OFFSET  = 10;
     const BMR_TOTAL_OFFSET  = 11;
+    const BMR_DECIMAL_OFFSETS = [1, 2, 5, 6, 7, 8, BMR_AMOUNT_OFFSET, BMR_USAGE_OFFSET, BMR_TOTAL_OFFSET];
     const BMR_SLOT_COUNT = 25;
 
     function bmrSlotsForShift(shift) {
@@ -1067,6 +1068,17 @@
       }
     }
 
+    function applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slotCount) {
+      for (let k = 0; k < slotCount; k++) {
+        const blockStart = 3 + k * BMR_BLOCK_COLS;
+        for (let r = dataStartRow; r <= dataEndRow; r++) {
+          BMR_DECIMAL_OFFSETS.forEach((offset) => {
+            ws.getCell(r, blockStart + offset).numFmt = '0.00';
+          });
+        }
+      }
+    }
+
     function buildBmrSheet(ws, bmr, shift) {
       const slots = bmrSlotsForShift(shift);
       const visibleClients = (bmr.clients || []).filter(c => !c.hidden);
@@ -1131,6 +1143,7 @@
       ws.getColumn(2).width = 22;
       for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
 
+      applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length);
       applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
 
       // Conditional formatting — Amnt Receivable target rules for their selected clients
