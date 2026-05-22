@@ -1723,6 +1723,20 @@
         const id = newId();
         setState(s => ({ ...s, sheets: [...s.sheets, { id, name: 'New Sheet', layout: 'hourly', active: true, metrics: ['Metric 1'], hourStart: 0, hourEnd: 24, note: '' }], selectedSheetId: id }));
       };
+      const deleteSheet = async (sheet) => {
+        const ok = await confirmDialog({
+          title: 'Delete sheet?',
+          message: `"${sheet.name}" and all of its configuration will be removed. This can't be undone.`,
+          confirmText: 'Delete',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setState(s => {
+          const remaining = s.sheets.filter(x => x.id !== sheet.id);
+          const selectedStillExists = remaining.some(x => x.id === s.selectedSheetId);
+          return { ...s, sheets: remaining, selectedSheetId: selectedStillExists ? s.selectedSheetId : (remaining[0]?.id || null) };
+        });
+      };
       const reorderSheets = (from, to) => setState(s => {
         if (from === to || from < 0 || to < 0 || from >= s.sheets.length || to >= s.sheets.length) return s;
         const arr = [...s.sheets];
@@ -1828,6 +1842,11 @@
                     <div className={`text-sm font-medium truncate ${s.active ? 'text-neutral-100' : 'text-neutral-500 line-through'}`}>{s.name}</div>
                     <div className="text-[10px] text-neutral-500 mt-0.5 uppercase tracking-wide">{LAYOUT_LABELS[s.layout]}</div>
                   </div>
+                  <button onClick={(e) => { e.stopPropagation(); deleteSheet(s); }}
+                    className="shrink-0 rounded p-1 text-neutral-500 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100 focus:opacity-100"
+                    title="Delete sheet">
+                    <IconX />
+                  </button>
                 </div>
                 );
               })}
