@@ -793,6 +793,12 @@
       }
     }
 
+    function bmrBuildClientConditionFormula(rule, cellRef, clientName, rowNum) {
+      const safeName = String(clientName || '').replace(/"/g, '""');
+      if (!safeName) return 'FALSE';
+      return `AND(${bmrBuildConditionFormula(rule, cellRef)},EXACT($A${rowNum},"${safeName}"))`;
+    }
+
     function bmrStyleFromRule(rule) {
       const style = {};
       if (rule.color)     style.fill = { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(rule.color) } };
@@ -887,16 +893,19 @@
       ws.getColumn(2).width = 22;
       for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
 
-      // Conditional formatting — Amnt Receivable target rules across all target cols
+      // Conditional formatting — Amnt Receivable target rules for their selected clients
       let priorityCounter = 100;
+      const visibleClientsById = new Map(visibleClients.map(c => [c.id, c]));
       (bmr.targetRules || []).filter(r => r.enabled).forEach((rule) => {
+        const client = visibleClientsById.get(rule.clientId);
+        if (!client?.name) return;
         BMR_TARGET_COL_LETTERS.forEach((cl) => {
           const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
           ws.addConditionalFormatting({
             ref,
             rules: [{
               type: 'expression',
-              formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
+              formulae: [bmrBuildClientConditionFormula(rule, `${cl}${dataStartRow}`, client.name, dataStartRow)],
               style: bmrStyleFromRule(rule),
               priority: priorityCounter++,
             }],
@@ -2669,7 +2678,7 @@
       clients: DEFAULT_BMR_CLIENTS,
       // Rules for Amnt Receivable target columns (L, X, AJ, ...)
       targetRules: [
-        { id: bmrId('tr'), name: 'Reached allowable balance', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true },
+        { id: bmrId('tr'), name: 'Reached allowable balance', clientId: DEFAULT_BMR_CLIENTS.find(c => c.name === 'COMMSOL-DID')?.id || DEFAULT_BMR_CLIENTS[0]?.id || '', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true },
       ],
       // Rules for 30-min usage columns (M, Y, AK, ...)
       usageRules: [
@@ -2799,10 +2808,11 @@
       );
     }
 
-    function BmrRuleEditor({ rule, onChange, onDelete, kind = 'target' }) {
+    function BmrRuleEditor({ rule, onChange, onDelete, kind = 'target', clients = [] }) {
       const ops = kind === 'target'
         ? [{v:'gte',l:'greater than or equal to'},{v:'gt',l:'greater than'},{v:'lte',l:'less than or equal to'},{v:'lt',l:'less than'},{v:'eq',l:'equal to'},{v:'between',l:'between'}]
         : [{v:'between',l:'between'},{v:'gte',l:'greater than or equal to'},{v:'gt',l:'greater than'},{v:'lte',l:'less than or equal to'},{v:'lt',l:'less than'},{v:'eq',l:'equal to'}];
+      const targetClientMissing = kind === 'target' && rule.clientId && !clients.some(c => c.id === rule.clientId);
       const set = (patch) => onChange({ ...rule, ...patch });
       return (
         <Card className="p-3">
@@ -2812,6 +2822,16 @@
             <Input value={rule.name || ''} onChange={e => set({ name: e.target.value })} placeholder="Rule name" />
             <button onClick={onDelete} className="p-1.5 text-neutral-500 hover:text-red-400" title="Delete rule"><IconX /></button>
           </div>
+          {kind === 'target' && (
+            <div className="mb-2">
+              <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Client</label>
+              <Select value={rule.clientId || ''} onChange={e => set({ clientId: e.target.value })}>
+                <option value="">Choose client</option>
+                {targetClientMissing && <option value={rule.clientId}>Missing client</option>}
+                {clients.map(c => <option key={c.id} value={c.id}>{c.name || 'Unnamed client'}{c.hidden ? ' (hidden)' : ''}</option>)}
+              </Select>
+            </div>
+          )}
           <div className="grid grid-cols-[220px_1fr_1fr] gap-2 items-end mb-2">
             <Select value={rule.kind} onChange={e => set({ kind: e.target.value })}>
               {ops.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
@@ -2863,7 +2883,9 @@
     }
 
     function BmrRulesPanel({ bmr, onChange }) {
-      const addTarget = () => onChange({ ...bmr, targetRules: [...(bmr.targetRules || []), { id: bmrId('tr'), name: 'New rule', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true }] });
+      const targetClients = bmr.clients || [];
+      const defaultTargetClient = targetClients.find(c => !c.hidden) || targetClients[0];
+      const addTarget = () => onChange({ ...bmr, targetRules: [...(bmr.targetRules || []), { id: bmrId('tr'), name: 'New client rule', clientId: defaultTargetClient?.id || '', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true }] });
       const addUsage  = () => onChange({ ...bmr, usageRules:  [...(bmr.usageRules  || []), { id: bmrId('ur'), name: 'New rule', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true }] });
       const updT = (id, next) => onChange({ ...bmr, targetRules: bmr.targetRules.map(r => r.id === id ? next : r) });
       const updU = (id, next) => onChange({ ...bmr, usageRules:  bmr.usageRules.map(r  => r.id === id ? next : r) });
@@ -2873,10 +2895,10 @@
       return (
         <div className="space-y-10">
           <div>
-            <SectionLabel hint={`Applies to all 25 Amnt Receivable columns (L, X, AJ, …, KN)`}>Target column rules · Amnt Receivable</SectionLabel>
+            <SectionLabel hint={`Each rule targets one client across all 25 Amnt Receivable columns (L, X, AJ, ..., KN)`}>Target column rules · Amnt Receivable</SectionLabel>
             <div className="space-y-2">
               {(bmr.targetRules || []).map(r => (
-                <BmrRuleEditor key={r.id} rule={r} kind="target" onChange={(next) => updT(r.id, next)} onDelete={() => delT(r.id)} />
+                <BmrRuleEditor key={r.id} rule={r} kind="target" clients={targetClients} onChange={(next) => updT(r.id, next)} onDelete={() => delT(r.id)} />
               ))}
               <Btn variant="ghost" size="sm" onClick={addTarget}><IconPlus /> Add target rule</Btn>
             </div>
@@ -3262,7 +3284,8 @@
 
       if (isBmr) {
         const visibleClients = (bmr.clients || []).filter(c => !c.hidden).length;
-        const activeBmrRules = ((bmr.targetRules || []).filter(r => r.enabled).length) + ((bmr.usageRules || []).filter(r => r.enabled).length);
+        const bmrClientIds = new Set((bmr.clients || []).map(c => c.id));
+        const activeBmrRules = ((bmr.targetRules || []).filter(r => r.enabled && bmrClientIds.has(r.clientId)).length) + ((bmr.usageRules || []).filter(r => r.enabled).length);
         return (
           <div className="flex min-h-screen text-neutral-100">
             <BmrSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
