@@ -302,9 +302,12 @@
     const newId = () => 's_' + Math.random().toString(36).slice(2, 9);
     const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
     /* Items in `metrics` / `columns` can be either a string (visible) or
-       { label, hidden: true } (hidden — kept in config but skipped on generate). */
-    const itemLabel  = (it) => (typeof it === 'string' ? it : (it?.label ?? ''));
-    const itemHidden = (it) => (typeof it === 'string' ? false : !!it?.hidden);
+       { label, hidden?: true, dropdown?: string[] } (extended form — kept in
+       config; `hidden` skips on generate, `dropdown` adds list validation on
+       alarm-log columns). */
+    const itemLabel    = (it) => (typeof it === 'string' ? it : (it?.label ?? ''));
+    const itemHidden   = (it) => (typeof it === 'string' ? false : !!it?.hidden);
+    const itemDropdown = (it) => (typeof it === 'string' || !it) ? [] : (Array.isArray(it.dropdown) ? it.dropdown : []);
     const visibleItems  = (arr) => (arr || []).filter(it => !itemHidden(it));
     const visibleLabels = (arr) => visibleItems(arr).map(itemLabel);
 
@@ -473,7 +476,7 @@
         const ws = wb.addWorksheet(safeSheetName(s.name));
         ws.properties.defaultRowHeight = 18;
         if (s.layout === 'hourly')      buildHourlySheet(ws, s, year, month, rules);
-        else if (s.layout === 'flat')   buildFlatSheet(ws, s);
+        else if (s.layout === 'flat')   buildFlatSheet(ws, s, year, month);
         else if (s.layout === 'alarm')  buildAlarmSheet(ws, s);
       }
 
@@ -665,7 +668,7 @@
       }
     }
 
-    function buildFlatSheet(ws, s) {
+    function buildFlatSheet(ws, s, year, month) {
       const cols = visibleLabels(s.columns);
       let cur = 1;
       if (s.note && s.note.trim()) {
@@ -681,25 +684,64 @@
       });
       hdr.height = 22;
       cols.forEach((_, i) => { ws.getColumn(i + 1).width = 14; });
+
+      // Prefill first data row: Date column → first of month, Time column → 12:00 AM.
+      const dateFmt = s.dateFormat || 'mmm d, yyyy';
+      const firstOfMonth = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+      const firstRow = ws.getRow(cur + 1);
+      cols.forEach((c, i) => {
+        const lc = String(c).toLowerCase().trim();
+        if (lc === 'date') {
+          firstRow.getCell(i + 1).value = firstOfMonth;
+          firstRow.getCell(i + 1).numFmt = dateFmt;
+        } else if (lc === 'time') {
+          firstRow.getCell(i + 1).value = firstOfMonth;
+          firstRow.getCell(i + 1).numFmt = 'h:mm AM/PM';
+        }
+      });
+
       ws.views = [{ state: 'frozen', ySplit: cur }];
     }
 
     function buildAlarmSheet(ws, s) {
-      const cols = visibleLabels(s.columns);
+      const visibleCols = visibleItems(s.columns || []);
+      const labels = visibleCols.map(itemLabel);
       let cur = 1;
       if (s.note && s.note.trim()) {
-        applyNoteStyle(ws, cur, cols.length, s);
+        applyNoteStyle(ws, cur, labels.length, s);
         cur += 2;
       }
       const hdr = ws.getRow(cur);
-      hdr.values = cols;
+      hdr.values = labels;
       hdr.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
         cell.alignment = { horizontal: 'center' };
       });
       hdr.height = 22;
-      cols.forEach((_, i) => { ws.getColumn(i + 1).width = 18; });
+      labels.forEach((_, i) => { ws.getColumn(i + 1).width = 18; });
+
+      // Apply list-based data validation (dropdowns) for any column with dropdown options.
+      // Commas in option text are replaced with spaces — inline list formulae are comma-delimited.
+      const VALIDATION_ROWS = 500;
+      const dataStartRow = cur + 1;
+      const dataEndRow   = cur + VALIDATION_ROWS;
+      visibleCols.forEach((col, i) => {
+        const opts = itemDropdown(col);
+        if (!opts.length) return;
+        const safe = opts.map(o => String(o).replace(/,/g, ' ').trim()).filter(Boolean);
+        if (!safe.length) return;
+        const formula = `"${safe.join(',')}"`;
+        for (let r = dataStartRow; r <= dataEndRow; r++) {
+          ws.getCell(r, i + 1).dataValidation = {
+            type: 'list',
+            allowBlank: true,
+            formulae: [formula],
+            showErrorMessage: false,
+          };
+        }
+      });
+
       ws.views = [{ state: 'frozen', ySplit: cur }];
     }
 
@@ -1209,19 +1251,39 @@
     /* ============================================================
        Inline list editor
        ============================================================ */
-    function ListEditor({ items, onChange, placeholder = 'New item', label = 'item' }) {
+    function ListEditor({ items, onChange, placeholder = 'New item', label = 'item', withDropdown = false }) {
       const [draft, setDraft] = useState('');
       const [dragIndex, setDragIndex] = useState(null);
       const [overIndex, setOverIndex] = useState(null);
       const [dragRow, setDragRow] = useState(null); // index that is currently allowed to start a drag
+      const [expandedDropdown, setExpandedDropdown] = useState(null); // index with dropdown editor open
       const add = () => { if (!draft.trim()) return; onChange([...items, draft.trim()]); setDraft(''); };
       const setLabel = (i, v) => onChange(items.map((x, j) => {
         if (j !== i) return x;
-        return itemHidden(x) ? { label: v, hidden: true } : v;
+        if (typeof x === 'string') return v;
+        return { ...x, label: v };
       }));
       const toggleHidden = (i) => onChange(items.map((x, j) => {
         if (j !== i) return x;
-        return itemHidden(x) ? itemLabel(x) : { label: itemLabel(x), hidden: true };
+        const dd = itemDropdown(x);
+        if (itemHidden(x)) {
+          // unhide
+          if (dd.length) return { label: itemLabel(x), dropdown: dd };
+          return itemLabel(x);
+        }
+        // hide
+        return { label: itemLabel(x), hidden: true, ...(dd.length ? { dropdown: dd } : {}) };
+      }));
+      const setDropdown = (i, opts) => onChange(items.map((x, j) => {
+        if (j !== i) return x;
+        const lab = itemLabel(x);
+        const hidden = itemHidden(x);
+        const clean = (opts || []).filter(o => String(o).trim() !== '');
+        if (!clean.length) {
+          if (hidden) return { label: lab, hidden: true };
+          return lab;
+        }
+        return { label: lab, ...(hidden ? { hidden: true } : {}), dropdown: clean };
       }));
       const remove = (i) => onChange(items.filter((_, j) => j !== i));
       const reorder = (from, to) => {
@@ -1235,46 +1297,64 @@
         <div className="space-y-1.5">
           {items.map((it, i) => {
             const hidden = itemHidden(it);
+            const dropdown = itemDropdown(it);
+            const isExpanded = expandedDropdown === i;
             const isDragging = dragIndex === i;
             const showDropAbove = overIndex === i && dragIndex !== null && dragIndex !== i && dragIndex > i;
             const showDropBelow = overIndex === i && dragIndex !== null && dragIndex !== i && dragIndex < i;
             return (
-              <div key={i}
-                draggable={dragRow === i}
-                onDragStart={(e) => {
-                  setDragIndex(i);
-                  e.dataTransfer.effectAllowed = 'move';
-                  try { e.dataTransfer.setData('text/plain', String(i)); } catch (_) {}
-                }}
-                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overIndex !== i) setOverIndex(i); }}
-                onDragLeave={() => { if (overIndex === i) setOverIndex(null); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragIndex !== null && dragIndex !== i) reorder(dragIndex, i);
-                  setDragIndex(null); setOverIndex(null); setDragRow(null);
-                }}
-                onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-                className={`group flex items-center gap-2 rounded-md transition-all ${hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${showDropAbove ? 'border-t-2 border-blue-500/70' : ''} ${showDropBelow ? 'border-b-2 border-blue-500/70' : ''}`}>
-                <span
-                  onMouseDown={() => setDragRow(i)}
-                  onMouseUp={() => setDragRow(null)}
-                  onTouchStart={() => setDragRow(i)}
-                  onTouchEnd={() => setDragRow(null)}
-                  className="cursor-grab active:cursor-grabbing p-1 text-neutral-700 hover:text-neutral-300 transition-colors select-none shrink-0"
-                  title="Drag to reorder">
-                  <IconGrip />
-                </span>
-                <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
-                <Input value={itemLabel(it)} onChange={e => setLabel(i, e.target.value)}
-                  className={hidden ? 'line-through' : ''} />
-                <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-neutral-500">
-                  <button onClick={() => toggleHidden(i)}
-                    className={`p-1.5 ${hidden ? 'text-amber-400 hover:text-amber-300 opacity-100' : 'hover:text-neutral-200'}`}
-                    title={hidden ? 'Show (include in output)' : 'Hide (exclude from output)'}>
-                    {hidden ? <IconEyeOff /> : <IconEye />}
-                  </button>
-                  <button onClick={() => remove(i)} className="p-1.5 hover:text-red-400" title="Remove"><IconX /></button>
+              <div key={i}>
+                <div
+                  draggable={dragRow === i}
+                  onDragStart={(e) => {
+                    setDragIndex(i);
+                    e.dataTransfer.effectAllowed = 'move';
+                    try { e.dataTransfer.setData('text/plain', String(i)); } catch (_) {}
+                  }}
+                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overIndex !== i) setOverIndex(i); }}
+                  onDragLeave={() => { if (overIndex === i) setOverIndex(null); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragIndex !== null && dragIndex !== i) reorder(dragIndex, i);
+                    setDragIndex(null); setOverIndex(null); setDragRow(null);
+                  }}
+                  onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
+                  className={`group flex items-center gap-2 rounded-md transition-all ${hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${showDropAbove ? 'border-t-2 border-blue-500/70' : ''} ${showDropBelow ? 'border-b-2 border-blue-500/70' : ''}`}>
+                  <span
+                    onMouseDown={() => setDragRow(i)}
+                    onMouseUp={() => setDragRow(null)}
+                    onTouchStart={() => setDragRow(i)}
+                    onTouchEnd={() => setDragRow(null)}
+                    className="cursor-grab active:cursor-grabbing p-1 text-neutral-700 hover:text-neutral-300 transition-colors select-none shrink-0"
+                    title="Drag to reorder">
+                    <IconGrip />
+                  </span>
+                  <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
+                  <Input value={itemLabel(it)} onChange={e => setLabel(i, e.target.value)}
+                    className={hidden ? 'line-through' : ''} />
+                  {withDropdown && !hidden && (
+                    <button onClick={() => setExpandedDropdown(isExpanded ? null : i)}
+                      title={dropdown.length ? `${dropdown.length} dropdown option${dropdown.length === 1 ? '' : 's'} — click to edit` : 'Add dropdown options'}
+                      className={`inline-flex items-center gap-1 shrink-0 px-2 h-7 rounded-md border text-[10px] font-medium uppercase tracking-wide transition-colors ${dropdown.length ? 'border-blue-500/40 bg-blue-500/10 text-blue-300 hover:bg-blue-500/15' : 'border-neutral-800 bg-neutral-950 text-neutral-500 hover:text-neutral-200 hover:border-neutral-700'}`}>
+                      <IconDown />
+                      {dropdown.length ? `List · ${dropdown.length}` : 'List'}
+                    </button>
+                  )}
+                  <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-neutral-500">
+                    <button onClick={() => toggleHidden(i)}
+                      className={`p-1.5 ${hidden ? 'text-amber-400 hover:text-amber-300 opacity-100' : 'hover:text-neutral-200'}`}
+                      title={hidden ? 'Show (include in output)' : 'Hide (exclude from output)'}>
+                      {hidden ? <IconEyeOff /> : <IconEye />}
+                    </button>
+                    <button onClick={() => remove(i)} className="p-1.5 hover:text-red-400" title="Remove"><IconX /></button>
+                  </div>
                 </div>
+                {withDropdown && isExpanded && !hidden && (
+                  <DropdownOptionsEditor
+                    options={dropdown}
+                    onChange={(opts) => setDropdown(i, opts)}
+                    columnName={itemLabel(it)} />
+                )}
               </div>
             );
           })}
@@ -1282,6 +1362,48 @@
             <Input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())} placeholder={placeholder} />
             <Btn variant="ghost" size="md" onClick={add}>Add {label}</Btn>
           </div>
+        </div>
+      );
+    }
+
+    function DropdownOptionsEditor({ options, onChange, columnName }) {
+      const [draft, setDraft] = useState('');
+      const add = () => {
+        const v = draft.trim();
+        if (!v) return;
+        if (options.includes(v)) { setDraft(''); return; }
+        onChange([...options, v]);
+        setDraft('');
+      };
+      const remove = (i) => onChange(options.filter((_, j) => j !== i));
+      const updateAt = (i, v) => onChange(options.map((o, j) => j === i ? v : o));
+      return (
+        <div className="ml-8 mr-2 mt-1.5 mb-2 rounded-md border border-blue-500/20 bg-blue-500/5 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-neutral-500 mb-2">
+            Dropdown options{columnName ? <> for <span className="text-neutral-300">"{columnName}"</span></> : ''}
+          </div>
+          {options.length === 0 ? (
+            <p className="text-[11px] text-neutral-500 mb-2">No options yet — cells stay free-text. Add options below to turn this column into a dropdown.</p>
+          ) : (
+            <div className="space-y-1 mb-2">
+              {options.map((o, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
+                  <Input value={o} onChange={e => updateAt(i, e.target.value)} placeholder="Option text" />
+                  <button onClick={() => remove(i)} className="p-1.5 text-neutral-500 hover:text-red-400 shrink-0" title="Remove option"><IconX /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Input value={draft} onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())}
+              placeholder="e.g. SBC 1" />
+            <Btn variant="ghost" size="md" onClick={add}>Add option</Btn>
+          </div>
+          <p className="text-[10px] text-neutral-600 mt-2 leading-relaxed">
+            Applies to ~500 cells below the header in the generated .xlsx (Excel & Google Sheets compatible). Commas inside option text are converted to spaces.
+          </p>
         </div>
       );
     }
@@ -1526,8 +1648,13 @@
             </>
           ) : (
             <div>
-              <SectionLabel>Columns</SectionLabel>
-              <ListEditor items={sheet.columns || []} onChange={(v) => update({ columns: v })} placeholder="e.g. Trunk ID" label="column" />
+              <SectionLabel hint={sheet.layout === 'alarm' ? 'Click the List badge to add per-column dropdown options' : null}>Columns</SectionLabel>
+              <ListEditor
+                items={sheet.columns || []}
+                onChange={(v) => update({ columns: v })}
+                placeholder={sheet.layout === 'alarm' ? 'e.g. SBC' : 'e.g. Trunk ID'}
+                label="column"
+                withDropdown={sheet.layout === 'alarm'} />
             </div>
           )}
         </div>
