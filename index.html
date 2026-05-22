@@ -3384,12 +3384,22 @@
     function BmrClientsEditor({ bmr, onChange }) {
       const [draftName, setDraftName] = useState('');
       const [insertAt, setInsertAt] = useState('');
+      const [managerFilter, setManagerFilter] = useState('__all__');
       const [dragIndex, setDragIndex] = useState(null);
       const [overIndex, setOverIndex] = useState(null);
       const [dragRow, setDragRow]   = useState(null);
 
       const clients = bmr.clients || [];
       const accountManagers = bmr.accountManagers || [];
+      useEffect(() => {
+        if (managerFilter === '__all__' || managerFilter === '__none__') return;
+        if (!accountManagers.some(manager => manager.id === managerFilter)) setManagerFilter('__all__');
+      }, [accountManagers, managerFilter]);
+      const filteredClients = clients
+        .map((client, index) => ({ client, index }))
+        .filter(({ client }) => managerFilter === '__all__'
+          || (managerFilter === '__none__' ? !client.accountManagerId : client.accountManagerId === managerFilter)
+        );
       const setClients = useCallback((next) => onChange((prev) => ({
         ...prev,
         clients: typeof next === 'function' ? next(prev.clients || []) : next,
@@ -3424,6 +3434,17 @@
           <BmrCarrierNameSettings bmr={bmr} onChange={onChange} />
           <BmrBorderSettings bmr={bmr} onChange={onChange} />
           <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
+          <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+            <div className="w-full max-w-xs">
+              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Account manager filter</label>
+              <Select value={managerFilter} onChange={e => setManagerFilter(e.target.value)}>
+                <option value="__all__">All account managers</option>
+                <option value="__none__">No manager</option>
+                {accountManagers.map(manager => <option key={manager.id} value={manager.id}>{manager.name || 'Unnamed manager'}</option>)}
+              </Select>
+            </div>
+            <span className="pb-2 text-[11px] text-neutral-500">{filteredClients.length}/{clients.length} clients shown</span>
+          </div>
           <div className="overflow-x-auto pb-1">
             <div className="min-w-[780px]">
               <div className="grid grid-cols-[20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
@@ -3436,7 +3457,7 @@
                 <div></div>
               </div>
               <div className="space-y-1">
-                {clients.map((c, i) => (
+                {filteredClients.map(({ client: c, index: i }) => (
                   <BmrClientRow key={c.id}
                     client={c}
                     accountManagers={accountManagers}
