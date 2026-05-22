@@ -2801,8 +2801,8 @@
 
     function BmrRuleEditor({ rule, onChange, onDelete, kind = 'target' }) {
       const ops = kind === 'target'
-        ? [{v:'gte',l:'≥'},{v:'gt',l:'>'},{v:'lte',l:'≤'},{v:'lt',l:'<'},{v:'eq',l:'='},{v:'between',l:'between'}]
-        : [{v:'between',l:'between'},{v:'gte',l:'≥'},{v:'gt',l:'>'},{v:'lte',l:'≤'},{v:'lt',l:'<'},{v:'eq',l:'='}];
+        ? [{v:'gte',l:'greater than or equal to'},{v:'gt',l:'greater than'},{v:'lte',l:'less than or equal to'},{v:'lt',l:'less than'},{v:'eq',l:'equal to'},{v:'between',l:'between'}]
+        : [{v:'between',l:'between'},{v:'gte',l:'greater than or equal to'},{v:'gt',l:'greater than'},{v:'lte',l:'less than or equal to'},{v:'lt',l:'less than'},{v:'eq',l:'equal to'}];
       const set = (patch) => onChange({ ...rule, ...patch });
       return (
         <Card className="p-3">
@@ -2812,7 +2812,7 @@
             <Input value={rule.name || ''} onChange={e => set({ name: e.target.value })} placeholder="Rule name" />
             <button onClick={onDelete} className="p-1.5 text-neutral-500 hover:text-red-400" title="Delete rule"><IconX /></button>
           </div>
-          <div className="grid grid-cols-[100px_1fr_1fr] gap-2 items-end mb-2">
+          <div className="grid grid-cols-[220px_1fr_1fr] gap-2 items-end mb-2">
             <Select value={rule.kind} onChange={e => set({ kind: e.target.value })}>
               {ops.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </Select>
