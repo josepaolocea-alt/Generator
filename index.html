@@ -72,22 +72,26 @@
     .loader { width: 14px; height: 14px; border: 2px solid currentColor; border-bottom-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ===== Smoother global animations =====
-       Override Tailwind's default 150ms / cubic-bezier(0.4,0,0.2,1) with a
-       slightly longer duration and a softer easing curve (ease-out-quint). */
-    *, *::before, *::after {
+    /* Keep transitions opt-in. The BMR client editor renders hundreds of
+       controls, so animating every element makes editing feel delayed. */
+    .transition-colors,
+    .transition-opacity,
+    .transition-transform,
+    .transition-all,
+    .transition {
       transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-      transition-duration: 220ms;
     }
-    .transition-colors   { transition-duration: 220ms; }
-    .transition-opacity  { transition-duration: 250ms; }
-    .transition-transform{ transition-duration: 280ms; }
-    .transition-all      { transition-duration: 260ms; }
-    .transition          { transition-duration: 240ms; }
+    .transition-colors   { transition-duration: 140ms; }
+    .transition-opacity  { transition-duration: 160ms; }
+    .transition-transform{ transition-duration: 180ms; }
+    .transition-all      { transition-duration: 160ms; }
+    .transition          { transition-duration: 150ms; }
 
     /* Respect reduced-motion preferences */
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
+      *,
+      *::before,
+      *::after {
         transition-duration: 0.01ms !important;
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
@@ -141,11 +145,13 @@
     html.light .bg-\[\#070707\]            { background-color: #fafafa !important; }
     html.light .bg-\[\#080808\]            { background-color: #f0f0f1 !important; }
     html.light .bg-neutral-950             { background-color: #ffffff !important; }
+    html.light .bg-neutral-950\/60         { background-color: rgba(255,255,255,0.88) !important; }
     html.light .bg-neutral-900             { background-color: #f4f4f5 !important; }
     html.light .bg-neutral-900\/80         { background-color: rgba(244,244,245,0.8) !important; }
     html.light .bg-neutral-900\/60         { background-color: rgba(244,244,245,0.6) !important; }
     html.light .bg-neutral-800             { background-color: #e4e4e7 !important; }
     html.light .hover\:bg-neutral-900:hover     { background-color: #f4f4f5 !important; }
+    html.light .hover\:bg-neutral-900\/40:hover { background-color: rgba(228,228,231,0.58) !important; }
     html.light .hover\:bg-neutral-900\/60:hover { background-color: rgba(244,244,245,0.6) !important; }
     html.light .focus\:bg-neutral-900\/50:focus { background-color: rgba(244,244,245,0.5) !important; }
 
@@ -177,16 +183,19 @@
     html.light .bg-emerald-500\/10     { background-color: rgba(16,185,129,0.12) !important; }
     html.light .bg-red-500\/5          { background-color: rgba(239,68,68,0.08) !important; }
     html.light .bg-red-500\/10         { background-color: rgba(239,68,68,0.10) !important; }
+    html.light .bg-amber-500\/10       { background-color: rgba(245,158,11,0.14) !important; }
     html.light .text-blue-300          { color: #1d4ed8 !important; }
     html.light .text-emerald-300       { color: #047857 !important; }
     html.light .text-emerald-200       { color: #065f46 !important; }
     html.light .text-red-300           { color: #b91c1c !important; }
     html.light .text-red-200           { color: #991b1b !important; }
     html.light .text-amber-300         { color: #b45309 !important; }
+    html.light .text-amber-100         { color: #92400e !important; }
     html.light .border-blue-500\/40    { border-color: rgba(59,130,246,0.45) !important; }
     html.light .border-emerald-500\/40 { border-color: rgba(16,185,129,0.45) !important; }
     html.light .border-red-500\/30     { border-color: rgba(239,68,68,0.40) !important; }
     html.light .border-red-500\/40     { border-color: rgba(239,68,68,0.40) !important; }
+    html.light .border-amber-500\/35   { border-color: rgba(245,158,11,0.42) !important; }
     html.light .bg-red-950\/20         { background-color: rgba(254,226,226,0.6) !important; }
   </style>
 </head>
@@ -194,7 +203,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useMemo, useRef } = React;
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
     /* ============================================================
        Constants
@@ -2793,6 +2802,51 @@
       );
     }
 
+    const BmrClientRow = React.memo(function BmrClientRow({
+      client, index, dragIndex, overIndex, dragRow,
+      setDragIndex, setOverIndex, setDragRow,
+      reorder, updateClient, removeClient,
+    }) {
+      const isDragging = dragIndex === index;
+      const above = overIndex === index && dragIndex !== null && dragIndex !== index && dragIndex > index;
+      const below = overIndex === index && dragIndex !== null && dragIndex !== index && dragIndex < index;
+
+      return (
+        <div
+          draggable={dragRow === index}
+          onDragStart={(e) => { setDragIndex(index); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(index)); } catch (_) {} }}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overIndex !== index) setOverIndex(index); }}
+          onDragLeave={() => { if (overIndex === index) setOverIndex(null); }}
+          onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== index) reorder(dragIndex, index); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
+          onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
+          className={`grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+          <span
+            onMouseDown={() => setDragRow(index)}
+            onMouseUp={() => setDragRow(null)}
+            onTouchStart={() => setDragRow(index)}
+            onTouchEnd={() => setDragRow(null)}
+            className="cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none"
+            title="Drag to reorder">
+            <IconGrip />
+          </span>
+          <span className="text-[10px] text-neutral-600 font-mono text-right">{String(index + 1).padStart(2, '0')}</span>
+          <span className="w-6 h-6 rounded border border-neutral-800" style={client.color ? { background: client.color } : {}} title={client.color || 'no color'}></span>
+          <Input value={client.name} onChange={e => updateClient(client.id, { name: e.target.value })} placeholder="Client name" className={client.hidden ? 'line-through' : ''} />
+          <Input type="number" step="0.01" value={client.allowBalance ?? ''} onChange={e => updateClient(client.id, { allowBalance: e.target.value === '' ? 0 : Number(e.target.value) })} />
+          <Input value={client.allowBalanceLabel || ''} onChange={e => updateClient(client.id, { allowBalanceLabel: e.target.value })} placeholder="e.g. Block once debit" />
+          <button onClick={() => updateClient(client.id, { hidden: !client.hidden })}
+            className={`p-1 rounded ${client.hidden ? 'text-amber-400' : 'text-neutral-500 hover:text-neutral-200'}`}
+            title={client.hidden ? 'Hidden — click to show' : 'Hide row in generated file'}>
+            {client.hidden ? <IconEyeOff /> : <IconEye />}
+          </button>
+          <span className="flex items-center justify-center">
+            <BmrColorSwatch value={client.color} onChange={color => updateClient(client.id, { color })} />
+          </span>
+          <button onClick={() => removeClient(client.id)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove client"><IconX /></button>
+        </div>
+      );
+    });
+
     function BmrClientsEditor({ bmr, onChange }) {
       const [draftName, setDraftName] = useState('');
       const [insertAt, setInsertAt] = useState('');
@@ -2801,9 +2855,16 @@
       const [dragRow, setDragRow]   = useState(null);
 
       const clients = bmr.clients || [];
-      const setClients = (next) => onChange({ ...bmr, clients: next });
-      const updateAt = (i, patch) => setClients(clients.map((c, j) => j === i ? { ...c, ...patch } : c));
-      const removeAt = (i) => setClients(clients.filter((_, j) => j !== i));
+      const setClients = useCallback((next) => onChange((prev) => ({
+        ...prev,
+        clients: typeof next === 'function' ? next(prev.clients || []) : next,
+      })), [onChange]);
+      const updateClient = useCallback((id, patch) => setClients((list) =>
+        list.map((c) => c.id === id ? { ...c, ...patch } : c)
+      ), [setClients]);
+      const removeClient = useCallback((id) => setClients((list) =>
+        list.filter((c) => c.id !== id)
+      ), [setClients]);
       const addClient = (pos) => {
         const name = draftName.trim();
         if (!name) return;
@@ -2813,13 +2874,13 @@
         setDraftName('');
         setInsertAt('');
       };
-      const reorder = (from, to) => {
-        if (from === to || to < 0 || to >= clients.length) return;
-        const arr = [...clients];
+      const reorder = useCallback((from, to) => setClients((list) => {
+        if (from === to || to < 0 || to >= list.length) return list;
+        const arr = [...list];
         const [moved] = arr.splice(from, 1);
         arr.splice(to, 0, moved);
-        setClients(arr);
-      };
+        return arr;
+      }), [setClients]);
 
       return (
         <div className="space-y-3">
@@ -2834,45 +2895,20 @@
             <div></div>
           </div>
           <div className="space-y-1">
-            {clients.map((c, i) => {
-              const isDragging = dragIndex === i;
-              const above = overIndex === i && dragIndex !== null && dragIndex !== i && dragIndex > i;
-              const below = overIndex === i && dragIndex !== null && dragIndex !== i && dragIndex < i;
-              return (
-                <div key={c.id}
-                  draggable={dragRow === i}
-                  onDragStart={(e) => { setDragIndex(i); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(i)); } catch (_) {} }}
-                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overIndex !== i) setOverIndex(i); }}
-                  onDragLeave={() => { if (overIndex === i) setOverIndex(null); }}
-                  onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== i) reorder(dragIndex, i); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-                  onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-                  className={`grid grid-cols-[20px_28px_28px_1fr_120px_1fr_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-all ${c.hidden ? 'opacity-50' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
-                  <span
-                    onMouseDown={() => setDragRow(i)}
-                    onMouseUp={() => setDragRow(null)}
-                    onTouchStart={() => setDragRow(i)}
-                    onTouchEnd={() => setDragRow(null)}
-                    className="cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none"
-                    title="Drag to reorder">
-                    <IconGrip />
-                  </span>
-                  <span className="text-[10px] text-neutral-600 font-mono text-right">{String(i + 1).padStart(2, '0')}</span>
-                  <span className="w-6 h-6 rounded border border-neutral-800" style={c.color ? { background: c.color } : {}} title={c.color || 'no color'}></span>
-                  <Input value={c.name} onChange={e => updateAt(i, { name: e.target.value })} placeholder="Client name" className={c.hidden ? 'line-through' : ''} />
-                  <Input type="number" step="0.01" value={c.allowBalance ?? ''} onChange={e => updateAt(i, { allowBalance: e.target.value === '' ? 0 : Number(e.target.value) })} />
-                  <Input value={c.allowBalanceLabel || ''} onChange={e => updateAt(i, { allowBalanceLabel: e.target.value })} placeholder="e.g. Block once debit" />
-                  <button onClick={() => updateAt(i, { hidden: !c.hidden })}
-                    className={`p-1 rounded ${c.hidden ? 'text-amber-400' : 'text-neutral-500 hover:text-neutral-200'}`}
-                    title={c.hidden ? 'Hidden — click to show' : 'Hide row in generated file'}>
-                    {c.hidden ? <IconEyeOff /> : <IconEye />}
-                  </button>
-                  <span className="flex items-center justify-center">
-                    <BmrColorSwatch value={c.color} onChange={color => updateAt(i, { color })} />
-                  </span>
-                  <button onClick={() => removeAt(i)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove client"><IconX /></button>
-                </div>
-              );
-            })}
+            {clients.map((c, i) => (
+              <BmrClientRow key={c.id}
+                client={c}
+                index={i}
+                dragIndex={dragIndex}
+                overIndex={overIndex}
+                dragRow={dragRow}
+                setDragIndex={setDragIndex}
+                setOverIndex={setOverIndex}
+                setDragRow={setDragRow}
+                reorder={reorder}
+                updateClient={updateClient}
+                removeClient={removeClient} />
+            ))}
           </div>
           <div className="pt-3 border-t border-neutral-900 space-y-2">
             <div className="flex items-end gap-2 flex-wrap">
@@ -3214,6 +3250,7 @@
       const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null, email: null });
       const [dialog, setDialog] = useState(null);
       const hydratedRef = useRef(false);
+      const localSaveTimerRef = useRef(null);
       const saveTimerRef = useRef(null);
 
       useEffect(() => {
@@ -3226,9 +3263,13 @@
         if (d) d.resolve(value);
       };
 
-      // localStorage cache (immediate, offline-safe)
+      // localStorage cache (debounced so large BMR client edits stay responsive)
       useEffect(() => {
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+        if (localSaveTimerRef.current) clearTimeout(localSaveTimerRef.current);
+        localSaveTimerRef.current = setTimeout(() => {
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+        }, 180);
+        return () => { if (localSaveTimerRef.current) clearTimeout(localSaveTimerRef.current); };
       }, [state]);
 
       // Apply theme class to <html>
@@ -3277,7 +3318,7 @@
       useEffect(() => {
         if (!window.__fb || !hydratedRef.current || !sync.uid) return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        setSync(s => s.status === 'offline' ? s : { ...s, status: 'saving' });
+        setSync(s => s.status === 'offline' || s.status === 'saving' ? s : { ...s, status: 'saving' });
         saveTimerRef.current = setTimeout(async () => {
           try {
             const { db } = window.__fb;
@@ -3360,7 +3401,10 @@
 
       const isBmr = state.module === 'bmr';
       const bmr = state.bmr || DEFAULT_BMR_STATE;
-      const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
+      const setBmr = useCallback((next) => setState(s => {
+        const prevBmr = s.bmr || DEFAULT_BMR_STATE;
+        return { ...s, bmr: typeof next === 'function' ? next(prevBmr) : next };
+      }), []);
       const bmrTab = state.bmrTab || 'clients';
 
       const ModuleSwitch = (
