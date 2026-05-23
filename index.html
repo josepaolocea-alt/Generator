@@ -300,6 +300,7 @@
 
     const STORAGE_KEY = 'mrg_state_v1';
     const TEMPLATES_KEY = 'mrg_templates_v1';
+    const EDITOR_TEMPLATES_KEY = 'mrg_editor_templates_v1';
 
     /* ============================================================
        Helpers
@@ -1371,6 +1372,23 @@
 
     function editorStatesEqual(a, b) {
       return JSON.stringify(a) === JSON.stringify(b);
+    }
+
+    function editorTemplateData(editor) {
+      const source = editorSnapshot(editor);
+      const keys = [
+        'headerRow', 'labelColumn',
+        'headerFill', 'headerFontColor', 'headerBold', 'headerItalic', 'headerUnderline',
+        'labelFill', 'labelFontColor', 'labelBold', 'labelItalic', 'labelUnderline',
+        'rowStyles', 'rules',
+      ];
+      return keys.reduce((acc, key) => ({ ...acc, [key]: source[key] }), {});
+    }
+
+    function editorApplyTemplate(editor, templateData) {
+      const current = editorSnapshot(editor);
+      const next = { ...current, ...(templateData || {}) };
+      return editorSnapshot({ ...next, name: current.name, cells: current.cells });
     }
 
     function editorNumber(value) {
@@ -4555,6 +4573,86 @@
       );
     }
 
+    function EditorTemplatesPanel({ editor, onChange, sync }) {
+      const [templates, setTemplates] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(EDITOR_TEMPLATES_KEY)) || []; } catch { return []; }
+      });
+      const [name, setName] = useState('');
+
+      useEffect(() => {
+        if (!window.__fb || !sync?.uid) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            const ref = window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('editorTemplates');
+            const snap = await ref.get();
+            if (cancelled) return;
+            const remote = snap.exists ? (snap.data().items || []) : null;
+            if (Array.isArray(remote) && remote.length) {
+              const merged = [...remote];
+              for (const local of templates) {
+                if (!merged.some(t => t.name === local.name)) merged.push(local);
+              }
+              setTemplates(merged);
+              localStorage.setItem(EDITOR_TEMPLATES_KEY, JSON.stringify(merged));
+            }
+          } catch (e) { console.warn('editor templates hydrate failed', e); }
+        })();
+        return () => { cancelled = true; };
+      }, [sync?.uid]);
+
+      const persist = (next) => {
+        setTemplates(next);
+        localStorage.setItem(EDITOR_TEMPLATES_KEY, JSON.stringify(next));
+        if (window.__fb && sync?.uid) {
+          window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('editorTemplates')
+            .set({ items: next, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+            .catch(e => console.warn('editor templates save failed', e));
+        }
+      };
+      const save = () => {
+        const cleanName = name.trim();
+        if (!cleanName) return;
+        const t = { id: newId(), name: cleanName, savedAt: new Date().toISOString(), data: editorTemplateData(editor) };
+        persist([...templates.filter(x => x.name !== t.name), t]);
+        setName('');
+      };
+      const load = (id) => {
+        const t = templates.find(x => x.id === id);
+        if (!t) return;
+        onChange(current => editorApplyTemplate(current, t.data));
+      };
+      const del = (id) => persist(templates.filter(x => x.id !== id));
+
+      return (
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel hint="Save style and rules without table data">Formatting templates</SectionLabel>
+            <Pill>{templates.length} saved</Pill>
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_auto]">
+            <Input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), save())}
+              placeholder="Template name" />
+            <Btn variant="ghost" size="md" onClick={save} disabled={!name.trim()}>Save current</Btn>
+          </div>
+          {templates.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {templates.map(t => (
+                <div key={t.id} className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-900 bg-neutral-950/60 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-neutral-200">{t.name}</div>
+                    <div className="text-[10px] text-neutral-600 font-mono">{new Date(t.savedAt).toLocaleDateString()}</div>
+                  </div>
+                  <Btn variant="ghost" size="sm" onClick={() => load(t.id)}>Use</Btn>
+                  <button onClick={() => del(t.id)} title="Delete template" className="p-1.5 text-neutral-500 hover:text-red-400"><IconX /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      );
+    }
+
     function editorCellPreviewStyle(editor, grid, rowIndex, colIndex) {
       const headerRow = editorHeaderRow(editor, grid.length);
       const labelCol = editorLabelColumn(editor, grid[0].length);
@@ -4630,10 +4728,17 @@
                     <th className="sticky left-0 z-10 border border-neutral-900 bg-neutral-950 px-2 py-1 text-neutral-500 font-mono">{rowIndex + 1}</th>
                     {row.map((value, colIndex) => {
                       const style = editorCellPreviewStyle(editor, grid, rowIndex, colIndex);
+                      const inputStyle = {
+                        color: style.color,
+                        fontWeight: style.fontWeight,
+                        fontStyle: style.fontStyle,
+                        textDecoration: style.textDecoration,
+                      };
                       return (
                         <td key={colIndex} className="border border-neutral-800 p-0" style={style}>
                           <input value={value} onChange={e => updateCell(rowIndex, colIndex, e.target.value)}
                             aria-label={`Cell ${colLetter(colIndex + 1)}${rowIndex + 1}`}
+                            style={inputStyle}
                             className="h-9 w-full min-w-[136px] bg-transparent px-2 text-current outline-none focus:ring-2 focus:ring-blue-500/40" />
                         </td>
                       );
@@ -5021,6 +5126,7 @@
                     <div className="space-y-4">
                       <EditorPastePanel editor={editor} onChange={setEditor} />
                       <EditorHeaderSettings editor={editor} onChange={setEditor} />
+                      <EditorTemplatesPanel editor={editor} onChange={setEditor} sync={sync} />
                       <EditorTable editor={editor} onChange={setEditor} />
                     </div>
                   )}
