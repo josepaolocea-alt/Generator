@@ -1296,6 +1296,7 @@
       headerFontColor: '',
       labelFill: '',
       labelFontColor: '',
+      rowStyles: [],
       rules: [],
     };
 
@@ -1319,6 +1320,17 @@
     function editorLabelColumn(editor, colCount) {
       const value = Math.floor(Number(editor?.labelColumn));
       return value > 0 ? Math.min(value, Math.max(1, colCount)) : 0;
+    }
+
+    function editorCustomRowStyles(editor, rowCount) {
+      return (Array.isArray(editor?.rowStyles) ? editor.rowStyles : [])
+        .map((style) => ({ ...style, row: Math.floor(Number(style?.row)) }))
+        .filter((style) => style.row > 0 && style.row <= rowCount && (style.fill || style.fontColor || style.bold));
+    }
+
+    function editorCustomRowStyleFor(editor, rowCount, rowNum) {
+      const styles = editorCustomRowStyles(editor, rowCount).filter((style) => style.row === rowNum);
+      return styles.length ? styles[styles.length - 1] : null;
     }
 
     function editorNumber(value) {
@@ -1397,6 +1409,18 @@
       if (fontColor || bold) cell.font = { ...(cell.font || {}), ...(fontColor ? { color: { argb: argbHex(fontColor) } } : {}), ...(bold ? { bold: true } : {}) };
     }
 
+    function editorApplyCustomRowStyle(cell, rowStyle) {
+      if (!rowStyle) return;
+      if (rowStyle.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(rowStyle.fill) } };
+      if (rowStyle.fontColor || typeof rowStyle.bold === 'boolean') {
+        cell.font = {
+          ...(cell.font || {}),
+          ...(rowStyle.fontColor ? { color: { argb: argbHex(rowStyle.fontColor) } } : {}),
+          ...(typeof rowStyle.bold === 'boolean' ? { bold: rowStyle.bold } : {}),
+        };
+      }
+    }
+
     function buildEditorSheet(ws, editor) {
       const grid = editorNormalizeGrid(editor?.cells);
       const rowCount = grid.length;
@@ -1427,6 +1451,9 @@
           if (row !== headerRow) editorApplyStaticStyle(ws.getCell(row, labelCol), editor.labelFill, editor.labelFontColor, false);
         }
       }
+      editorCustomRowStyles(editor, rowCount).forEach((rowStyle) => {
+        for (let col = 1; col <= colCount; col++) editorApplyCustomRowStyle(ws.getCell(rowStyle.row, col), rowStyle);
+      });
 
       for (let col = 1; col <= colCount; col++) {
         const longest = Math.max(...grid.map(row => String(row[col - 1] ?? '').length), 4);
@@ -4336,6 +4363,21 @@
 
     function EditorHeaderSettings({ editor, onChange }) {
       const update = (patch) => onChange({ ...editor, ...patch });
+      const grid = editorNormalizeGrid(editor.cells);
+      const rowCount = grid.length;
+      const rowStyles = Array.isArray(editor.rowStyles) ? editor.rowStyles : [];
+      const updateRowStyle = (id, patch) => update({ rowStyles: rowStyles.map(style => style.id === id ? { ...style, ...patch } : style) });
+      const removeRowStyle = (id) => update({ rowStyles: rowStyles.filter(style => style.id !== id) });
+      const addRowStyle = () => {
+        const lastRow = Math.max(0, ...rowStyles.map(style => Math.floor(Number(style.row)) || 0));
+        const defaultRow = Math.min(rowCount, Math.max(1, lastRow ? lastRow + 1 : (Math.floor(Number(editor.headerRow)) || 1) + 6));
+        update({
+          rowStyles: [
+            ...rowStyles,
+            { id: editorRuleId(), row: defaultRow, fill: '#000000', fontColor: '#FFFFFF', bold: true },
+          ],
+        });
+      };
       return (
         <Card className="p-4">
           <SectionLabel hint="Header setup">Table style</SectionLabel>
@@ -4359,6 +4401,37 @@
             <EditorColorField label="Date / label fill" value={editor.labelFill} onChange={labelFill => update({ labelFill })} title="Choose label fill" />
             <EditorColorField label="Date / label font" value={editor.labelFontColor} onChange={labelFontColor => update({ labelFontColor })} title="Choose label font color" fallback="#000000" />
           </div>
+          <div className="mt-5 border-t border-neutral-900 pt-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <SectionLabel hint="Color full rows by row number">Custom row colors</SectionLabel>
+              <Btn variant="ghost" size="sm" onClick={addRowStyle}><IconPlus /> Row color</Btn>
+            </div>
+            {rowStyles.length === 0 ? (
+              <div className="rounded-md border border-dashed border-neutral-800 px-3 py-4 text-xs text-neutral-500">
+                Add row colors for repeated date/header rows such as row 7.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {rowStyles.map((style) => (
+                  <div key={style.id} className="grid gap-2 rounded-md border border-neutral-900 bg-neutral-950/60 p-2 md:grid-cols-[96px_1fr_1fr_auto_auto] md:items-end">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Row #</label>
+                      <Input type="number" min="1" max={rowCount} value={style.row ?? 1}
+                        onChange={e => updateRowStyle(style.id, { row: Math.min(rowCount, Math.max(1, Number(e.target.value) || 1)) })} />
+                    </div>
+                    <EditorColorField label="Fill" value={style.fill} onChange={fill => updateRowStyle(style.id, { fill })} title="Choose row fill" />
+                    <EditorColorField label="Font" value={style.fontColor} onChange={fontColor => updateRowStyle(style.id, { fontColor })} title="Choose row font color" fallback="#000000" />
+                    <label className="flex h-8 items-center gap-2 text-xs text-neutral-400">
+                      <input type="checkbox" checked={style.bold !== false} onChange={e => updateRowStyle(style.id, { bold: e.target.checked })}
+                        className="h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+                      Bold
+                    </label>
+                    <button onClick={() => removeRowStyle(style.id)} title="Remove row color" className="h-8 px-2 text-neutral-500 hover:text-red-400 justify-self-start md:justify-self-end"><IconX /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </Card>
       );
     }
@@ -4373,12 +4446,16 @@
         if (editor.headerFill) style.background = editor.headerFill;
         if (editor.headerFontColor) style.color = editor.headerFontColor;
         style.fontWeight = 700;
-        return style;
       }
-      if (labelCol && colNum === labelCol) {
+      if (labelCol && colNum === labelCol && rowNum !== headerRow) {
         if (editor.labelFill) style.background = editor.labelFill;
         if (editor.labelFontColor) style.color = editor.labelFontColor;
-        return style;
+      }
+      const customRowStyle = editorCustomRowStyleFor(editor, grid.length, rowNum);
+      if (customRowStyle) {
+        if (customRowStyle.fill) style.background = customRowStyle.fill;
+        if (customRowStyle.fontColor) style.color = customRowStyle.fontColor;
+        if (typeof customRowStyle.bold === 'boolean') style.fontWeight = customRowStyle.bold ? 700 : 400;
       }
       const isData = rowNum > (headerRow || 0) && colNum > (labelCol || 0);
       if (!isData) return style;
