@@ -5016,7 +5016,10 @@
     /* ============================================================
        App
        ============================================================ */
+    const APP_STATE_SCHEMA_VERSION = 2;
+
     const DEFAULT_STATE = {
+      schemaVersion: APP_STATE_SCHEMA_VERSION,
       year: new Date().getFullYear(),
       month: new Date().getMonth(),
       sheets: DEFAULT_SHEETS,
@@ -5068,12 +5071,17 @@
       }));
     }
 
-    function normalizeAppState(raw = {}) {
+    function normalizeAppState(raw = {}, options = {}) {
+      const migrateLegacyLabels = !!options.migrateLegacyLabels
+        && Number(raw?.schemaVersion || 0) < APP_STATE_SCHEMA_VERSION;
       const merged = { ...DEFAULT_STATE, ...(raw || {}) };
       const bmr = { ...DEFAULT_BMR_STATE, ...(merged.bmr || {}) };
       const editorRaw = merged.editor || {};
       const editor = { ...DEFAULT_EDITOR_STATE, ...editorRaw, cells: editorNormalizeGrid(editorRaw.cells || DEFAULT_EDITOR_STATE.cells) };
-      return { ...merged, sheets: migrateSheets(merged.sheets), bmr, editor };
+      const sheets = migrateLegacyLabels
+        ? migrateSheets(merged.sheets)
+        : (Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS);
+      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, editor };
     }
 
     function App() {
@@ -5081,10 +5089,10 @@
         try {
           const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
           if (saved && Array.isArray(saved.sheets)) {
-            return normalizeAppState(saved);
+            return normalizeAppState(saved, { migrateLegacyLabels: true });
           }
         } catch {}
-        return normalizeAppState(DEFAULT_STATE);
+        return normalizeAppState(DEFAULT_STATE, { migrateLegacyLabels: true });
       });
       const userEditRef = useRef(false);
       const setState = useCallback((next) => {
@@ -5149,7 +5157,7 @@
             const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
             const snap = await ref.get();
             if (snap.exists) {
-              const remote = normalizeAppState(mergeLocalSheetActiveFlags(snap.data()));
+              const remote = normalizeAppState(mergeLocalSheetActiveFlags(snap.data()), { migrateLegacyLabels: true });
               if (remote && Array.isArray(remote.sheets)) {
                 setStateRaw(local => {
                   const current = normalizeAppState(local);
