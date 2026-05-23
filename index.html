@@ -1348,26 +1348,48 @@
       }
     }
 
-    function editorCellExportValue(value) {
-      const text = String(value ?? '');
-      return text.startsWith('=') && text.length > 1 ? { formula: text.slice(1) } : text;
-    }
-
-    function editorNumericFormula(cellRef) {
-      const clean = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
+    function editorNumericExport(value) {
+      const raw = String(value ?? '');
+      const text = raw.trim();
+      const numericPattern = /^[-+]?(?:(?:0|[1-9]\d*)|(?:[1-9]\d{0,2}(?:,\d{3})+))(?:\.\d+)?$/;
+      if (!numericPattern.test(text)) return null;
+      const n = Number(text.replace(/,/g, ''));
+      if (!Number.isFinite(n)) return null;
+      const hasComma = text.includes(',');
+      const decimals = text.match(/\.(\d+)$/)?.[1]?.length || 0;
       return {
-        hasValue: `LEN(${clean})>0`,
-        value: `IFERROR(VALUE(SUBSTITUTE(${clean},",","")),${cellRef})`,
+        value: n,
+        numFmt: `${hasComma ? '#,##' : ''}0${decimals ? `.${'0'.repeat(decimals)}` : ''}`,
       };
     }
 
+    function editorCellExportValue(value, isDataCell = false) {
+      const text = String(value ?? '');
+      if (text.startsWith('=') && text.length > 1) return { value: { formula: text.slice(1) } };
+      if (isDataCell) {
+        const numeric = editorNumericExport(text);
+        if (numeric) return numeric;
+      }
+      return { value: text };
+    }
+
+    function editorBuildConditionFormula(rule, cellRef) {
+      const v = (x) => Number.isFinite(Number(x)) ? Number(x) : 0;
+      switch (rule.kind) {
+        case 'between': return `AND(ISNUMBER(${cellRef}),${cellRef}>=${v(rule.min)},${cellRef}<=${v(rule.max)})`;
+        case 'gte':     return `AND(ISNUMBER(${cellRef}),${cellRef}>=${v(rule.value)})`;
+        case 'lte':     return `AND(ISNUMBER(${cellRef}),${cellRef}<=${v(rule.value)})`;
+        case 'gt':      return `AND(ISNUMBER(${cellRef}),${cellRef}>${v(rule.value)})`;
+        case 'lt':      return `AND(ISNUMBER(${cellRef}),${cellRef}<${v(rule.value)})`;
+        case 'eq':      return `AND(ISNUMBER(${cellRef}),${cellRef}=${v(rule.value)})`;
+        default:        return 'FALSE';
+      }
+    }
+
     function editorRuleFormula(rule, cellRef, firstDataCol, lastDataCol, rowNum) {
-      if (rule.kind !== 'maxInRow') return bmrBuildConditionFormula(rule, cellRef);
-      const current = editorNumericFormula(cellRef);
+      if (rule.kind !== 'maxInRow') return editorBuildConditionFormula(rule, cellRef);
       const rowRange = `$${firstDataCol}${rowNum}:$${lastDataCol}${rowNum}`;
-      const cleanRange = `TRIM(SUBSTITUTE(${rowRange}&"",CHAR(160),""))`;
-      const numericRange = `IFERROR(VALUE(SUBSTITUTE(${cleanRange},",","")),${rowRange})`;
-      return `AND(${current.hasValue},ISNUMBER(${current.value}),${current.value}=MAX(${numericRange}))`;
+      return `AND(ISNUMBER(${cellRef}),${cellRef}=MAX(${rowRange}))`;
     }
 
     function editorApplyStaticStyle(cell, fillColor, fontColor, bold = false) {
@@ -1381,12 +1403,17 @@
       const colCount = grid[0].length;
       const headerRow = editorHeaderRow(editor, rowCount);
       const labelCol = editorLabelColumn(editor, colCount);
+      const dataStartRow = headerRow ? headerRow + 1 : 1;
+      const dataStartCol = labelCol ? labelCol + 1 : 1;
       const thinBorder = { style: 'thin', color: { argb: 'FFD4D4D8' } };
 
       grid.forEach((row, rowIndex) => {
         row.forEach((value, colIndex) => {
           const cell = ws.getCell(rowIndex + 1, colIndex + 1);
-          cell.value = editorCellExportValue(value);
+          const isDataCell = rowIndex + 1 >= dataStartRow && colIndex + 1 >= dataStartCol;
+          const exported = editorCellExportValue(value, isDataCell);
+          cell.value = exported.value;
+          if (exported.numFmt) cell.numFmt = exported.numFmt;
           cell.alignment = { vertical: 'middle', wrapText: true };
           cell.border = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
         });
@@ -1406,8 +1433,6 @@
         ws.getColumn(col).width = Math.min(34, Math.max(col === labelCol ? 14 : 10, longest + 2));
       }
 
-      const dataStartRow = headerRow ? headerRow + 1 : 1;
-      const dataStartCol = labelCol ? labelCol + 1 : 1;
       if (dataStartRow <= rowCount && dataStartCol <= colCount) {
         const firstCol = colLetter(dataStartCol);
         const lastCol = colLetter(colCount);
