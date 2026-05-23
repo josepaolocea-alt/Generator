@@ -205,6 +205,97 @@
     html.light .border-red-500\/40     { border-color: rgba(239,68,68,0.40) !important; }
     html.light .border-amber-500\/35   { border-color: rgba(245,158,11,0.42) !important; }
     html.light .bg-red-950\/20         { background-color: rgba(254,226,226,0.6) !important; }
+
+    /* App header controls */
+    .app-topbar {
+      align-items: flex-start;
+    }
+    .app-title-block {
+      flex: 1 1 220px;
+      min-width: min(100%, 220px);
+    }
+    .app-title-block h2 {
+      line-height: 1.16;
+      overflow-wrap: anywhere;
+    }
+    .app-pill-row {
+      flex: 0 1 auto;
+      flex-wrap: wrap;
+    }
+    .app-header-controls {
+      flex: 1 1 430px;
+      min-width: min(100%, 360px);
+      justify-content: flex-end;
+    }
+    .app-segmented,
+    .app-tab-nav {
+      max-width: 100%;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .app-segmented button,
+    .app-tab-nav button {
+      min-height: 36px;
+      white-space: nowrap;
+    }
+    html.light .text-blue-200 { color: #1d4ed8 !important; }
+    html.light .bg-blue-500\/20 { background-color: rgba(59,130,246,0.16) !important; }
+    html.light .app-segment-active {
+      background-color: rgba(37,99,235,0.14) !important;
+      border-color: rgba(37,99,235,0.45) !important;
+      color: #1d4ed8 !important;
+    }
+    html.light .app-tab-active {
+      background-color: #e4e4e7 !important;
+      color: #18181b !important;
+    }
+    html.light .app-segment-muted,
+    html.light .app-tab-muted {
+      color: #52525b !important;
+    }
+    html.light .app-segment-muted:hover,
+    html.light .app-tab-muted:hover {
+      color: #18181b !important;
+      background-color: #e4e4e7 !important;
+    }
+    @media (max-width: 1180px) {
+      .app-header-controls {
+        justify-content: flex-start;
+      }
+    }
+    @media (max-width: 900px) {
+      .app-topbar {
+        padding: 1rem !important;
+        gap: 0.875rem !important;
+      }
+      .app-title-block {
+        flex-basis: 100%;
+      }
+      .app-header-controls {
+        flex-basis: 100%;
+        min-width: 0;
+      }
+      .app-segmented,
+      .app-tab-nav {
+        width: 100%;
+      }
+      .app-segmented {
+        display: grid !important;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .app-segmented button {
+        padding-inline: 0.5rem !important;
+        text-align: center;
+      }
+    }
+    @media (max-width: 560px) {
+      .app-segmented {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .app-tab-nav button {
+        flex: 1 1 calc(50% - 2px);
+      }
+    }
   </style>
 </head>
 <body>
@@ -5990,10 +6081,10 @@
       };
 
       const ModuleSwitch = (
-        <div className="flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
+        <div className="app-segmented flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
           {MODULES.map(m => (
             <button key={m.id} onClick={() => setState(s => ({ ...s, module: m.id }))}
-              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors ${state.module === m.id || (m.id === 'sip_fcs' && !state.module) ? 'bg-blue-500/20 text-blue-200 border border-blue-500/40' : 'text-neutral-500 hover:text-neutral-200'}`}>
+              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors ${state.module === m.id || (m.id === 'sip_fcs' && !state.module) ? 'app-segment-active bg-blue-500/20 text-blue-200 border border-blue-500/40' : 'app-segment-muted text-neutral-500 hover:text-neutral-200'}`}>
               {m.label}
             </button>
           ))}
@@ -6007,24 +6098,24 @@
           <div className="flex min-h-screen text-neutral-100">
             <EditorSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
-                <div className="min-w-0">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div className="app-title-block min-w-0">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="truncate text-[22px] font-bold tracking-tight">Editor / {editor.name || 'Pasted Table'}</h2>
                 </div>
-                <div className="hidden md:flex items-center gap-2">
+                <div className="app-pill-row hidden xl:flex items-center gap-2">
                   <Pill>{editorGrid.length} rows</Pill>
                   <Pill>{editorGrid[0].length} columns</Pill>
                   <Pill tone={activeEditorRules ? 'accent' : 'default'}>{activeEditorRules} rules</Pill>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
                   <Btn variant="ghost" size="sm" onClick={undoEditor} disabled={!editorUndoStack.length} title="Undo last Editor change"><IconUndo /> Undo</Btn>
                   <Btn variant="ghost" size="sm" onClick={resetEditor}>Reset</Btn>
-                  <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
                     {EDITOR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, editorTab: t.id }))}
-                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
                     ))}
@@ -6073,22 +6164,22 @@
           <div className="flex min-h-screen text-neutral-100">
             <BmrSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
-                <div>
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="text-[22px] font-bold tracking-tight">BMR VOIP · {bmrTodayString()}</h2>
                 </div>
-                <div className="hidden md:flex items-center gap-2">
+                <div className="app-pill-row hidden xl:flex items-center gap-2">
                   <Pill>{visibleClients} clients</Pill>
                   <Pill>{(bmr.includeDay !== false ? 1 : 0) + (bmr.includeNight !== false ? 1 : 0)} shifts</Pill>
                   <Pill tone={activeBmrRules > 0 ? 'accent' : 'default'}>{activeBmrRules} rules</Pill>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
                     {BMR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, bmrTab: t.id }))}
-                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrTab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
                     ))}
@@ -6151,23 +6242,23 @@
           <div className="flex min-h-screen text-neutral-100">
             <BmrSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
-                <div>
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="text-[22px] font-bold tracking-tight">BMR SMS · {bmrTodayString()}</h2>
                 </div>
-                <div className="hidden md:flex items-center gap-2">
+                <div className="app-pill-row hidden xl:flex items-center gap-2">
                   <Pill>{visibleRetail} RES</Pill>
                   <Pill>{visibleWholesale} WHS</Pill>
                   <Pill>{sheetCount} sheets</Pill>
                   <Pill tone={activeBmrSmsRules > 0 ? 'accent' : 'default'}>{activeBmrSmsRules} rules</Pill>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
                     {BMR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, bmrSmsTab: t.id }))}
-                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrSmsTab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrSmsTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
                     ))}
@@ -6225,22 +6316,22 @@
           <UploadedSidebar state={state} setState={setState} />
           <main className="flex-1 min-w-0 flex flex-col">
             {/* Top bar */}
-            <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
-              <div>
+            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <div className="app-title-block">
                 <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Report</div>
                 <h2 className="text-[22px] font-bold tracking-tight">{MONTHS[state.month]} {state.year}</h2>
               </div>
-              <div className="hidden md:flex items-center gap-2">
+              <div className="app-pill-row hidden xl:flex items-center gap-2">
                 <Pill>{activeCount} sheets</Pill>
                 <Pill>{days} days</Pill>
                 <Pill tone={activeRules > 0 ? 'accent' : 'default'}>{activeRules} rules</Pill>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                 {ModuleSwitch}
-                <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
                   {TABS.map(t => (
                     <button key={t.id} onClick={() => setState(s => ({ ...s, tab: t.id }))}
-                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                       {t.label}
                     </button>
                   ))}
