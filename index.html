@@ -1396,6 +1396,24 @@
       return editorSnapshot({ ...next, name: current.name, cells: current.cells });
     }
 
+    function mergeLocalSheetActiveFlags(remote) {
+      if (!remote || !Array.isArray(remote.sheets)) return remote;
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (!saved || !Array.isArray(saved.sheets)) return remote;
+        const activeById = new Map(saved.sheets
+          .filter(sheet => sheet && typeof sheet.active === 'boolean')
+          .map(sheet => [sheet.id, sheet.active]));
+        if (!activeById.size) return remote;
+        return {
+          ...remote,
+          sheets: remote.sheets.map(sheet => activeById.has(sheet.id) ? { ...sheet, active: activeById.get(sheet.id) } : sheet),
+        };
+      } catch {
+        return remote;
+      }
+    }
+
     function editorNumber(value) {
       const clean = String(value ?? '').replace(/\u00a0/g, ' ').trim().replace(/,/g, '');
       if (!clean || !/^[-+]?(?:\d+|\d*\.\d+)$/.test(clean)) return null;
@@ -4948,7 +4966,7 @@
             const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
             const snap = await ref.get();
             if (snap.exists) {
-              const remote = snap.data();
+              const remote = mergeLocalSheetActiveFlags(snap.data());
               if (remote && Array.isArray(remote.sheets)) {
                 const remoteBmr = { ...DEFAULT_BMR_STATE, ...(remote.bmr || {}) };
                 const remoteEditor = { ...DEFAULT_EDITOR_STATE, ...(remote.editor || {}), cells: editorNormalizeGrid(remote.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
