@@ -1294,8 +1294,14 @@
       labelColumn: 1,
       headerFill: '',
       headerFontColor: '',
+      headerBold: true,
+      headerItalic: false,
+      headerUnderline: false,
       labelFill: '',
       labelFontColor: '',
+      labelBold: false,
+      labelItalic: false,
+      labelUnderline: false,
       rowStyles: [],
       rules: [],
     };
@@ -1325,12 +1331,26 @@
     function editorCustomRowStyles(editor, rowCount) {
       return (Array.isArray(editor?.rowStyles) ? editor.rowStyles : [])
         .map((style) => ({ ...style, row: Math.floor(Number(style?.row)) }))
-        .filter((style) => style.row > 0 && style.row <= rowCount && (style.fill || style.fontColor || style.bold));
+        .filter((style) => style.row > 0 && style.row <= rowCount && (style.fill || style.fontColor || style.bold || style.italic || style.underline));
     }
 
     function editorCustomRowStyleFor(editor, rowCount, rowNum) {
       const styles = editorCustomRowStyles(editor, rowCount).filter((style) => style.row === rowNum);
       return styles.length ? styles[styles.length - 1] : null;
+    }
+
+    function editorSnapshot(editor) {
+      const merged = { ...DEFAULT_EDITOR_STATE, ...(editor || {}) };
+      return JSON.parse(JSON.stringify({
+        ...merged,
+        cells: editorNormalizeGrid(merged.cells),
+        rowStyles: Array.isArray(merged.rowStyles) ? merged.rowStyles : [],
+        rules: Array.isArray(merged.rules) ? merged.rules : [],
+      }));
+    }
+
+    function editorStatesEqual(a, b) {
+      return JSON.stringify(a) === JSON.stringify(b);
     }
 
     function editorNumber(value) {
@@ -1404,21 +1424,26 @@
       return `AND(ISNUMBER(${cellRef}),${cellRef}=MAX(${rowRange}))`;
     }
 
-    function editorApplyStaticStyle(cell, fillColor, fontColor, bold = false) {
+    function editorFontStylePatch(style = {}, fontColor = '') {
+      const patch = {};
+      if (fontColor) patch.color = { argb: argbHex(fontColor) };
+      if (typeof style.bold === 'boolean') patch.bold = style.bold;
+      if (typeof style.italic === 'boolean') patch.italic = style.italic;
+      if (typeof style.underline === 'boolean') patch.underline = style.underline;
+      return patch;
+    }
+
+    function editorApplyStaticStyle(cell, fillColor, fontColor, fontStyle = {}) {
       if (fillColor) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(fillColor) } };
-      if (fontColor || bold) cell.font = { ...(cell.font || {}), ...(fontColor ? { color: { argb: argbHex(fontColor) } } : {}), ...(bold ? { bold: true } : {}) };
+      const patch = editorFontStylePatch(fontStyle, fontColor);
+      if (Object.keys(patch).length) cell.font = { ...(cell.font || {}), ...patch };
     }
 
     function editorApplyCustomRowStyle(cell, rowStyle) {
       if (!rowStyle) return;
       if (rowStyle.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(rowStyle.fill) } };
-      if (rowStyle.fontColor || typeof rowStyle.bold === 'boolean') {
-        cell.font = {
-          ...(cell.font || {}),
-          ...(rowStyle.fontColor ? { color: { argb: argbHex(rowStyle.fontColor) } } : {}),
-          ...(typeof rowStyle.bold === 'boolean' ? { bold: rowStyle.bold } : {}),
-        };
-      }
+      const patch = editorFontStylePatch(rowStyle, rowStyle.fontColor);
+      if (Object.keys(patch).length) cell.font = { ...(cell.font || {}), ...patch };
     }
 
     function buildEditorSheet(ws, editor) {
@@ -1444,11 +1469,13 @@
       });
 
       if (headerRow) {
-        for (let col = 1; col <= colCount; col++) editorApplyStaticStyle(ws.getCell(headerRow, col), editor.headerFill, editor.headerFontColor, true);
+        const headerFontStyle = { bold: editor.headerBold !== false, italic: !!editor.headerItalic, underline: !!editor.headerUnderline };
+        for (let col = 1; col <= colCount; col++) editorApplyStaticStyle(ws.getCell(headerRow, col), editor.headerFill, editor.headerFontColor, headerFontStyle);
       }
       if (labelCol) {
+        const labelFontStyle = { bold: !!editor.labelBold, italic: !!editor.labelItalic, underline: !!editor.labelUnderline };
         for (let row = 1; row <= rowCount; row++) {
-          if (row !== headerRow) editorApplyStaticStyle(ws.getCell(row, labelCol), editor.labelFill, editor.labelFontColor, false);
+          if (row !== headerRow) editorApplyStaticStyle(ws.getCell(row, labelCol), editor.labelFill, editor.labelFontColor, labelFontStyle);
         }
       }
       editorCustomRowStyles(editor, rowCount).forEach((rowStyle) => {
@@ -1557,6 +1584,7 @@
     function IconUp() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>; }
     function IconDown() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }
     function IconReset() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/></svg>; }
+    function IconUndo() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-1"/></svg>; }
     function IconGrip() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="15" cy="19" r="1.4"/></svg>; }
     function IconX() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>; }
     function IconPlus() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>; }
@@ -4329,6 +4357,10 @@
 
     function EditorPastePanel({ editor, onChange }) {
       const [pasteText, setPasteText] = useState('');
+      useEffect(() => {
+        const grid = editorNormalizeGrid(editor.cells);
+        if (grid.length === 1 && grid[0].length === 1 && !grid[0][0]) setPasteText('');
+      }, [editor.cells]);
       const loadText = (text) => {
         setPasteText(text);
         onChange({ ...editor, cells: editorParseGridText(text) });
@@ -4361,6 +4393,29 @@
       );
     }
 
+    function EditorFontStyleControls({ label, bold, italic, underline, onChange }) {
+      const update = (patch) => onChange({ bold, italic, underline, ...patch });
+      return (
+        <div>
+          <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">{label}</label>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
+            <label className={`inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-800 px-2 cursor-pointer ${bold ? 'bg-neutral-900 text-neutral-100 font-bold' : ''}`}>
+              <input type="checkbox" checked={!!bold} onChange={e => update({ bold: e.target.checked })} className="h-3.5 w-3.5" />
+              <span className="font-bold">B</span>
+            </label>
+            <label className={`inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-800 px-2 cursor-pointer ${italic ? 'bg-neutral-900 text-neutral-100 italic' : ''}`}>
+              <input type="checkbox" checked={!!italic} onChange={e => update({ italic: e.target.checked })} className="h-3.5 w-3.5" />
+              <span className="italic">I</span>
+            </label>
+            <label className={`inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-800 px-2 cursor-pointer ${underline ? 'bg-neutral-900 text-neutral-100 underline' : ''}`}>
+              <input type="checkbox" checked={!!underline} onChange={e => update({ underline: e.target.checked })} className="h-3.5 w-3.5" />
+              <span className="underline">U</span>
+            </label>
+          </div>
+        </div>
+      );
+    }
+
     function EditorHeaderSettings({ editor, onChange }) {
       const update = (patch) => onChange({ ...editor, ...patch });
       const grid = editorNormalizeGrid(editor.cells);
@@ -4374,7 +4429,7 @@
         update({
           rowStyles: [
             ...rowStyles,
-            { id: editorRuleId(), row: defaultRow, fill: '#000000', fontColor: '#FFFFFF', bold: true },
+            { id: editorRuleId(), row: defaultRow, fill: '#000000', fontColor: '#FFFFFF', bold: true, italic: false, underline: false },
           ],
         });
       };
@@ -4401,6 +4456,14 @@
             <EditorColorField label="Date / label fill" value={editor.labelFill} onChange={labelFill => update({ labelFill })} title="Choose label fill" />
             <EditorColorField label="Date / label font" value={editor.labelFontColor} onChange={labelFontColor => update({ labelFontColor })} title="Choose label font color" fallback="#000000" />
           </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <EditorFontStyleControls label="Header font style"
+              bold={editor.headerBold !== false} italic={!!editor.headerItalic} underline={!!editor.headerUnderline}
+              onChange={style => update({ headerBold: style.bold, headerItalic: style.italic, headerUnderline: style.underline })} />
+            <EditorFontStyleControls label="Date / label font style"
+              bold={!!editor.labelBold} italic={!!editor.labelItalic} underline={!!editor.labelUnderline}
+              onChange={style => update({ labelBold: style.bold, labelItalic: style.italic, labelUnderline: style.underline })} />
+          </div>
           <div className="mt-5 border-t border-neutral-900 pt-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <SectionLabel hint="Color full rows by row number">Custom row colors</SectionLabel>
@@ -4413,7 +4476,7 @@
             ) : (
               <div className="space-y-2">
                 {rowStyles.map((style) => (
-                  <div key={style.id} className="grid gap-2 rounded-md border border-neutral-900 bg-neutral-950/60 p-2 md:grid-cols-[96px_1fr_1fr_auto_auto] md:items-end">
+                  <div key={style.id} className="grid gap-2 rounded-md border border-neutral-900 bg-neutral-950/60 p-2 md:grid-cols-[96px_minmax(150px,1fr)_minmax(150px,1fr)_190px_auto] md:items-end">
                     <div>
                       <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Row #</label>
                       <Input type="number" min="1" max={rowCount} value={style.row ?? 1}
@@ -4421,11 +4484,9 @@
                     </div>
                     <EditorColorField label="Fill" value={style.fill} onChange={fill => updateRowStyle(style.id, { fill })} title="Choose row fill" />
                     <EditorColorField label="Font" value={style.fontColor} onChange={fontColor => updateRowStyle(style.id, { fontColor })} title="Choose row font color" fallback="#000000" />
-                    <label className="flex h-8 items-center gap-2 text-xs text-neutral-400">
-                      <input type="checkbox" checked={style.bold !== false} onChange={e => updateRowStyle(style.id, { bold: e.target.checked })}
-                        className="h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
-                      Bold
-                    </label>
+                    <EditorFontStyleControls label="Style"
+                      bold={style.bold !== false} italic={!!style.italic} underline={!!style.underline}
+                      onChange={next => updateRowStyle(style.id, next)} />
                     <button onClick={() => removeRowStyle(style.id)} title="Remove row color" className="h-8 px-2 text-neutral-500 hover:text-red-400 justify-self-start md:justify-self-end"><IconX /></button>
                   </div>
                 ))}
@@ -4445,17 +4506,24 @@
       if (headerRow && rowNum === headerRow) {
         if (editor.headerFill) style.background = editor.headerFill;
         if (editor.headerFontColor) style.color = editor.headerFontColor;
-        style.fontWeight = 700;
+        style.fontWeight = editor.headerBold !== false ? 700 : 400;
+        if (editor.headerItalic) style.fontStyle = 'italic';
+        if (editor.headerUnderline) style.textDecoration = 'underline';
       }
       if (labelCol && colNum === labelCol && rowNum !== headerRow) {
         if (editor.labelFill) style.background = editor.labelFill;
         if (editor.labelFontColor) style.color = editor.labelFontColor;
+        if (editor.labelBold) style.fontWeight = 700;
+        if (editor.labelItalic) style.fontStyle = 'italic';
+        if (editor.labelUnderline) style.textDecoration = 'underline';
       }
       const customRowStyle = editorCustomRowStyleFor(editor, grid.length, rowNum);
       if (customRowStyle) {
         if (customRowStyle.fill) style.background = customRowStyle.fill;
         if (customRowStyle.fontColor) style.color = customRowStyle.fontColor;
         if (typeof customRowStyle.bold === 'boolean') style.fontWeight = customRowStyle.bold ? 700 : 400;
+        if (customRowStyle.italic) style.fontStyle = 'italic';
+        if (customRowStyle.underline) style.textDecoration = 'underline';
       }
       const isData = rowNum > (headerRow || 0) && colNum > (labelCol || 0);
       if (!isData) return style;
@@ -4642,6 +4710,7 @@
       const [toast, setToast] = useState(null);
       const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null, email: null });
       const [dialog, setDialog] = useState(null);
+      const [editorUndoStack, setEditorUndoStack] = useState([]);
       const hydratedRef = useRef(false);
       const localSaveTimerRef = useRef(null);
       const saveTimerRef = useRef(null);
@@ -4812,11 +4881,28 @@
       }), []);
       const bmrTab = state.bmrTab || 'clients';
       const editor = { ...DEFAULT_EDITOR_STATE, ...(state.editor || {}), cells: editorNormalizeGrid(state.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
-      const setEditor = useCallback((next) => setState(s => {
-        const prevEditor = { ...DEFAULT_EDITOR_STATE, ...(s.editor || {}) };
-        return { ...s, editor: typeof next === 'function' ? next(prevEditor) : next };
-      }), []);
+      const pushEditorUndo = useCallback((snapshot) => {
+        const previous = editorSnapshot(snapshot);
+        setEditorUndoStack(stack => {
+          const last = stack[stack.length - 1];
+          if (last && editorStatesEqual(last, previous)) return stack;
+          return [...stack, previous].slice(-60);
+        });
+      }, []);
+      const setEditor = useCallback((next) => {
+        const prevEditor = editorSnapshot(editor);
+        const nextEditor = editorSnapshot(typeof next === 'function' ? next(prevEditor) : next);
+        if (editorStatesEqual(prevEditor, nextEditor)) return;
+        pushEditorUndo(prevEditor);
+        setState(s => ({ ...s, editor: nextEditor }));
+      }, [editor, pushEditorUndo]);
       const editorTab = state.editorTab || 'table';
+      const undoEditor = useCallback(() => {
+        const previous = editorUndoStack[editorUndoStack.length - 1];
+        if (!previous) return;
+        setState(s => ({ ...s, editor: editorSnapshot(previous) }));
+        setEditorUndoStack(stack => stack.slice(0, -1));
+      }, [editorUndoStack]);
       const resetEditor = async () => {
         const ok = await confirmDialog({
           title: 'Reset Editor?',
@@ -4825,7 +4911,8 @@
           tone: 'danger',
         });
         if (!ok) return;
-        setState(s => ({ ...s, editor: { ...DEFAULT_EDITOR_STATE }, editorTab: 'table' }));
+        setEditor({ ...DEFAULT_EDITOR_STATE });
+        setState(s => ({ ...s, editorTab: 'table' }));
       };
 
       const ModuleSwitch = (
@@ -4858,6 +4945,7 @@
                 </div>
                 <div className="flex items-center gap-3">
                   {ModuleSwitch}
+                  <Btn variant="ghost" size="sm" onClick={undoEditor} disabled={!editorUndoStack.length} title="Undo last Editor change"><IconUndo /> Undo</Btn>
                   <Btn variant="ghost" size="sm" onClick={resetEditor}>Reset</Btn>
                   <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
                     {EDITOR_TABS.map(t => (
