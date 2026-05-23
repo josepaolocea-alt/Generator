@@ -690,8 +690,8 @@
         const ws = wb.addWorksheet(safeSheetName(s.name));
         ws.properties.defaultRowHeight = 18;
         if (s.layout === 'hourly')      buildHourlySheet(ws, s, year, month, rules);
-        else if (s.layout === 'flat')   buildFlatSheet(ws, s, year, month);
-        else if (s.layout === 'alarm')  buildAlarmSheet(ws, s);
+        else if (s.layout === 'flat')   buildFlatSheet(ws, s, year, month, rules);
+        else if (s.layout === 'alarm')  buildAlarmSheet(ws, s, rules);
       }
 
       if (changelog && changelog.trim()) {
@@ -708,12 +708,60 @@
       saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
     }
 
+    function rulesForSheet(allRules, sheet) {
+      return (allRules || []).filter(r => !r.targetSheet || r.targetSheet === sheet.id || r.targetSheet === '__all__');
+    }
+
+    function sipRuleStyle(rule, fallbackColor = 'FF166534') {
+      return {
+        fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: rule.color || fallbackColor } },
+        font: { bold: !!rule.bold, color: { argb: rule.fontColor || 'FFFFFFFF' } },
+      };
+    }
+
+    function applyTabularSheetRules(ws, sheet, allRules, dataStartRow, dataEndRow, totalCols) {
+      if (dataEndRow < dataStartRow || totalCols < 1) return;
+      const rules = rulesForSheet(allRules, sheet);
+      if (!rules.length) return;
+      const firstCol = colLetter(1);
+      const lastCol = colLetter(totalCols);
+      const dataRange = `${firstCol}${dataStartRow}:${lastCol}${dataEndRow}`;
+      rules.forEach((r, idx) => {
+        if (!r.enabled) return;
+        const priority = 10 + idx;
+        const style = sipRuleStyle(r);
+        if (r.type === 'above') {
+          const t = Number(r.threshold) || 0;
+          ws.addConditionalFormatting({
+            ref: dataRange,
+            rules: [{ type: 'expression', formulae: [`AND(ISNUMBER(${firstCol}${dataStartRow}),${firstCol}${dataStartRow}>${t})`], style, priority }],
+          });
+        } else if (r.type === 'below') {
+          const t = Number(r.threshold) || 0;
+          ws.addConditionalFormatting({
+            ref: dataRange,
+            rules: [{ type: 'expression', formulae: [`AND(ISNUMBER(${firstCol}${dataStartRow}),${firstCol}${dataStartRow}<${t})`], style, priority }],
+          });
+        } else if (r.type === 'blank') {
+          ws.addConditionalFormatting({
+            ref: dataRange,
+            rules: [{ type: 'expression', formulae: [`ISBLANK(${firstCol}${dataStartRow})`], style: sipRuleStyle(r, 'FF374151'), priority }],
+          });
+        } else if (r.type === 'zero') {
+          ws.addConditionalFormatting({
+            ref: dataRange,
+            rules: [{ type: 'expression', formulae: [`${firstCol}${dataStartRow}=0`], style, priority }],
+          });
+        }
+      });
+    }
+
     function buildHourlySheet(ws, s, year, month, allRules) {
       const hourStart = s.hourStart ?? 0;
       const hourEnd   = s.hourEnd ?? 24;
       const hours = HOURS_24.slice(hourStart, hourEnd);
       const totalCols = 2 + hours.length;
-      const rules = (allRules || []).filter(r => !r.targetSheet || r.targetSheet === s.id || r.targetSheet === '__all__');
+      const rules = rulesForSheet(allRules, s);
 
       let cur = 1;
 
@@ -890,7 +938,7 @@
       }
     }
 
-    function buildFlatSheet(ws, s, year, month) {
+    function buildFlatSheet(ws, s, year, month, allRules) {
       const cols = visibleLabels(s.columns);
       let cur = 1;
       if (s.note && s.note.trim()) {
@@ -921,11 +969,12 @@
           firstRow.getCell(i + 1).numFmt = 'h:mm AM/PM';
         }
       });
+      applyTabularSheetRules(ws, s, allRules, cur + 1, cur + 500, cols.length);
 
       ws.views = [{ state: 'frozen', ySplit: cur }];
     }
 
-    function buildAlarmSheet(ws, s) {
+    function buildAlarmSheet(ws, s, allRules) {
       const visibleCols = visibleItems(s.columns || []);
       const labels = visibleCols.map(itemLabel);
       let cur = 1;
@@ -963,6 +1012,7 @@
           };
         }
       });
+      applyTabularSheetRules(ws, s, allRules, dataStartRow, dataEndRow, labels.length);
 
       ws.views = [{ state: 'frozen', ySplit: cur }];
     }
@@ -2633,11 +2683,17 @@
     ];
 
     function FormattingRules({ rules, sheets, onChange }) {
-      const add = () => onChange([...rules, {
-        id: newId(), type: 'maxInRow', enabled: true,
-        color: 'FF166534', fontColor: 'FFFFFFFF', bold: false,
-        threshold: '', metricMatch: '', targetSheet: '__all__',
-      }]);
+      const [ruleScope, setRuleScope] = useState('__view_all__');
+      const add = (target = ruleScope) => {
+        const targetSheet = target === '__view_all__' ? '__all__' : target;
+        const targetLayout = sheets.find(sheet => sheet.id === targetSheet)?.layout;
+        const defaultType = targetLayout && targetLayout !== 'hourly' ? 'blank' : 'maxInRow';
+        onChange([...rules, {
+          id: newId(), type: defaultType, enabled: true,
+          color: 'FF166534', fontColor: 'FFFFFFFF', bold: false,
+          threshold: '', metricMatch: '', targetSheet,
+        }]);
+      };
       const update = (id, patch) => onChange(rules.map(r => r.id === id ? { ...r, ...patch } : r));
       const remove = (id) => onChange(rules.filter(r => r.id !== id));
       const move = (id, dir) => {
@@ -2648,24 +2704,61 @@
         [arr[idx], arr[next]] = [arr[next], arr[idx]];
         onChange(arr);
       };
+      const scopedRules = rules
+        .map((rule, index) => ({ rule, index }))
+        .filter(({ rule }) => {
+          if (ruleScope === '__view_all__') return true;
+          if (ruleScope === '__all__') return !rule.targetSheet || rule.targetSheet === '__all__';
+          return rule.targetSheet === ruleScope;
+        });
+      const scopeLabel = ruleScope === '__view_all__'
+        ? 'all rules'
+        : ruleScope === '__all__'
+          ? 'all sheets'
+          : (sheets.find(sheet => sheet.id === ruleScope)?.name || 'selected sheet');
 
       return (
         <div className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+            <div className="w-full max-w-sm">
+              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Rule set</label>
+              <Select value={ruleScope} onChange={e => setRuleScope(e.target.value)}>
+                <option value="__view_all__">All rules</option>
+                <option value="__all__">Global rules - all sheets</option>
+                {sheets.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}</option>)}
+              </Select>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pb-0.5">
+              <Pill>{scopedRules.filter(({ rule }) => rule.enabled).length} enabled</Pill>
+              <Pill tone="muted">{scopedRules.length} shown</Pill>
+              <Btn variant="ghost" size="md" onClick={() => add()}><IconPlus /> Add rule</Btn>
+            </div>
+            <p className="w-full text-[11px] text-neutral-500">
+              Rules can be global or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.
+            </p>
+          </div>
           {rules.length === 0 && (
             <div className="rounded-lg border border-dashed border-neutral-800 px-5 py-12 text-center">
               <p className="text-sm text-neutral-300">No formatting rules yet</p>
               <p className="text-xs text-neutral-600 mt-1">Add rules to highlight peaks, flag missing data, mark weekends, etc.</p>
-              <Btn variant="ghost" size="md" onClick={add} className="mt-4"><IconPlus /> Add your first rule</Btn>
+              <Btn variant="ghost" size="md" onClick={() => add()} className="mt-4"><IconPlus /> Add your first rule</Btn>
             </div>
           )}
-          {rules.map((r, idx) => {
+          {rules.length > 0 && scopedRules.length === 0 && (
+            <div className="rounded-lg border border-dashed border-neutral-800 px-5 py-10 text-center">
+              <p className="text-sm text-neutral-300">No rules for {scopeLabel}</p>
+              <p className="text-xs text-neutral-600 mt-1">Add a rule here to keep this sheet's formatting separate.</p>
+              <Btn variant="ghost" size="md" onClick={() => add()} className="mt-4"><IconPlus /> Add rule</Btn>
+            </div>
+          )}
+          {scopedRules.map(({ rule: r, index: idx }, displayIdx) => {
             const typeDef = RULE_TYPES.find(t => t.value === r.type);
             return (
               <Card key={r.id} className="p-4">
                 <div className="flex items-center gap-3 mb-4">
                   <input type="checkbox" checked={r.enabled} onChange={e => update(r.id, { enabled: e.target.checked })}
                     className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
-                  <span className="text-[10px] font-mono text-neutral-600 w-6">{String(idx + 1).padStart(2, '0')}</span>
+                  <span className="text-[10px] font-mono text-neutral-600 w-6">{String(displayIdx + 1).padStart(2, '0')}</span>
                   <Select value={r.type} onChange={e => update(r.id, { type: e.target.value })} className="flex-1">
                     {RULE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </Select>
@@ -2678,7 +2771,7 @@
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
                     <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Applies to</label>
-                    <Select value={r.targetSheet} onChange={e => update(r.id, { targetSheet: e.target.value })}>
+                    <Select value={r.targetSheet || '__all__'} onChange={e => update(r.id, { targetSheet: e.target.value })}>
                       <option value="__all__">All sheets</option>
                       {sheets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </Select>
@@ -2719,7 +2812,7 @@
               </Card>
             );
           })}
-          {rules.length > 0 && <Btn variant="ghost" size="md" onClick={add}><IconPlus /> Add rule</Btn>}
+          {rules.length > 0 && <Btn variant="ghost" size="md" onClick={() => add()}><IconPlus /> Add rule</Btn>}
         </div>
       );
     }
