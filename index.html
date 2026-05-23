@@ -1114,7 +1114,7 @@
         clientsKey: 'retailClients',
         targetOffset: 5,
         balanceOffset: 5,
-        headers: ['Type: CLIENT', 'Name', '', '', '', 'BALANCE', 'Over Draft', '30mins usage', 'Total usage'],
+        headers: ['Client', 'Name', '', '', '', 'BALANCE', 'Over Draft', '30mins usage', 'Total usage'],
       },
       wholesale: {
         label: 'Wholesale',
@@ -1122,7 +1122,7 @@
         clientsKey: 'wholesaleClients',
         targetOffset: 6,
         balanceOffset: 6,
-        headers: ['Type: CLIENT', 'Name', '', '', '', 'OD', 'BALANCE', '30mins usage', 'Total usage'],
+        headers: ['Client', 'Name', '', '', '', 'OD', 'BALANCE', '30mins usage', 'Total usage'],
       },
     };
 
@@ -1546,6 +1546,8 @@
         ws.getColumn(baseCol + 7).width = 14;
         ws.getColumn(baseCol + 8).width = 14;
         ws.getColumn(baseCol + 2).hidden = true;
+        ws.getColumn(baseCol + 3).hidden = true;
+        ws.getColumn(baseCol + 4).hidden = true;
       }
 
       applyBmrSmsNumberFormats(ws, dataStartRow, dataEndRow);
