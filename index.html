@@ -724,7 +724,7 @@
 
       // Header row
       const headerRow = ws.getRow(cur);
-      headerRow.values = [s.dateHeader || 'DATE', s.metricHeader || 'METRIC', ...hours];
+      headerRow.values = [s.dateHeader || 'DATE', s.metricHeader ?? '', ...hours];
       headerRow.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
@@ -2468,7 +2468,7 @@
                   </div>
                   <div>
                     <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Metric column label</label>
-                    <Input value={sheet.metricHeader ?? 'METRIC'} onChange={e => update({ metricHeader: e.target.value })} placeholder="METRIC" />
+                    <Input value={sheet.metricHeader ?? ''} onChange={e => update({ metricHeader: e.target.value })} placeholder="METRIC" />
                   </div>
                 </div>
               </div>
@@ -2652,6 +2652,12 @@
                       onChange={color => update(r.id, { color: 'FF' + color.slice(1) })}
                       title="Choose rule background color" className="w-full" />
                   </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Font color</label>
+                    <PresetColorPicker value={'#' + (r.fontColor || 'FFFFFFFF').slice(2)}
+                      onChange={color => update(r.id, { fontColor: 'FF' + color.slice(1) })}
+                      title="Choose rule font color" className="w-full" />
+                  </div>
                   {typeDef?.needsThreshold && (
                     <div>
                       <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Threshold</label>
@@ -2695,7 +2701,7 @@
               <thead>
                 <tr className="border-b border-neutral-800 bg-neutral-950">
                   <th className="text-left px-3 py-2.5 font-semibold text-neutral-300 sticky left-0 bg-neutral-950">DATE</th>
-                  <th className="text-left px-3 py-2.5 font-semibold text-neutral-300">METRIC</th>
+                  <th className="text-left px-3 py-2.5 font-semibold text-neutral-300">{sheet.metricHeader ?? ''}</th>
                   {hours.map(h => <th key={h} className="text-center px-2 py-2.5 font-semibold text-neutral-400 font-mono">{h}</th>)}
                 </tr>
               </thead>
