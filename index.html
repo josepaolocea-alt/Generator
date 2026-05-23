@@ -316,14 +316,16 @@
     const newId = () => 's_' + Math.random().toString(36).slice(2, 9);
     const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
     /* Items in `metrics` / `columns` can be either a string (visible) or
-       { label, hidden?: true, dropdown?: string[] } (extended form — kept in
-       config; `hidden` skips on generate, `dropdown` adds list validation on
-       alarm-log columns). */
+       { label, hidden?: true, dropdown?: Array<string | {label,color}> }
+       (extended form kept in config; `hidden` skips on generate, `dropdown`
+       adds list validation on alarm-log columns). */
     const itemLabel    = (it) => (typeof it === 'string' ? it : (it?.label ?? ''));
     const itemHidden   = (it) => (typeof it === 'string' ? false : !!it?.hidden);
     const itemDropdown = (it) => (typeof it === 'string' || !it) ? [] : (Array.isArray(it.dropdown) ? it.dropdown : []);
     const itemColor    = (it) => (typeof it === 'string' || !it) ? '' : (it.color || '');
     const itemColorExtend = (it) => (typeof it === 'string' || !it) ? false : !!it.colorExtend;
+    const dropdownOptionLabel = (opt) => (typeof opt === 'string' ? opt : (opt?.label ?? ''));
+    const dropdownOptionColor = (opt) => (typeof opt === 'string' || !opt) ? '' : (opt.color || '');
     const hourlyHasRowSeparator = (sheet) => sheet?.layout === 'hourly' && sheet.rowSeparator !== false;
     const visibleItems  = (arr) => (arr || []).filter(it => !itemHidden(it));
     const visibleLabels = (arr) => visibleItems(arr).map(itemLabel);
@@ -1052,9 +1054,16 @@
       visibleCols.forEach((col, i) => {
         const opts = itemDropdown(col);
         if (!opts.length) return;
-        const safe = opts.map(o => String(o).replace(/,/g, ' ').trim()).filter(Boolean);
+        const safe = opts
+          .map(o => ({
+            label: String(dropdownOptionLabel(o)).replace(/,/g, ' ').trim(),
+            color: dropdownOptionColor(o),
+          }))
+          .filter(o => o.label);
         if (!safe.length) return;
-        const formula = `"${safe.join(',')}"`;
+        const formula = `"${safe.map(o => o.label).join(',')}"`;
+        const colRef = colLetter(i + 1);
+        const validationRange = `${colRef}${dataStartRow}:${colRef}${dataEndRow}`;
         for (let r = dataStartRow; r <= dataEndRow; r++) {
           ws.getCell(r, i + 1).dataValidation = {
             type: 'list',
@@ -1063,6 +1072,20 @@
             showErrorMessage: false,
           };
         }
+        safe.forEach((opt, optIdx) => {
+          const color = argbHex(opt.color, '');
+          if (!color) return;
+          const text = opt.label.replace(/"/g, '""');
+          ws.addConditionalFormatting({
+            ref: validationRange,
+            rules: [{
+              type: 'expression',
+              formulae: [`${colRef}${dataStartRow}="${text}"`],
+              style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: color } } },
+              priority: 200 + (i * 50) + optIdx,
+            }],
+          });
+        });
       });
       applyTabularSheetRules(ws, s, allRules, dataStartRow, dataEndRow, labels.length);
 
@@ -2334,7 +2357,14 @@
         const hidden = itemHidden(x);
         const color = itemColor(x);
         const colorExtend = itemColorExtend(x);
-        const clean = (opts || []).filter(o => String(o).trim() !== '');
+        const clean = (opts || [])
+          .map((opt) => {
+            const label = String(dropdownOptionLabel(opt)).trim();
+            const color = dropdownOptionColor(opt);
+            if (!label) return null;
+            return color ? { label, color } : label;
+          })
+          .filter(Boolean);
         if (!clean.length) {
           if (hidden || color) return { label: lab, ...(hidden ? { hidden: true } : {}), ...(color ? { color } : {}), ...(color && colorExtend ? { colorExtend: true } : {}) };
           return lab;
@@ -2460,12 +2490,21 @@
       const add = () => {
         const v = draft.trim();
         if (!v) return;
-        if (options.includes(v)) { setDraft(''); return; }
+        if (options.some(opt => dropdownOptionLabel(opt).trim().toLowerCase() === v.toLowerCase())) { setDraft(''); return; }
         onChange([...options, v]);
         setDraft('');
       };
       const remove = (i) => onChange(options.filter((_, j) => j !== i));
-      const updateAt = (i, v) => onChange(options.map((o, j) => j === i ? v : o));
+      const updateAt = (i, v) => onChange(options.map((o, j) => {
+        if (j !== i) return o;
+        const color = dropdownOptionColor(o);
+        return color ? { label: v, color } : v;
+      }));
+      const updateColor = (i, color) => onChange(options.map((o, j) => {
+        if (j !== i) return o;
+        const label = dropdownOptionLabel(o);
+        return color ? { label, color } : label;
+      }));
       return (
         <div className="ml-8 mr-2 mt-1.5 mb-2 rounded-md border border-blue-500/20 bg-blue-500/5 p-3">
           <div className="text-[10px] uppercase tracking-wide text-neutral-500 mb-2">
@@ -2476,9 +2515,19 @@
           ) : (
             <div className="space-y-1 mb-2">
               {options.map((o, i) => (
-                <div key={i} className="flex items-center gap-2">
+                <div key={i} className="grid grid-cols-[28px_minmax(160px,1fr)_112px_28px] items-center gap-2">
                   <span className="text-[10px] text-neutral-600 font-mono w-6 text-right shrink-0">{String(i + 1).padStart(2, '0')}</span>
-                  <Input value={o} onChange={e => updateAt(i, e.target.value)} placeholder="Option text" />
+                  <Input value={dropdownOptionLabel(o)} onChange={e => updateAt(i, e.target.value)} placeholder="Option text" />
+                  <div className="flex items-center gap-1">
+                    <PresetColorPicker value={dropdownOptionColor(o) || '#FFFFFF'}
+                      onChange={color => updateColor(i, color)}
+                      title="Choose option color" showHex={false} buttonClassName="h-8 px-1.5 py-1" />
+                    {dropdownOptionColor(o) && (
+                      <button onClick={() => updateColor(i, '')}
+                        className="text-[10px] text-neutral-500 hover:text-red-300 px-1"
+                        title="Clear option color">clear</button>
+                    )}
+                  </div>
                   <button onClick={() => remove(i)} className="p-1.5 text-neutral-500 hover:text-red-400 shrink-0" title="Remove option"><IconX /></button>
                 </div>
               ))}
