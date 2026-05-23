@@ -1205,6 +1205,7 @@
         clientsKey: 'retailClients',
         targetOffset: 5,
         balanceOffset: 5,
+        overdraftOffset: 6,
         headers: ['Client', 'Name', '', '', '', 'BALANCE', 'Over Draft', '30mins usage', 'Total usage'],
       },
       wholesale: {
@@ -1213,6 +1214,7 @@
         clientsKey: 'wholesaleClients',
         targetOffset: 6,
         balanceOffset: 6,
+        overdraftOffset: 5,
         headers: ['Client', 'Name', '', '', '', 'OD', 'BALANCE', '30mins usage', 'Total usage'],
       },
     };
@@ -1265,6 +1267,19 @@
         case 'eq':      return `AND(${hasValue},ISNUMBER(${numericRef}),${numericRef}=${v(rule.value)})`;
         default:        return 'FALSE';
       }
+    }
+
+    function bmrNumericExpression(cellRef) {
+      const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
+      return `IFERROR(VALUE(SUBSTITUTE(${cleanText},",","")),${cellRef})`;
+    }
+
+    function bmrSmsOverdraftConditionFormula(balanceRef, overdraftRef) {
+      const balanceText = `TRIM(SUBSTITUTE(${balanceRef}&"",CHAR(160),""))`;
+      const overdraftText = `TRIM(SUBSTITUTE(${overdraftRef}&"",CHAR(160),""))`;
+      const balanceNum = bmrNumericExpression(balanceRef);
+      const overdraftNum = bmrNumericExpression(overdraftRef);
+      return `AND(LEN(${balanceText})>0,LEN(${overdraftText})>0,ISNUMBER(${balanceNum}),ISNUMBER(${overdraftNum}),${overdraftNum}>0,${balanceNum}<=-ABS(${overdraftNum}))`;
     }
 
     function bmrBuildClientConditionFormula(rule, cellRef, clientName, rowNum) {
@@ -1646,6 +1661,22 @@
 
       let priorityCounter = 300;
       const visibleClientsById = new Map(clients.map(c => [c.id, c]));
+      (sms.overdraftRules || []).filter(r => r.enabled).forEach((rule) => {
+        for (let k = 0; k < slots.length; k++) {
+          const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+          const balanceCol = colLetter(baseCol + market.balanceOffset);
+          const overdraftCol = colLetter(baseCol + market.overdraftOffset);
+          ws.addConditionalFormatting({
+            ref: `${balanceCol}${dataStartRow}:${balanceCol}${dataEndRow}`,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrSmsOverdraftConditionFormula(`${balanceCol}${dataStartRow}`, `${overdraftCol}${dataStartRow}`)],
+              style: bmrStyleFromRule(rule),
+              priority: priorityCounter++,
+            }],
+          });
+        }
+      });
       const targetCols = bmrSmsTargetColLetters(market);
       (sms.targetRules || []).filter(r => r.enabled).forEach((rule) => {
         const client = visibleClientsById.get(rule.clientId);
@@ -3998,6 +4029,9 @@
       wholesaleClients: bmrSmsClientsFromRows(BMR_SMS_WHOLESALE_CLIENT_ROWS, 'sms_whs'),
       accountManagers: [],
       targetRules: [],
+      overdraftRules: [
+        { id: bmrId('smsod'), name: 'Balance reached overdraft', color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true },
+      ],
       usageRules: [
         { id: bmrId('smsur'), name: 'Heavy debit (-0.001 to -49)', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true },
       ],
@@ -5048,12 +5082,68 @@
       );
     }
 
+    function BmrSmsOverdraftRuleEditor({ rule, onChange, onDelete }) {
+      const set = (patch) => onChange({ ...rule, ...patch });
+      return (
+        <Card className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <input type="checkbox" checked={rule.enabled !== false} onChange={e => set({ enabled: e.target.checked })}
+              title="Enable rule"
+              className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+            <Input value={rule.name || ''} onChange={e => set({ name: e.target.value })} placeholder="Rule name" />
+            <button onClick={onDelete} className="p-1.5 text-neutral-500 hover:text-red-400" title="Delete rule"><IconX /></button>
+          </div>
+          <p className="mb-3 text-[11px] leading-relaxed text-neutral-500">
+            Colors the BALANCE cell when the balance is debit and the debit amount reaches the Over Draft / OD value in the same time block.
+          </p>
+          <div className="flex flex-wrap items-center gap-3 text-[11px] text-neutral-400">
+            <span className="inline-flex items-center gap-1">
+              <span className="text-[10px] uppercase tracking-wide text-neutral-500">Fill</span>
+              <BmrColorSwatch value={rule.color} onChange={v => set({ color: v })} />
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="text-[10px] uppercase tracking-wide text-neutral-500">Font</span>
+              <BmrColorSwatch value={rule.fontColor} onChange={v => set({ fontColor: v })} />
+            </span>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.bold ? 'text-neutral-100 font-bold' : ''}`}>
+              <input type="checkbox" checked={!!rule.bold} onChange={e => set({ bold: e.target.checked })} className="w-3.5 h-3.5" />
+              <span className="font-bold">B</span>
+            </label>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.italic ? 'text-neutral-100 italic' : ''}`}>
+              <input type="checkbox" checked={!!rule.italic} onChange={e => set({ italic: e.target.checked })} className="w-3.5 h-3.5" />
+              <span className="italic">I</span>
+            </label>
+            <label className={`inline-flex items-center gap-1.5 cursor-pointer ${rule.underline ? 'text-neutral-100 underline' : ''}`}>
+              <input type="checkbox" checked={!!rule.underline} onChange={e => set({ underline: e.target.checked })} className="w-3.5 h-3.5" />
+              <span className="underline">U</span>
+            </label>
+          </div>
+        </Card>
+      );
+    }
+
     function BmrSmsRulesPanel({ sms, onChange }) {
       const ruleClients = useMemo(() => bmrSmsCombinedRuleClients(sms), [sms]);
       const rulesBmr = useMemo(() => ({
         ...sms,
         clients: ruleClients,
       }), [sms, ruleClients]);
+      const overdraftRules = sms.overdraftRules || DEFAULT_BMR_SMS_STATE.overdraftRules;
+      const addOverdraftRule = () => onChange(prev => ({
+        ...(prev || DEFAULT_BMR_SMS_STATE),
+        overdraftRules: [
+          ...((prev || DEFAULT_BMR_SMS_STATE).overdraftRules || []),
+          { id: bmrId('smsod'), name: 'Balance reached overdraft', color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true },
+        ],
+      }));
+      const updateOverdraftRule = (id, next) => onChange(prev => ({
+        ...(prev || DEFAULT_BMR_SMS_STATE),
+        overdraftRules: ((prev || DEFAULT_BMR_SMS_STATE).overdraftRules || []).map(rule => rule.id === id ? next : rule),
+      }));
+      const deleteOverdraftRule = (id) => onChange(prev => ({
+        ...(prev || DEFAULT_BMR_SMS_STATE),
+        overdraftRules: ((prev || DEFAULT_BMR_SMS_STATE).overdraftRules || []).filter(rule => rule.id !== id),
+      }));
       const setRulesBmr = useCallback((next) => {
         onChange((prevSms) => {
           const base = { ...DEFAULT_BMR_SMS_STATE, ...(prevSms || {}) };
@@ -5068,13 +5158,27 @@
       }, [onChange]);
 
       return (
-        <BmrRulesPanel
-          bmr={rulesBmr}
-          onChange={setRulesBmr}
-          targetTitle="Balance column rules"
-          targetHint="Each rule targets one SMS client across the 25 Balance columns. Retail uses BALANCE; Wholesale uses BALANCE after OD."
-          usageHint="Applies to all 25 SMS 30mins usage columns in RES and WHS sheets."
-        />
+        <div className="space-y-10">
+          <div>
+            <SectionLabel hint="BMR SMS only - compares BALANCE with Over Draft / OD in the same time block">Overdraft reached rules</SectionLabel>
+            <div className="space-y-2">
+              {overdraftRules.map(rule => (
+                <BmrSmsOverdraftRuleEditor key={rule.id} rule={rule}
+                  onChange={(next) => updateOverdraftRule(rule.id, next)}
+                  onDelete={() => deleteOverdraftRule(rule.id)} />
+              ))}
+              <Btn variant="ghost" size="sm" onClick={addOverdraftRule}><IconPlus /> Add overdraft rule</Btn>
+            </div>
+          </div>
+          <div aria-hidden="true" className="border-t-2 border-neutral-700"></div>
+          <BmrRulesPanel
+            bmr={rulesBmr}
+            onChange={setRulesBmr}
+            targetTitle="Balance column rules"
+            targetHint="Each rule targets one SMS client across the 25 Balance columns. Retail uses BALANCE; Wholesale uses BALANCE after OD."
+            usageHint="Applies to all 25 SMS 30mins usage columns in RES and WHS sheets."
+          />
+        </div>
       );
     }
 
@@ -5784,6 +5888,7 @@
         wholesaleClients: Array.isArray(sms.wholesaleClients) ? sms.wholesaleClients : DEFAULT_BMR_SMS_STATE.wholesaleClients,
         accountManagers: Array.isArray(sms.accountManagers) ? sms.accountManagers : [],
         targetRules: Array.isArray(sms.targetRules) ? sms.targetRules : [],
+        overdraftRules: Array.isArray(sms.overdraftRules) ? sms.overdraftRules : DEFAULT_BMR_SMS_STATE.overdraftRules,
         usageRules: Array.isArray(sms.usageRules) ? sms.usageRules : DEFAULT_BMR_SMS_STATE.usageRules,
       };
     }
@@ -6235,7 +6340,9 @@
         const visibleRetail = (bmrSms.retailClients || []).filter(c => !c.hidden).length;
         const visibleWholesale = (bmrSms.wholesaleClients || []).filter(c => !c.hidden).length;
         const smsClientIds = new Set([...(bmrSms.retailClients || []), ...(bmrSms.wholesaleClients || [])].map(c => c.id));
-        const activeBmrSmsRules = ((bmrSms.targetRules || []).filter(r => r.enabled && smsClientIds.has(r.clientId)).length) + ((bmrSms.usageRules || []).filter(r => r.enabled).length);
+        const activeBmrSmsRules = ((bmrSms.targetRules || []).filter(r => r.enabled && smsClientIds.has(r.clientId)).length)
+          + ((bmrSms.overdraftRules || []).filter(r => r.enabled).length)
+          + ((bmrSms.usageRules || []).filter(r => r.enabled).length);
         const shiftCount = (bmrSms.includeDay !== false ? 1 : 0) + (bmrSms.includeNight !== false ? 1 : 0);
         const sheetCount = Math.max(1, shiftCount) * 2;
         return (
