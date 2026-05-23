@@ -5030,18 +5030,67 @@
       editorTab: 'table',
     };
 
+    function timestampMs(value) {
+      if (!value) return 0;
+      if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+      if (typeof value === 'string') {
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+      if (typeof value.toMillis === 'function') return value.toMillis();
+      if (typeof value.seconds === 'number') {
+        return (value.seconds * 1000) + Math.floor((value.nanoseconds || 0) / 1000000);
+      }
+      return 0;
+    }
+
+    function stateEditedAt(data) {
+      return Math.max(timestampMs(data?.localUpdatedAt), timestampMs(data?.updatedAt));
+    }
+
+    function migrateSheetItem(item) {
+      const label = itemLabel(item);
+      const nextLabel = label.trim().toLowerCase() === 'remarks from tse' ? 'Remarks from L2' : label;
+      if (nextLabel === label) return item;
+      return typeof item === 'string' ? nextLabel : { ...item, label: nextLabel };
+    }
+
+    function migrateSheets(sheets) {
+      const list = Array.isArray(sheets) && sheets.length ? sheets : DEFAULT_SHEETS;
+      return list.map(sheet => ({
+        ...sheet,
+        ...(Array.isArray(sheet.columns) ? { columns: sheet.columns.map(migrateSheetItem) } : {}),
+        ...(Array.isArray(sheet.metrics) ? { metrics: sheet.metrics.map(migrateSheetItem) } : {}),
+      }));
+    }
+
+    function normalizeAppState(raw = {}) {
+      const merged = { ...DEFAULT_STATE, ...(raw || {}) };
+      const bmr = { ...DEFAULT_BMR_STATE, ...(merged.bmr || {}) };
+      const editorRaw = merged.editor || {};
+      const editor = { ...DEFAULT_EDITOR_STATE, ...editorRaw, cells: editorNormalizeGrid(editorRaw.cells || DEFAULT_EDITOR_STATE.cells) };
+      return { ...merged, sheets: migrateSheets(merged.sheets), bmr, editor };
+    }
+
     function App() {
-      const [state, setState] = useState(() => {
+      const [state, setStateRaw] = useState(() => {
         try {
           const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
           if (saved && Array.isArray(saved.sheets)) {
-            const bmr = { ...DEFAULT_BMR_STATE, ...(saved.bmr || {}) };
-            const editor = { ...DEFAULT_EDITOR_STATE, ...(saved.editor || {}), cells: editorNormalizeGrid(saved.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
-            return { ...DEFAULT_STATE, ...saved, bmr, editor };
+            return normalizeAppState(saved);
           }
         } catch {}
-        return DEFAULT_STATE;
+        return normalizeAppState(DEFAULT_STATE);
       });
+      const userEditRef = useRef(false);
+      const setState = useCallback((next) => {
+        setStateRaw(prev => {
+          const resolved = typeof next === 'function' ? next(prev) : next;
+          if (resolved === prev) return prev;
+          userEditRef.current = true;
+          return normalizeAppState({ ...resolved, localUpdatedAt: Date.now() });
+        });
+      }, []);
       const [busy, setBusy] = useState(false);
       const [toast, setToast] = useState(null);
       const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null, email: null });
@@ -5096,11 +5145,14 @@
             const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
             const snap = await ref.get();
             if (snap.exists) {
-              const remote = mergeLocalSheetActiveFlags(snap.data());
+              const remote = normalizeAppState(mergeLocalSheetActiveFlags(snap.data()));
               if (remote && Array.isArray(remote.sheets)) {
-                const remoteBmr = { ...DEFAULT_BMR_STATE, ...(remote.bmr || {}) };
-                const remoteEditor = { ...DEFAULT_EDITOR_STATE, ...(remote.editor || {}), cells: editorNormalizeGrid(remote.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
-                setState(s => ({ ...DEFAULT_STATE, ...remote, bmr: remoteBmr, editor: remoteEditor, tab: s.tab }));
+                setStateRaw(local => {
+                  const current = normalizeAppState(local);
+                  const keepLocal = stateEditedAt(current) > stateEditedAt(remote);
+                  if (keepLocal) userEditRef.current = true;
+                  return { ...(keepLocal ? current : remote), tab: current.tab };
+                });
               }
             }
             hydratedRef.current = true;
@@ -5117,14 +5169,17 @@
       // Firebase: debounced write-back on state change (only after hydration)
       useEffect(() => {
         if (!window.__fb || !hydratedRef.current || !sync.uid) return;
+        if (!userEditRef.current) return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         setSync(s => s.status === 'offline' || s.status === 'saving' ? s : { ...s, status: 'saving' });
         saveTimerRef.current = setTimeout(async () => {
+          const localUpdatedAt = state.localUpdatedAt || stateEditedAt(state) || Date.now();
           try {
             const { db } = window.__fb;
             const { tab, ...persist } = state;
             await db.collection('users').doc(sync.uid).collection('state').doc('main')
-              .set({ ...persist, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+              .set({ ...persist, localUpdatedAt, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+            if ((state.localUpdatedAt || stateEditedAt(state) || localUpdatedAt) === localUpdatedAt) userEditRef.current = false;
             setSync(s => ({ ...s, status: 'synced' }));
           } catch (e) {
             console.warn('Firestore save failed', e);
