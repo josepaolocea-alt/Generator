@@ -2531,10 +2531,10 @@
               </div>
               <div>
                 <SectionLabel hint="Borders on every fillable data cell in each day block">Cell borders</SectionLabel>
-                <label className="flex items-center gap-2 text-sm text-neutral-300 cursor-pointer mb-3">
+                <label className="inline-flex min-h-10 items-center gap-3 rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2 text-sm text-neutral-300 hover:border-neutral-800 hover:bg-neutral-900/50 select-none mb-3" style={{ cursor: 'pointer' }}>
                   <input type="checkbox" checked={!!sheet.bordersOnData}
                     onChange={e => update({ bordersOnData: e.target.checked })}
-                    className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
+                    className="h-4 w-4 shrink-0 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
                   Add borders to data range
                 </label>
                 {sheet.bordersOnData && (
