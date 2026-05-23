@@ -1104,6 +1104,27 @@
     const BMR_DECIMAL_OFFSETS = [1, 2, 5, 6, 7, 8, BMR_AMOUNT_OFFSET, BMR_USAGE_OFFSET, BMR_TOTAL_OFFSET];
     const BMR_SLOT_COUNT = 25;
     const BMR_EXTRA_ROWS = 10;
+    const BMR_SMS_BLOCK_COLS = 9;
+    const BMR_SMS_USAGE_OFFSET = 7;
+    const BMR_SMS_TOTAL_OFFSET = 8;
+    const BMR_SMS_MARKETS = {
+      retail: {
+        label: 'Retail',
+        code: 'RES',
+        clientsKey: 'retailClients',
+        targetOffset: 5,
+        balanceOffset: 5,
+        headers: ['Type: CLIENT', 'Name', '', '', '', 'BALANCE', 'Over Draft', '30mins usage', 'Total usage'],
+      },
+      wholesale: {
+        label: 'Wholesale',
+        code: 'WHS',
+        clientsKey: 'wholesaleClients',
+        targetOffset: 6,
+        balanceOffset: 6,
+        headers: ['Type: CLIENT', 'Name', '', '', '', 'OD', 'BALANCE', '30mins usage', 'Total usage'],
+      },
+    };
 
     function bmrSlotsForShift(shift) {
       const slots = [];
@@ -1193,7 +1214,7 @@
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
-    function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount) {
+    function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount, blockCols = BMR_BLOCK_COLS) {
       if (bmr.bordersOnData === false) return;
 
       const borderColor = bmr.borderColor || 'FF374151';
@@ -1212,8 +1233,8 @@
       }
 
       for (let k = 0; k < slotCount; k++) {
-        const blockStart = 3 + k * BMR_BLOCK_COLS;
-        const blockEnd = blockStart + BMR_BLOCK_COLS - 1;
+        const blockStart = 3 + k * blockCols;
+        const blockEnd = blockStart + blockCols - 1;
         ws.getCell(1, blockStart).border = {
           top: cellBorder,
           left: timeBorder,
@@ -1409,7 +1430,205 @@
         buildBmrSheet(ws, bmr, shift);
       }
       const buf = await wb.xlsx.writeBuffer();
-      const filename = `BMR_${bmrTodayString()}.xlsx`;
+      const filename = `BMR_VOIP_${bmrTodayString()}.xlsx`;
+      saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
+      return filename;
+    }
+
+    function bmrSmsClientNameWidth(clients) {
+      const longest = (clients || []).reduce((max, client) => Math.max(max, String(client.name || '').length), 0);
+      return Math.max(16, Math.min(42, longest + 2));
+    }
+
+    function bmrSmsTargetColLetters(market) {
+      return Array.from({ length: BMR_SLOT_COUNT }, (_, k) =>
+        colLetter(3 + k * BMR_SMS_BLOCK_COLS + market.targetOffset)
+      );
+    }
+
+    function bmrSmsUsageColLetters() {
+      return Array.from({ length: BMR_SLOT_COUNT }, (_, k) =>
+        colLetter(3 + k * BMR_SMS_BLOCK_COLS + BMR_SMS_USAGE_OFFSET)
+      );
+    }
+
+    function applyBmrSmsNumberFormats(ws, dataStartRow, dataEndRow) {
+      for (let k = 0; k < BMR_SLOT_COUNT; k++) {
+        const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+        [5, 6, BMR_SMS_USAGE_OFFSET, BMR_SMS_TOTAL_OFFSET].forEach((offset) => {
+          for (let r = dataStartRow; r <= dataEndRow; r++) {
+            ws.getCell(r, baseCol + offset).numFmt = '0.00';
+          }
+        });
+      }
+    }
+
+    function bmrSmsSheetName(market, shift) {
+      return `${market.code} ${shift === 'day' ? 'DAY (7AM-7PM)' : 'NIGHT (7PM-7AM)'}`;
+    }
+
+    function buildBmrSmsSheet(ws, sms, marketKey, shift) {
+      const market = BMR_SMS_MARKETS[marketKey];
+      const slots = bmrSlotsForShift(shift);
+      const clients = (sms[market.clientsKey] || []).filter(c => !c.hidden);
+      const accountManagersById = bmrAccountManagersById(sms);
+      const totalCols = 2 + slots.length * BMR_SMS_BLOCK_COLS;
+      const dataStartRow = 3;
+      const dataRowCount = clients.length + BMR_EXTRA_ROWS;
+      const dataEndRow = dataStartRow + dataRowCount - 1;
+
+      for (let k = 0; k < slots.length; k++) {
+        const c = 3 + k * BMR_SMS_BLOCK_COLS;
+        const cell = ws.getCell(1, c);
+        cell.value = slots[k];
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        ws.mergeCells(1, c, 1, c + BMR_SMS_BLOCK_COLS - 1);
+      }
+      ws.getRow(1).height = 22;
+
+      ws.getCell(2, 1).value = 'CLIENT';
+      ws.getCell(2, 2).value = 'Allow Bal';
+      for (let k = 0; k < slots.length; k++) {
+        const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+        market.headers.forEach((header, offset) => {
+          ws.getCell(2, baseCol + offset).value = header;
+        });
+      }
+      ws.getRow(2).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+      ws.getRow(2).height = 24;
+
+      for (let i = 0; i < dataRowCount; i++) {
+        const client = clients[i];
+        const r = dataStartRow + i;
+        if (client) {
+          const clientColor = bmrClientColor(sms, client, accountManagersById);
+          ws.getCell(r, 1).value = client.name;
+          ws.getCell(r, 2).value = client.allowBalanceLabel || '';
+          if (clientColor) {
+            ws.getCell(r, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(clientColor) } };
+          }
+        }
+
+        for (let k = 0; k < slots.length; k++) {
+          const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+          const balanceCol = colLetter(baseCol + market.balanceOffset);
+          const usageCol = colLetter(baseCol + BMR_SMS_USAGE_OFFSET);
+          if (k === 0) {
+            ws.getCell(r, baseCol + BMR_SMS_USAGE_OFFSET).value = 0;
+            ws.getCell(r, baseCol + BMR_SMS_TOTAL_OFFSET).value = 0;
+          } else {
+            const prevBalance = colLetter(baseCol + market.balanceOffset - BMR_SMS_BLOCK_COLS);
+            const prevTotal = colLetter(baseCol + (k === 1 ? BMR_SMS_USAGE_OFFSET : BMR_SMS_TOTAL_OFFSET) - BMR_SMS_BLOCK_COLS);
+            ws.getCell(r, baseCol + BMR_SMS_USAGE_OFFSET).value = { formula: `${prevBalance}${r}-${balanceCol}${r}` };
+            ws.getCell(r, baseCol + BMR_SMS_TOTAL_OFFSET).value = { formula: `${prevTotal}${r}+${usageCol}${r}` };
+          }
+        }
+      }
+
+      const clientWidth = bmrSmsClientNameWidth(clients);
+      ws.getColumn(1).width = clientWidth;
+      ws.getColumn(2).width = 22;
+      for (let k = 0; k < slots.length; k++) {
+        const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+        ws.getColumn(baseCol).width = 16;
+        ws.getColumn(baseCol + 1).width = clientWidth;
+        ws.getColumn(baseCol + 2).width = 4;
+        ws.getColumn(baseCol + 3).width = 4;
+        ws.getColumn(baseCol + 4).width = 4;
+        ws.getColumn(baseCol + 5).width = 14;
+        ws.getColumn(baseCol + 6).width = 14;
+        ws.getColumn(baseCol + 7).width = 14;
+        ws.getColumn(baseCol + 8).width = 14;
+        ws.getColumn(baseCol + 2).hidden = true;
+      }
+
+      applyBmrSmsNumberFormats(ws, dataStartRow, dataEndRow);
+      applyBmrBorders(ws, sms, totalCols, dataEndRow, slots.length, BMR_SMS_BLOCK_COLS);
+
+      let priorityCounter = 300;
+      const visibleClientsById = new Map(clients.map(c => [c.id, c]));
+      const targetCols = bmrSmsTargetColLetters(market);
+      (sms.targetRules || []).filter(r => r.enabled).forEach((rule) => {
+        const client = visibleClientsById.get(rule.clientId);
+        if (!client?.name) return;
+        targetCols.forEach((cl) => {
+          ws.addConditionalFormatting({
+            ref: `${cl}${dataStartRow}:${cl}${dataEndRow}`,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrBuildClientConditionFormula(rule, `${cl}${dataStartRow}`, client.name, dataStartRow)],
+              style: bmrStyleFromRule(rule),
+              priority: priorityCounter++,
+            }],
+          });
+        });
+      });
+
+      bmrSmsUsageColLetters().forEach((cl) => {
+        (sms.usageRules || []).filter(r => r.enabled).forEach((rule) => {
+          ws.addConditionalFormatting({
+            ref: `${cl}${dataStartRow}:${cl}${dataEndRow}`,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
+              style: bmrStyleFromRule(rule),
+              priority: priorityCounter++,
+            }],
+          });
+        });
+      });
+
+      clients.forEach((client) => {
+        const clientColor = bmrClientColor(sms, client, accountManagersById);
+        if (!clientColor) return;
+        const safe = (client.name || '').replace(/"/g, '""');
+        const clientCols = ['A'];
+        if (sms.colorBlockCarrierNames !== false) {
+          for (let k = 0; k < slots.length; k++) {
+            const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+            clientCols.push(colLetter(baseCol), colLetter(baseCol + 1));
+          }
+        }
+        ws.addConditionalFormatting({
+          ref: clientCols.map((clientCol) => `${clientCol}${dataStartRow}:${clientCol}${dataEndRow}`).join(' '),
+          rules: [{
+            type: 'expression',
+            formulae: [`EXACT(TRIM(SUBSTITUTE(A${dataStartRow}&"",CHAR(160),"")),"${safe}")`],
+            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
+            priority: priorityCounter++,
+          }],
+        });
+      });
+
+      ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
+    }
+
+    async function generateBmrSmsWorkbook(state) {
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'BMR SMS Generator';
+      wb.created = new Date();
+      const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
+      const shifts = [];
+      if (sms.includeDay !== false) shifts.push('day');
+      if (sms.includeNight !== false) shifts.push('night');
+      if (!shifts.length) shifts.push('day');
+
+      shifts.forEach((shift) => {
+        ['retail', 'wholesale'].forEach((marketKey) => {
+          const market = BMR_SMS_MARKETS[marketKey];
+          const ws = wb.addWorksheet(bmrSmsSheetName(market, shift));
+          buildBmrSmsSheet(ws, sms, marketKey, shift);
+        });
+      });
+
+      const buf = await wb.xlsx.writeBuffer();
+      const filename = `BMR_SMS_${bmrTodayString()}.xlsx`;
       saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
       return filename;
     }
@@ -3667,6 +3886,38 @@
       notes: '',
     };
 
+    const BMR_SMS_RETAIL_CLIENT_ROWS = [["CYN 168WATC",""],["CYN 168WATC2",""],["CYN 168WATC3",""],["CYN 2XLUCKY",""],["CYN 747",""],["CYN 88CASH","1000000.0"],["CYN ACTIVEONE",""],["CYN AEI",""],["CYN AHS",""],["CYN AHS2",""],["CYN AIQON",""],["CYN ALLENSMS",""],["CYN AMEYO QATAR",""],["CYN AMND","$2 debit"],["CYN ANYBET","$5 debit"],["CYN ASIALINK","$2 debit"],["CYN AZN-SKY",""],["CYN BILLESE","$10 debit"],["CYN BRGYBEL-AIR","$1000 debit"],["CYN CASH EXPRESS","$10 debit"],["CYN CEPAT KREDIT","$1200 debit"],["CYN CRISPY",""],["CYN CS TEST",""],["CYN D88",""],["CYN DEMO",""],["CYN DRAGON ROYALE",""],["CYN DWC","$2 debit"],["CYN EU9",""],["CYN EXOTEL-ASURION",""],["CYN FACHAI",""],["CYN FEETSMART",""],["CYN FGH",""],["CYN FINASIATECHSMS","$40 debit advise Client\n$60 debit block"],["CYN FOVTY","$5000 debit"],["CYN FRANZ TEST",""],["CYN FUSION BPO",""],["CYN GAMBIT",""],["CYN GDM",""],["CYN GetKleanSMS","$300 debit"],["CYN GG",""],["CYN GREATMANGO",""],["CYN HOLOJILI",""],["CYN HOLOJILI 2",""],["CYN IB8",""],["CYN INT-SB365",""],["CYN JILI711",""],["CYN JLS",""],["CYN JLSOTP",""],["CYN KARECO",""],["CYN KasadoBet",""],["CYN KasadoOTP",""],["CYN KITAL",""],["CYN LPIT2",""],["CYN LUCKYME PLUS","$35.71 debit"],["CYN LUXE",""],["CYN MalaCash","$100 debit"],["CYN MOTION2",""],["CYN MWG",""],["CYN NEWFENIX",""],["CYN OchoWin",""],["CYN OLP","$5500 debit"],["CYN OODC",""],["CYN PANDR SMS",""],["CYN PARE",""],["CYN PEMC",""],["CYN PinasWins",""],["CYN PinoyGo",""],["CYN PJC SMS",""],["CYN PLAYVERSE",""],["CYN POWERPLAY",""],["CYN SAMLUK",""],["CYN SG8","$500 debit"],["CYN SG82","$500 debit"],["CYN SGDLABS",""],["CYN SPM SMS","$6900 debit"],["CYN SWN",""],["CYN SWN10",""],["CYN SWN11",""],["CYN SWN12",""],["CYN SWN13",""],["CYN SWN14",""],["CYN SWN15",""],["CYN SWN16",""],["CYN SWN17",""],["CYN SWN18",""],["CYN SWN19",""],["CYN SWN2",""],["CYN SWN20",""],["CYN SWN21",""],["CYN SWN22",""],["CYN SWN23",""],["CYN SWN24",""],["CYN SWN25",""],["CYN SWN26",""],["CYN SWN27",""],["CYN SWN28",""],["CYN SWN29",""],["CYN SWN3",""],["CYN SWN30",""],["CYN SWN31",""],["CYN SWN32",""],["CYN SWN33",""],["CYN SWN34",""],["CYN SWN35",""],["CYN SWN36",""],["CYN SWN37",""],["CYN SWN38",""],["CYN SWN39",""],["CYN SWN4",""],["CYN SWN40",""],["CYN SWN41",""],["CYN SWN42",""],["CYN SWN43",""],["CYN SWN44",""],["CYN SWN45",""],["CYN SWN46",""],["CYN SWN47",""],["CYN SWN48","$1300 debit"],["CYN SWN49","$1000 debit"],["CYN SWN5",""],["CYN SWN50",""],["CYN SWN51",""],["CYN SWN52",""],["CYN SWN53","$5 debit"],["CYN SWN54",""],["CYN SWN6",""],["CYN SWN7",""],["CYN SWN8",""],["CYN SWN9",""],["CYN TALKPUSH","$10 credit advise Client\n$3000 debit"],["CYN TeleservSMS","$500 credit"],["CYN TEMASEK","$100 debit"],["CYN TopSky",""],["CYN TopSkyMKT",""],["CYN TRG",""],["CYN ULTRA",""],["CYN WINFORDBET",""],["CYN WINFORDBET2",""],["SMS CYN QILIANG",""]];
+    const BMR_SMS_WHOLESALE_CLIENT_ROWS = [["C_SMS-CYN AIQON","$5000 debit"],["C_SMS-CYN DEMO",""],["C_SMS-CYN GAEI-TF",""],["C_SMS-CYN ITVAS",""],["C_SMS-CYN PRLI",""],["C_SMS_CYN RIZAL PROV","$5 debit"],["C_SMS-CYN SUNORO",""],["C_SMS-CYN SWN",""],["C_SMS-CYN SWN2",""],["C_SMS-CYN SWN3",""],["C_SMS-CYN SWN4",""],["C_SMS-CYN SWN5",""],["C_SMS-CYN SWN6",""],["C_SMS-CYN SWN7",""],["C_SMS-CYN SWN8",""],["C_SMS-CYN TEMASEK","$200 debit"],["C_SMS-CYN TEST NOC",""],["C_SMS-CYN TEST OTP",""],["C_SMS-CYN TEST2",""],["C_SMS-CYN TEXCELL",""],["C_CYN 168WATC3",""],["C_SMS-CYN",""],["C_SMS-CYN GAEI",""],["C_SMS-CYN HEYSCLOUDSMS",""],["C_SMS-CYN KITAL","$2000 debit"],["C_SMS-CYN OODC",""],["C_SMS-CYN ROYALCABLE",""],["C_SMS-CYN VTS",""],["C_SMS-CYN 1Cyxdynamiq",""],["C_SMS-CYN 2Cyxdynamiq","$82 debit"],["C_SMS-CYN ASMSC PHOENIX",""],["C_SMS-CYN CHONRY","$24 debit"],["C_SMS-CYN CLOOPENSMS",""],["C_SMS-CYN DIDLOGIC",""],["C_SMS-CYN ELFO","$3000 debit"],["C_SMS-CYN EXOTEL","$40000 debit"],["C_SMS-CYN GLORY","$5000 debit"],["C_SMS-CYN GREENPACKET","$2000 debit"],["C_SMS-CYN GTS",""],["C_SMS-CYN IBAZAAR",""],["C_SMS-CYN ILOMILO",""],["C_SMS-CYN INNOVOCOM",""],["C_SMS-CYN ITNIO","$20000 debit"],["C_SMS-CYN ITNIO INTL","$2000 debit"],["C_SMS-CYN ITVAS",""],["C_SMS-CYN KING PH","$7000 debit"],["C_SMS-CYN LANCK",""],["C_SMS-CYN LPIT",""],["C_SMS-CYN M360",""],["C_SMS-CYN MCT",""],["C_SMS-CYN MONTY MOBILE",""],["C_SMS-CYN MOTION",""],["C_SMS-CYN NEXTGEN","$3000 debit"],["C_SMS-CYN NXTGN S&C",""],["C_SMS-CYN OAKTEL",""],["C_SMS-CYN PLUTO",""],["C_SMS-CYN SHENTECH",""],["C_SMS-CYN SKYLINE","$40000 debit"],["C_SMS-CYN SKYLINE DOMESTIC","$2000 debit"],["C_SMS-CYN SKYLINE MRKTNG",""],["C_SMS-CYN SMART TECH","$2000 debit"],["C_SMS-CYN SOLUTIONS4U","$100 debit"],["C_SMS-CYN SUNORO","$2000 debit"],["C_SMS-CYN TELESIGN",""],["C_SMS-CYN TESTELIUM (SMS Test Tool)",""],["C_SMS-CYN TEXCELL","$1000 debit"],["C_SMS-CYN TIG",""],["C_SMS-CYN TIG",""],["C_SMS-CYN TIGO","$3000 debit"],["C_SMS-CYN TM",""],["C_SMS-CYN TOKU",""],["C_SMS-CYN TOKU2",""],["C_SMS-CYN TOPYING",""],["C_SMS-CYN TOPYING",""],["C_SMS-CYN TWILIO",""],["C_SMS-CYN ULTRAMARINE","$3000 debit"],["C_SMS-CYN VOIPCONNECT",""],["C_SMS-CYN VONAGE","$5000 debit"],["C_SMS-CYN VOXCO","$1000 debit"],["C_SMS-CYN VTS",""],["C_SMS-CYN VTSI",""],["C_SMS-CYN VTSMP","$4000 debit"],["C_SMS-CYN VTSMP 2","$1200 debit"],["C_SMS-CYN VTSMP 3",""],["C_SMS-CYN VTSMP 4",""],["C_SMS-CYN VTSMP 5",""],["C_SMS-CYN ZIFFY",""],["CYN VTSMP_2",""]];
+
+    function bmrSmsClientsFromRows(rows, prefix) {
+      return rows.map(([name, allowBalanceLabel], index) => ({
+        id: `${prefix}_${String(index + 1).padStart(3, '0')}`,
+        name,
+        color: '',
+        allowBalanceLabel: allowBalanceLabel || '',
+        accountManagerId: '',
+        hidden: false,
+      }));
+    }
+
+    const DEFAULT_BMR_SMS_STATE = {
+      retailClients: bmrSmsClientsFromRows(BMR_SMS_RETAIL_CLIENT_ROWS, 'sms_res'),
+      wholesaleClients: bmrSmsClientsFromRows(BMR_SMS_WHOLESALE_CLIENT_ROWS, 'sms_whs'),
+      accountManagers: [],
+      targetRules: [],
+      usageRules: [
+        { id: bmrId('smsur'), name: 'Heavy debit (-0.001 to -49)', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true },
+      ],
+      colorBlockCarrierNames: true,
+      bordersOnData: true,
+      borderStyle: 'thin',
+      timeSeparatorBorderStyle: 'thick',
+      borderColor: 'FF374151',
+      includeDay: true,
+      includeNight: true,
+      notes: '',
+    };
+
     function BmrColorSwatch({ value, onChange, allowClear = true }) {
       return (
         <span className="inline-flex items-center gap-1.5">
@@ -3988,7 +4239,7 @@
       );
     });
 
-    function BmrClientsEditor({ bmr, onChange }) {
+    function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarrierNameSettings = true }) {
       const [draftName, setDraftName] = useState('');
       const [insertAt, setInsertAt] = useState('');
       const [managerFilter, setManagerFilter] = useState('__all__');
@@ -4079,8 +4330,8 @@
       return (
         <div className="space-y-3">
           <BmrClientImporter bmr={bmr} onChange={onChange} />
-          <BmrBlockColumnHider bmr={bmr} onChange={onChange} />
-          <BmrCarrierNameSettings bmr={bmr} onChange={onChange} />
+          {showBlockColumnHider && <BmrBlockColumnHider bmr={bmr} onChange={onChange} />}
+          {showCarrierNameSettings && <BmrCarrierNameSettings bmr={bmr} onChange={onChange} />}
           <BmrBorderSettings bmr={bmr} onChange={onChange} />
           <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
           <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
@@ -4268,7 +4519,13 @@
       );
     }
 
-    function BmrRulesPanel({ bmr, onChange }) {
+    function BmrRulesPanel({
+      bmr,
+      onChange,
+      targetTitle = 'Target column rules - Amnt Receivable',
+      targetHint = 'Each rule targets one client across all 25 Amnt Receivable columns (L, X, AJ, ..., KN)',
+      usageHint = 'Applies to all 25 "30mins usage" columns (M, Y, AK, ..., KO)',
+    }) {
       const [ruleSearch, setRuleSearch] = useState('');
       const [selectedRuleKeys, setSelectedRuleKeys] = useState([]);
       const [bulkRuleKind, setBulkRuleKind] = useState('gte');
@@ -4422,7 +4679,7 @@
             </div>
           )}
           <div>
-            <SectionLabel hint={`Each rule targets one client across all 25 Amnt Receivable columns (L, X, AJ, ..., KN)`}>Target column rules · Amnt Receivable</SectionLabel>
+            <SectionLabel hint={targetHint}>{targetTitle}</SectionLabel>
             <div className="space-y-2">
               {filteredTargetRules.map(r => (
                 <BmrRuleEditor key={r.id} rule={r} kind="target" clients={targetClients}
@@ -4435,7 +4692,7 @@
           </div>
           <div aria-hidden="true" className="border-t-2 border-neutral-700"></div>
           <div>
-            <SectionLabel hint={`Applies to all 25 "30mins usage" columns (M, Y, AK, …, KO)`}>30-min usage column rules</SectionLabel>
+            <SectionLabel hint={usageHint}>30-min usage column rules</SectionLabel>
             <div className="space-y-2">
               {filteredUsageRules.map(r => (
                 <BmrRuleEditor key={r.id} rule={r} kind="usage"
@@ -4520,7 +4777,7 @@
                 {theme === 'dark' ? 'Light' : 'Dark'}
               </button>
             </div>
-            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">BMR Generator</h1>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">BMR VOIP Generator</h1>
             <p className="text-xs text-neutral-500 mt-1">Daily · Balance Day &amp; Night</p>
             {sync?.email && (
               <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
@@ -4596,7 +4853,7 @@
 
           <div className="p-5 border-t border-neutral-900 space-y-3">
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
-              {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR · {bmrTodayString()}</>}
+              {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR VOIP · {bmrTodayString()}</>}
             </Btn>
             <p className="text-[10px] text-neutral-600 text-center font-mono">.xlsx · Google Sheets compatible</p>
           </div>
@@ -4619,6 +4876,251 @@
           <Input value={v} onChange={e => setV(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())} placeholder="e.g. L, X, AJ" />
           <Btn variant="ghost" size="sm" onClick={add}>Hide</Btn>
         </div>
+      );
+    }
+
+    function bmrSmsCombinedRuleClients(sms) {
+      return [
+        ...((sms.retailClients || []).map(client => ({ ...client, name: `RES - ${client.name}` }))),
+        ...((sms.wholesaleClients || []).map(client => ({ ...client, name: `WHS - ${client.name}` }))),
+      ];
+    }
+
+    function BmrSmsClientsEditor({ sms, onChange }) {
+      const [marketKey, setMarketKey] = useState('retail');
+      const market = BMR_SMS_MARKETS[marketKey];
+      const otherMarket = marketKey === 'retail' ? BMR_SMS_MARKETS.wholesale : BMR_SMS_MARKETS.retail;
+      const marketClients = sms[market.clientsKey] || [];
+      const visibleRetail = (sms.retailClients || []).filter(c => !c.hidden).length;
+      const visibleWholesale = (sms.wholesaleClients || []).filter(c => !c.hidden).length;
+
+      const marketBmr = useMemo(() => ({
+        ...sms,
+        clients: marketClients,
+      }), [sms, marketClients]);
+
+      const setMarketBmr = useCallback((next) => {
+        onChange((prevSms) => {
+          const base = { ...DEFAULT_BMR_SMS_STATE, ...(prevSms || {}) };
+          const currentView = { ...base, clients: base[market.clientsKey] || [] };
+          const resolved = typeof next === 'function' ? next(currentView) : next;
+          const accountManagers = resolved.accountManagers || [];
+          const managerIds = new Set(accountManagers.map(manager => manager.id));
+          const cleanManagerLinks = (clients) => (clients || []).map(client =>
+            client.accountManagerId && !managerIds.has(client.accountManagerId)
+              ? { ...client, accountManagerId: '' }
+              : client
+          );
+          return {
+            ...base,
+            accountManagers,
+            colorBlockCarrierNames: resolved.colorBlockCarrierNames,
+            bordersOnData: resolved.bordersOnData,
+            borderStyle: resolved.borderStyle,
+            timeSeparatorBorderStyle: resolved.timeSeparatorBorderStyle,
+            borderColor: resolved.borderColor,
+            [market.clientsKey]: cleanManagerLinks(resolved.clients || []),
+            [otherMarket.clientsKey]: cleanManagerLinks(base[otherMarket.clientsKey] || []),
+          };
+        });
+      }, [market.clientsKey, onChange, otherMarket.clientsKey]);
+
+      return (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+            <div>
+              <SectionLabel hint="Separate management for RES and WHS">SMS clients</SectionLabel>
+              <p className="text-xs text-neutral-500">Retail and Wholesale keep separate client orders, colors, managers, and hidden rows.</p>
+            </div>
+            <div className="inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5">
+              {[
+                { id: 'retail', label: 'Retail / RES', count: visibleRetail },
+                { id: 'wholesale', label: 'Wholesale / WHS', count: visibleWholesale },
+              ].map(item => (
+                <button key={item.id} onClick={() => setMarketKey(item.id)}
+                  className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${marketKey === item.id ? 'bg-blue-500/20 text-blue-200 border border-blue-500/40' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                  {item.label} · {item.count}
+                </button>
+              ))}
+            </div>
+          </div>
+          <BmrClientsEditor
+            key={marketKey}
+            bmr={marketBmr}
+            onChange={setMarketBmr}
+            showBlockColumnHider={false}
+            showCarrierNameSettings={true}
+          />
+        </div>
+      );
+    }
+
+    function BmrSmsRulesPanel({ sms, onChange }) {
+      const ruleClients = useMemo(() => bmrSmsCombinedRuleClients(sms), [sms]);
+      const rulesBmr = useMemo(() => ({
+        ...sms,
+        clients: ruleClients,
+      }), [sms, ruleClients]);
+      const setRulesBmr = useCallback((next) => {
+        onChange((prevSms) => {
+          const base = { ...DEFAULT_BMR_SMS_STATE, ...(prevSms || {}) };
+          const currentView = { ...base, clients: bmrSmsCombinedRuleClients(base) };
+          const resolved = typeof next === 'function' ? next(currentView) : next;
+          return {
+            ...base,
+            targetRules: resolved.targetRules || [],
+            usageRules: resolved.usageRules || [],
+          };
+        });
+      }, [onChange]);
+
+      return (
+        <BmrRulesPanel
+          bmr={rulesBmr}
+          onChange={setRulesBmr}
+          targetTitle="Balance column rules"
+          targetHint="Each rule targets one SMS client across the 25 Balance columns. Retail uses BALANCE; Wholesale uses BALANCE after OD."
+          usageHint="Applies to all 25 SMS 30mins usage columns in RES and WHS sheets."
+        />
+      );
+    }
+
+    function BmrSmsPreview({ sms }) {
+      const slots = bmrSlotsForShift('day').slice(0, 3);
+      const accountManagersById = bmrAccountManagersById(sms);
+      const renderMarket = (marketKey) => {
+        const market = BMR_SMS_MARKETS[marketKey];
+        const clients = (sms[market.clientsKey] || []).filter(c => !c.hidden).slice(0, 6);
+        const detailHeaders = marketKey === 'retail'
+          ? ['Type', 'Name', 'Balance', 'Over Draft']
+          : ['Type', 'Name', 'OD Limit', 'Balance'];
+        return (
+          <Card key={marketKey} className="p-4 overflow-x-auto">
+            <p className="text-[10px] text-neutral-600 mb-3 font-mono">{market.label} preview · first {clients.length} client(s) × {slots.length} timeslot(s)</p>
+            <table className="min-w-full text-[11px] border-collapse">
+              <thead>
+                <tr className="bg-neutral-900 text-neutral-300">
+                  <th className="px-2 py-1 border border-neutral-800 text-left">CLIENT</th>
+                  <th className="px-2 py-1 border border-neutral-800 text-left">Allow Bal</th>
+                  {slots.map((slot, index) => (
+                    <th key={index} colSpan={4} className="px-2 py-1 border border-neutral-800 text-center">{slot}</th>
+                  ))}
+                </tr>
+                <tr className="bg-neutral-950 text-neutral-500 text-[10px]">
+                  <th className="px-2 py-1 border border-neutral-800"></th>
+                  <th className="px-2 py-1 border border-neutral-800"></th>
+                  {slots.map((_, slotIndex) => detailHeaders.map(header => (
+                    <th key={`${slotIndex}-${header}`} className="px-2 py-1 border border-neutral-800">{header}</th>
+                  )))}
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map(client => {
+                  const clientColor = bmrClientColor(sms, client, accountManagersById);
+                  return (
+                    <tr key={client.id}>
+                      <td className="px-2 py-1 border border-neutral-800" style={clientColor ? { background: clientColor, color: '#000' } : {}}>{client.name}</td>
+                      <td className="px-2 py-1 border border-neutral-800 text-neutral-500">{client.allowBalanceLabel || '-'}</td>
+                      {slots.map((_, slotIndex) => detailHeaders.map(header => (
+                        <td key={`${slotIndex}-${header}`} className="px-2 py-1 border border-neutral-800 text-neutral-700">·</td>
+                      )))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        );
+      };
+
+      return (
+        <div className="space-y-3">
+          {renderMarket('retail')}
+          {renderMarket('wholesale')}
+          <p className="text-[10px] text-neutral-600 leading-relaxed">
+            Generated file: 4 sheets when both shifts are enabled: RES DAY, WHS DAY, RES NIGHT, and WHS NIGHT. Each sheet keeps the sample workbook's hidden in-block column pattern and adds 10 blank rows below the visible client list.
+          </p>
+        </div>
+      );
+    }
+
+    function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync }) {
+      const theme = state.theme || 'dark';
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
+      const accountManagersById = bmrAccountManagersById(sms);
+      const setSms = (next) => setState(s => {
+        const prevSms = s.bmrSms || DEFAULT_BMR_SMS_STATE;
+        return { ...s, bmrSms: typeof next === 'function' ? next(prevSms) : next };
+      });
+      const visibleRetail = (sms.retailClients || []).filter(c => !c.hidden).length;
+      const visibleWholesale = (sms.wholesaleClients || []).filter(c => !c.hidden).length;
+      const quickClients = [
+        ...(sms.retailClients || []).slice(0, 8).map(client => ({ ...client, market: 'RES' })),
+        ...(sms.wholesaleClients || []).slice(0, 8).map(client => ({ ...client, market: 'WHS' })),
+      ];
+
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">BMR SMS Generator</h1>
+            <p className="text-xs text-neutral-500 mt-1">Retail and Wholesale · Day &amp; Night</p>
+          </div>
+
+          <div className="p-5 border-b border-neutral-900">
+            <SectionLabel>Today</SectionLabel>
+            <div className="text-2xl font-bold tracking-tight">{bmrTodayString()}</div>
+            <p className="text-[11px] text-neutral-500 mt-1 font-mono">4-sheet SMS generation</p>
+          </div>
+
+          <div className="p-5 border-b border-neutral-900 space-y-2">
+            <SectionLabel>Shifts</SectionLabel>
+            <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <input type="checkbox" checked={sms.includeDay !== false}
+                onChange={e => setSms({ ...sms, includeDay: e.target.checked })}
+                className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+              <span>7AM-7PM (Day)</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+              <input type="checkbox" checked={sms.includeNight !== false}
+                onChange={e => setSms({ ...sms, includeNight: e.target.checked })}
+                className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+              <span>7PM-7AM (Night)</span>
+            </label>
+          </div>
+
+          <div className="p-5 flex-1 overflow-y-auto">
+            <SectionLabel hint={`${visibleRetail} RES / ${visibleWholesale} WHS visible`}>Clients quick view</SectionLabel>
+            <div className="space-y-0.5 max-h-[44vh] overflow-y-auto">
+              {quickClients.map((client, index) => {
+                const color = bmrClientColor(sms, client, accountManagersById);
+                return (
+                  <div key={`${client.market}-${client.id}-${index}`} className={`flex items-center gap-2 rounded px-1.5 py-1 ${client.hidden ? 'opacity-40' : ''}`}>
+                    <span className="w-8 text-[10px] text-neutral-600 font-mono">{client.market}</span>
+                    <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={color ? { background: color } : {}}></span>
+                    <span className="text-[11px] text-neutral-300 truncate flex-1">{client.name}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="p-5 border-t border-neutral-900 space-y-3">
+            <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
+              {busy ? <><span className="loader"></span> Generating...</> : <><IconDownload /> Generate BMR SMS</>}
+            </Btn>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">.xlsx · Google Sheets compatible</p>
+          </div>
+        </aside>
       );
     }
 
@@ -5141,6 +5643,8 @@
       module: 'sip_fcs',
       bmr: DEFAULT_BMR_STATE,
       bmrTab: 'clients',
+      bmrSms: DEFAULT_BMR_SMS_STATE,
+      bmrSmsTab: 'clients',
       editor: DEFAULT_EDITOR_STATE,
       editorTab: 'table',
     };
@@ -5179,17 +5683,30 @@
       }));
     }
 
+    function normalizeBmrSmsState(raw = {}) {
+      const sms = { ...DEFAULT_BMR_SMS_STATE, ...(raw || {}) };
+      return {
+        ...sms,
+        retailClients: Array.isArray(sms.retailClients) ? sms.retailClients : DEFAULT_BMR_SMS_STATE.retailClients,
+        wholesaleClients: Array.isArray(sms.wholesaleClients) ? sms.wholesaleClients : DEFAULT_BMR_SMS_STATE.wholesaleClients,
+        accountManagers: Array.isArray(sms.accountManagers) ? sms.accountManagers : [],
+        targetRules: Array.isArray(sms.targetRules) ? sms.targetRules : [],
+        usageRules: Array.isArray(sms.usageRules) ? sms.usageRules : DEFAULT_BMR_SMS_STATE.usageRules,
+      };
+    }
+
     function normalizeAppState(raw = {}, options = {}) {
       const migrateLegacyLabels = !!options.migrateLegacyLabels
         && Number(raw?.schemaVersion || 0) < APP_STATE_SCHEMA_VERSION;
       const merged = { ...DEFAULT_STATE, ...(raw || {}) };
       const bmr = { ...DEFAULT_BMR_STATE, ...(merged.bmr || {}) };
+      const bmrSms = normalizeBmrSmsState(merged.bmrSms);
       const editorRaw = merged.editor || {};
       const editor = { ...DEFAULT_EDITOR_STATE, ...editorRaw, cells: editorNormalizeGrid(editorRaw.cells || DEFAULT_EDITOR_STATE.cells) };
       const sheets = migrateLegacyLabels
         ? migrateSheets(merged.sheets)
         : (Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS);
-      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, editor };
+      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor };
     }
 
     function App() {
@@ -5374,6 +5891,9 @@
           } else if (state.module === 'bmr') {
             const fn = await generateBmrWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
+          } else if (state.module === 'bmr_sms') {
+            const fn = await generateBmrSmsWorkbook(state);
+            setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else {
             await generateWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
@@ -5412,18 +5932,26 @@
 
       const MODULES = [
         { id: 'sip_fcs', label: 'SIP / FCS' },
-        { id: 'bmr',     label: 'BMR' },
+        { id: 'bmr',     label: 'BMR VOIP' },
+        { id: 'bmr_sms', label: 'BMR SMS' },
         { id: 'editor',  label: 'Editor' },
       ];
 
       const isEditor = state.module === 'editor';
       const isBmr = state.module === 'bmr';
+      const isBmrSms = state.module === 'bmr_sms';
       const bmr = state.bmr || DEFAULT_BMR_STATE;
       const setBmr = useCallback((next) => setState(s => {
         const prevBmr = s.bmr || DEFAULT_BMR_STATE;
         return { ...s, bmr: typeof next === 'function' ? next(prevBmr) : next };
       }), []);
       const bmrTab = state.bmrTab || 'clients';
+      const bmrSms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
+      const setBmrSms = useCallback((next) => setState(s => {
+        const prevSms = s.bmrSms || DEFAULT_BMR_SMS_STATE;
+        return { ...s, bmrSms: typeof next === 'function' ? next(prevSms) : next };
+      }), []);
+      const bmrSmsTab = state.bmrSmsTab || 'clients';
       const editor = { ...DEFAULT_EDITOR_STATE, ...(state.editor || {}), cells: editorNormalizeGrid(state.editor?.cells || DEFAULT_EDITOR_STATE.cells) };
       const pushEditorUndo = useCallback((snapshot) => {
         const previous = editorSnapshot(snapshot);
@@ -5546,7 +6074,7 @@
               <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
                 <div>
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
-                  <h2 className="text-[22px] font-bold tracking-tight">BMR · {bmrTodayString()}</h2>
+                  <h2 className="text-[22px] font-bold tracking-tight">BMR VOIP · {bmrTodayString()}</h2>
                 </div>
                 <div className="hidden md:flex items-center gap-2">
                   <Pill>{visibleClients} clients</Pill>
@@ -5596,6 +6124,85 @@
               <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
                 <span className="font-mono">localStorage · key {STORAGE_KEY}</span>
                 <span>{visibleClients} visible clients · {activeBmrRules} active rules · {bmrTodayString()}</span>
+              </footer>
+            </main>
+
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
+
+      if (isBmrSms) {
+        const visibleRetail = (bmrSms.retailClients || []).filter(c => !c.hidden).length;
+        const visibleWholesale = (bmrSms.wholesaleClients || []).filter(c => !c.hidden).length;
+        const smsClientIds = new Set([...(bmrSms.retailClients || []), ...(bmrSms.wholesaleClients || [])].map(c => c.id));
+        const activeBmrSmsRules = ((bmrSms.targetRules || []).filter(r => r.enabled && smsClientIds.has(r.clientId)).length) + ((bmrSms.usageRules || []).filter(r => r.enabled).length);
+        const shiftCount = (bmrSms.includeDay !== false ? 1 : 0) + (bmrSms.includeNight !== false ? 1 : 0);
+        const sheetCount = Math.max(1, shiftCount) * 2;
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <BmrSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
+            <main className="flex-1 min-w-0 flex flex-col">
+              <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
+                  <h2 className="text-[22px] font-bold tracking-tight">BMR SMS · {bmrTodayString()}</h2>
+                </div>
+                <div className="hidden md:flex items-center gap-2">
+                  <Pill>{visibleRetail} RES</Pill>
+                  <Pill>{visibleWholesale} WHS</Pill>
+                  <Pill>{sheetCount} sheets</Pill>
+                  <Pill tone={activeBmrSmsRules > 0 ? 'accent' : 'default'}>{activeBmrSmsRules} rules</Pill>
+                </div>
+                <div className="flex items-center gap-3">
+                  {ModuleSwitch}
+                  <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                    {BMR_TABS.map(t => (
+                      <button key={t.id} onClick={() => setState(s => ({ ...s, bmrSmsTab: t.id }))}
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrSmsTab === t.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </nav>
+                </div>
+              </header>
+
+              <div className="p-8 max-w-6xl w-full">
+                <div key={bmrSmsTab} className="anim-fade-in">
+                  {bmrSmsTab === 'clients' && (
+                    <div className="space-y-6">
+                      <SectionLabel hint="Retail and Wholesale clients are edited separately">Clients</SectionLabel>
+                      <BmrSmsClientsEditor sms={bmrSms} onChange={setBmrSms} />
+                    </div>
+                  )}
+                  {bmrSmsTab === 'rules' && (
+                    <BmrSmsRulesPanel sms={bmrSms} onChange={setBmrSms} />
+                  )}
+                  {bmrSmsTab === 'preview' && (
+                    <div className="space-y-3">
+                      <SectionLabel hint="Live preview · Retail and Wholesale structures">Structure preview</SectionLabel>
+                      <BmrSmsPreview sms={bmrSms} />
+                    </div>
+                  )}
+                  {bmrSmsTab === 'notes' && (
+                    <div>
+                      <SectionLabel hint="Free-form notes carried with the BMR SMS config">Notes</SectionLabel>
+                      <Textarea rows={12} value={bmrSms.notes || ''} onChange={e => setBmrSms({ ...bmrSms, notes: e.target.value })}
+                        placeholder={`Notes for BMR SMS...\n\ne.g. Added SMS client, hid old WHS row, adjusted balance rule.`} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+                <span className="font-mono">localStorage · key {STORAGE_KEY}</span>
+                <span>{visibleRetail} RES · {visibleWholesale} WHS · {activeBmrSmsRules} active rules · {bmrTodayString()}</span>
               </footer>
             </main>
 
