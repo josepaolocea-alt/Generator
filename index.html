@@ -4817,6 +4817,16 @@
         return { ...s, editor: typeof next === 'function' ? next(prevEditor) : next };
       }), []);
       const editorTab = state.editorTab || 'table';
+      const resetEditor = async () => {
+        const ok = await confirmDialog({
+          title: 'Reset Editor?',
+          message: 'This will clear the pasted table, row colors, header colors, and Editor rules so you can start fresh.',
+          confirmText: 'Reset',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setState(s => ({ ...s, editor: { ...DEFAULT_EDITOR_STATE }, editorTab: 'table' }));
+      };
 
       const ModuleSwitch = (
         <div className="flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
@@ -4848,6 +4858,7 @@
                 </div>
                 <div className="flex items-center gap-3">
                   {ModuleSwitch}
+                  <Btn variant="ghost" size="sm" onClick={resetEditor}>Reset</Btn>
                   <nav className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
                     {EDITOR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, editorTab: t.id }))}
