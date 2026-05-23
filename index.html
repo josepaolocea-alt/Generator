@@ -708,8 +708,28 @@
       saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
     }
 
+    const SIP_LAYOUT_RULE_SCOPES = [
+      { value: '__layout_alarm__',  label: 'Global rules for all Alarm Log',    layout: 'alarm' },
+      { value: '__layout_hourly__', label: 'Global rules for all Hourly Block', layout: 'hourly' },
+      { value: '__layout_flat__',   label: 'Global rules for all Flat Table',   layout: 'flat' },
+    ];
+
+    function sipRuleScopeMatches(rule, scope, sheet) {
+      if (scope === '__view_all__') return true;
+      if (scope === '__all__') return !rule.targetSheet || rule.targetSheet === '__all__';
+      const layoutScope = SIP_LAYOUT_RULE_SCOPES.find(item => item.value === scope);
+      if (layoutScope) return rule.targetSheet === scope;
+      return rule.targetSheet === scope;
+    }
+
     function rulesForSheet(allRules, sheet) {
-      return (allRules || []).filter(r => !r.targetSheet || r.targetSheet === sheet.id || r.targetSheet === '__all__');
+      return (allRules || []).filter(r => {
+        const scope = r.targetSheet || '__all__';
+        if (scope === '__all__') return true;
+        const layoutScope = SIP_LAYOUT_RULE_SCOPES.find(item => item.value === scope);
+        if (layoutScope) return sheet.layout === layoutScope.layout;
+        return scope === sheet.id;
+      });
     }
 
     function sipRuleStyle(rule, fallbackColor = 'FF166534') {
@@ -1681,6 +1701,21 @@
     function Input(props) {
       const { className = '', ...rest } = props;
       return <input {...rest} className={`w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}`} />;
+    }
+
+    function ClearableInput({ value, onClear, clearTitle = 'Clear input', className = '', inputClassName = '', ...rest }) {
+      return (
+        <div className={`relative ${className}`}>
+          <Input {...rest} value={value} className={`pr-9 ${inputClassName}`} />
+          {!!value && (
+            <button type="button" onMouseDown={e => e.preventDefault()} onClick={onClear}
+              className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-blue-500/40"
+              title={clearTitle} aria-label={clearTitle}>
+              <IconX />
+            </button>
+          )}
+        </div>
+      );
     }
 
     function Select({ children, className = '', ...rest }) {
@@ -2686,7 +2721,7 @@
       const [ruleScope, setRuleScope] = useState('__view_all__');
       const add = (target = ruleScope) => {
         const targetSheet = target === '__view_all__' ? '__all__' : target;
-        const targetLayout = sheets.find(sheet => sheet.id === targetSheet)?.layout;
+        const targetLayout = sheets.find(sheet => sheet.id === targetSheet)?.layout || SIP_LAYOUT_RULE_SCOPES.find(scope => scope.value === targetSheet)?.layout;
         const defaultType = targetLayout && targetLayout !== 'hourly' ? 'blank' : 'maxInRow';
         onChange([...rules, {
           id: newId(), type: defaultType, enabled: true,
@@ -2706,16 +2741,12 @@
       };
       const scopedRules = rules
         .map((rule, index) => ({ rule, index }))
-        .filter(({ rule }) => {
-          if (ruleScope === '__view_all__') return true;
-          if (ruleScope === '__all__') return !rule.targetSheet || rule.targetSheet === '__all__';
-          return rule.targetSheet === ruleScope;
-        });
+        .filter(({ rule }) => sipRuleScopeMatches(rule, ruleScope));
       const scopeLabel = ruleScope === '__view_all__'
         ? 'all rules'
         : ruleScope === '__all__'
           ? 'all sheets'
-          : (sheets.find(sheet => sheet.id === ruleScope)?.name || 'selected sheet');
+          : (SIP_LAYOUT_RULE_SCOPES.find(scope => scope.value === ruleScope)?.label || sheets.find(sheet => sheet.id === ruleScope)?.name || 'selected sheet');
 
       return (
         <div className="space-y-3">
@@ -2725,6 +2756,7 @@
               <Select value={ruleScope} onChange={e => setRuleScope(e.target.value)}>
                 <option value="__view_all__">All rules</option>
                 <option value="__all__">Global rules - all sheets</option>
+                {SIP_LAYOUT_RULE_SCOPES.map(scope => <option key={scope.value} value={scope.value}>{scope.label}</option>)}
                 {sheets.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}</option>)}
               </Select>
             </div>
@@ -2734,7 +2766,7 @@
               <Btn variant="ghost" size="md" onClick={() => add()}><IconPlus /> Add rule</Btn>
             </div>
             <p className="w-full text-[11px] text-neutral-500">
-              Rules can be global or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.
+              Rules can be global, layout-wide, or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.
             </p>
           </div>
           {rules.length === 0 && (
@@ -2773,6 +2805,7 @@
                     <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Applies to</label>
                     <Select value={r.targetSheet || '__all__'} onChange={e => update(r.id, { targetSheet: e.target.value })}>
                       <option value="__all__">All sheets</option>
+                      {SIP_LAYOUT_RULE_SCOPES.map(scope => <option key={scope.value} value={scope.value}>{scope.label}</option>)}
                       {sheets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </Select>
                   </div>
@@ -3942,7 +3975,9 @@
             <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
               <div className="w-full max-w-xs">
                 <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search clients</label>
-                <Input value={clientSearch} onChange={e => setClientSearch(e.target.value)} placeholder="Client, label, or manager" />
+                <ClearableInput value={clientSearch} onChange={e => setClientSearch(e.target.value)}
+                  onClear={() => setClientSearch('')} clearTitle="Clear client search"
+                  placeholder="Client, label, or manager" />
               </div>
               <div className="w-full max-w-xs">
                 <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Account manager filter</label>
@@ -4201,7 +4236,9 @@
           <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
             <div className="w-full max-w-sm">
               <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search rules</label>
-              <Input value={ruleSearch} onChange={e => setRuleSearch(e.target.value)} placeholder="Rule name, client, or value" />
+              <ClearableInput value={ruleSearch} onChange={e => setRuleSearch(e.target.value)}
+                onClear={() => setRuleSearch('')} clearTitle="Clear rules search"
+                placeholder="Rule name, client, or value" />
             </div>
             <div className="flex flex-wrap items-center gap-3 pb-2">
               <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
