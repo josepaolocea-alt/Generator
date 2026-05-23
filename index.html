@@ -132,6 +132,10 @@
       transition-duration: 80ms;
     }
     button.no-press:not(:disabled):active {
+      transform: none;
+      transition-duration: 0ms;
+    }
+    button.input-clear-button:not(:disabled):active {
       transform: translateY(-50%);
       transition-duration: 0ms;
     }
@@ -1713,7 +1717,7 @@
           <Input {...rest} value={value} className={`pr-9 ${inputClassName}`} />
           {!!value && (
             <button type="button" onMouseDown={e => e.preventDefault()} onClick={onClear}
-              className="no-press absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40"
+              className="no-press input-clear-button absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40"
               title={clearTitle} aria-label={clearTitle}>
               <IconX />
             </button>
@@ -1813,21 +1817,28 @@
     /* ============================================================
        Sidebar
        ============================================================ */
-    function SyncBadge({ sync }) {
+    function SyncBadge({ sync, onRetry }) {
       const map = {
         connecting:  { dot: 'bg-amber-400 animate-pulse',   text: 'Connecting…', color: 'text-amber-300' },
         loading:     { dot: 'bg-blue-400 animate-pulse',    text: 'Loading…',    color: 'text-blue-300' },
         saving:      { dot: 'bg-blue-400 animate-pulse',    text: 'Saving…',     color: 'text-blue-300' },
         synced:      { dot: 'bg-emerald-500',               text: 'Synced',      color: 'text-emerald-300' },
-        offline:     { dot: 'bg-neutral-500',               text: 'Offline',     color: 'text-neutral-400' },
+        offline:     { dot: 'bg-neutral-500',               text: sync?.uid ? 'Local only' : 'Offline', color: 'text-neutral-400' },
         'signed-out':{ dot: 'bg-neutral-500',               text: 'Signed out',  color: 'text-neutral-400' },
       };
       const m = map[sync?.status] || map.offline;
-      const title = sync?.email ? `${sync.email}\nUID: ${sync.uid}` : 'Not signed in';
+      const title = sync?.message || (sync?.email ? `${sync.email}\nUID: ${sync.uid}` : 'Not signed in');
       return (
         <div className="flex items-center gap-2 mb-2" title={title}>
           <div className={`w-1.5 h-1.5 rounded-full ${m.dot}`}></div>
           <span className={`text-[10px] uppercase tracking-[0.2em] ${m.color}`}>{m.text}</span>
+          {sync?.status === 'offline' && sync?.uid && onRetry && (
+            <button type="button" onClick={onRetry}
+              className="no-press rounded border border-neutral-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-neutral-500 hover:border-neutral-700 hover:text-neutral-200"
+              title={sync?.message || 'Retry cloud sync'}>
+              Retry
+            </button>
+          )}
         </div>
       );
     }
@@ -1845,6 +1856,12 @@
       if (code === 'auth/network-request-failed')  return 'Network error. Check your connection.';
       if (code === 'auth/operation-not-allowed')   return 'Email/password sign-in is disabled in Firebase Console.';
       return e?.message || 'Authentication failed.';
+    }
+
+    function syncErrorMessage(error, fallback = 'Cloud sync failed') {
+      const code = error?.code ? ` (${error.code})` : '';
+      const detail = error?.message ? `: ${error.message}` : '';
+      return `${fallback}${code}${detail}`;
     }
 
     function Dialog({ dialog, onResolve }) {
@@ -2101,7 +2118,7 @@
       );
     }
 
-    function Sidebar({ state, setState, onGenerate, busy, sync }) {
+    function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync }) {
       const { year, month, sheets, selectedSheetId } = state;
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
@@ -2141,7 +2158,7 @@
           {/* Brand */}
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
-              <SyncBadge sync={sync} />
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
               <button onClick={toggleTheme}
                 title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
                 className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
@@ -4393,7 +4410,7 @@
       );
     }
 
-    function BmrSidebar({ state, setState, onGenerate, busy, sync }) {
+    function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync }) {
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const bmr = state.bmr || DEFAULT_BMR_STATE;
@@ -4404,7 +4421,7 @@
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
-              <SyncBadge sync={sync} />
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
               <button onClick={toggleTheme}
                 title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
                 className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
@@ -4529,7 +4546,7 @@
       );
     }
 
-    function EditorSidebar({ state, setState, onGenerate, busy, sync }) {
+    function EditorSidebar({ state, setState, onGenerate, busy, sync, onRetrySync }) {
       const theme = state.theme || 'dark';
       const editor = { ...DEFAULT_EDITOR_STATE, ...(state.editor || {}) };
       const grid = editorNormalizeGrid(editor.cells);
@@ -4538,7 +4555,7 @@
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
-              <SyncBadge sync={sync} />
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
               <button onClick={toggleTheme}
                 title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
                 className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
@@ -5105,12 +5122,65 @@
       }, []);
       const [busy, setBusy] = useState(false);
       const [toast, setToast] = useState(null);
-      const [sync, setSync] = useState({ status: window.__fb ? 'connecting' : 'offline', uid: null, email: null });
+      const [sync, setSync] = useState({
+        status: window.__fb ? 'connecting' : 'offline',
+        uid: null,
+        email: null,
+        message: window.__fb ? null : 'Firebase scripts did not load, so cloud sync is unavailable. Local browser saving still works.',
+      });
       const [dialog, setDialog] = useState(null);
       const [editorUndoStack, setEditorUndoStack] = useState([]);
       const hydratedRef = useRef(false);
       const localSaveTimerRef = useRef(null);
       const saveTimerRef = useRef(null);
+
+      const hydrateUserState = useCallback(async (user) => {
+        if (!window.__fb || !user) return false;
+        const { db } = window.__fb;
+        setSync({ status: 'loading', uid: user.uid, email: user.email, message: null });
+        try {
+          try { await db.enableNetwork(); } catch (_) {}
+          const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
+          const snap = await ref.get();
+          if (snap.exists) {
+            const remote = normalizeAppState(mergeLocalSheetActiveFlags(snap.data()), { migrateLegacyLabels: true });
+            if (remote && Array.isArray(remote.sheets)) {
+              setStateRaw(local => {
+                const current = normalizeAppState(local);
+                const keepLocal = stateEditedAt(current) > stateEditedAt(remote);
+                if (keepLocal) userEditRef.current = true;
+                return { ...(keepLocal ? current : remote), tab: current.tab };
+              });
+            }
+          }
+          hydratedRef.current = true;
+          setSync({ status: 'synced', uid: user.uid, email: user.email, message: null });
+          return true;
+        } catch (e) {
+          console.warn('Firestore hydrate failed', e);
+          hydratedRef.current = true;
+          setSync({
+            status: 'offline',
+            uid: user.uid,
+            email: user.email,
+            message: syncErrorMessage(e, 'Cloud sync read failed'),
+          });
+          return false;
+        }
+      }, []);
+
+      const retrySync = useCallback(async () => {
+        if (!window.__fb) {
+          setSync({ status: 'offline', uid: null, email: null, message: 'Firebase scripts did not load, so cloud sync is unavailable. Local browser saving still works.' });
+          return;
+        }
+        const user = window.__fb.auth.currentUser;
+        if (!user || user.isAnonymous) {
+          setSync({ status: 'signed-out', uid: null, email: null, message: null });
+          return;
+        }
+        await hydrateUserState(user);
+      }, [hydrateUserState]);
 
       useEffect(() => {
         __dialogHandler = (req) => setDialog(req);
@@ -5141,61 +5211,41 @@
       // Firebase: wait for email/password sign-in, then hydrate from Firestore
       useEffect(() => {
         if (!window.__fb) return;
-        const { auth, db } = window.__fb;
+        const { auth } = window.__fb;
         const unsub = auth.onAuthStateChanged(async (user) => {
           if (!user) {
             hydratedRef.current = false;
-            setSync({ status: 'signed-out', uid: null, email: null });
+            setSync({ status: 'signed-out', uid: null, email: null, message: null });
             return;
           }
           if (user.isAnonymous) {
             try { await auth.signOut(); } catch {}
             return;
           }
-          setSync({ status: 'loading', uid: user.uid, email: user.email });
-          try {
-            const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
-            const snap = await ref.get();
-            if (snap.exists) {
-              const remote = normalizeAppState(mergeLocalSheetActiveFlags(snap.data()), { migrateLegacyLabels: true });
-              if (remote && Array.isArray(remote.sheets)) {
-                setStateRaw(local => {
-                  const current = normalizeAppState(local);
-                  const keepLocal = stateEditedAt(current) > stateEditedAt(remote);
-                  if (keepLocal) userEditRef.current = true;
-                  return { ...(keepLocal ? current : remote), tab: current.tab };
-                });
-              }
-            }
-            hydratedRef.current = true;
-            setSync({ status: 'synced', uid: user.uid, email: user.email });
-          } catch (e) {
-            console.warn('Firestore hydrate failed', e);
-            hydratedRef.current = true;
-            setSync({ status: 'offline', uid: user.uid, email: user.email });
-          }
+          await hydrateUserState(user);
         });
         return () => unsub();
-      }, []);
+      }, [hydrateUserState]);
 
       // Firebase: debounced write-back on state change (only after hydration)
       useEffect(() => {
         if (!window.__fb || !hydratedRef.current || !sync.uid) return;
         if (!userEditRef.current) return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        setSync(s => s.status === 'offline' || s.status === 'saving' ? s : { ...s, status: 'saving' });
+        setSync(s => s.status === 'saving' ? s : { ...s, status: 'saving', message: null });
         saveTimerRef.current = setTimeout(async () => {
           const localUpdatedAt = state.localUpdatedAt || stateEditedAt(state) || Date.now();
           try {
             const { db } = window.__fb;
+            try { await db.enableNetwork(); } catch (_) {}
             const { tab, ...persist } = state;
             await db.collection('users').doc(sync.uid).collection('state').doc('main')
               .set({ ...persist, localUpdatedAt, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
             if ((state.localUpdatedAt || stateEditedAt(state) || localUpdatedAt) === localUpdatedAt) userEditRef.current = false;
-            setSync(s => ({ ...s, status: 'synced' }));
+            setSync(s => ({ ...s, status: 'synced', message: null }));
           } catch (e) {
             console.warn('Firestore save failed', e);
-            setSync(s => ({ ...s, status: 'offline' }));
+            setSync(s => ({ ...s, status: 'offline', message: syncErrorMessage(e, 'Cloud sync save failed') }));
           }
         }, 800);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -5334,7 +5384,7 @@
         const activeEditorRules = (editor.rules || []).filter(rule => rule.enabled !== false).length;
         return (
           <div className="flex min-h-screen text-neutral-100">
-            <EditorSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
+            <EditorSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
                 <div className="min-w-0">
@@ -5400,7 +5450,7 @@
         const activeBmrRules = ((bmr.targetRules || []).filter(r => r.enabled && bmrClientIds.has(r.clientId)).length) + ((bmr.usageRules || []).filter(r => r.enabled).length);
         return (
           <div className="flex min-h-screen text-neutral-100">
-            <BmrSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
+            <BmrSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="border-b border-neutral-900 px-8 py-5 flex items-center justify-between gap-6 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
                 <div>
@@ -5471,7 +5521,7 @@
 
       return (
         <div className="flex min-h-screen text-neutral-100">
-          <Sidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} />
+          <Sidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
           <UploadedSidebar state={state} setState={setState} />
           <main className="flex-1 min-w-0 flex flex-col">
             {/* Top bar */}
