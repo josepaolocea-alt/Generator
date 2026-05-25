@@ -71,27 +71,39 @@
         let longPollingApplied = false;
         let initMethod = 'none';
         let modularDb = null;
-        try {
-          const mod = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
-          modularDb = mod.initializeFirestore(firebase.app(), {
-            experimentalForceLongPolling: true,
-          });
-          longPollingApplied = true;
-          initMethod = 'modular initializeFirestore';
-          // Expose the modular fns the app needs. App code does:
-          //   const { doc, getDoc, setDoc, ... } = window.__fbm;
-          //   await getDoc(doc(db, 'users', uid, 'state', 'main'));
-          window.__fbm = {
-            doc: mod.doc,
-            collection: mod.collection,
-            getDoc: mod.getDoc,
-            getDocs: mod.getDocs,
-            setDoc: mod.setDoc,
-            serverTimestamp: mod.serverTimestamp,
-            deleteField: mod.deleteField,
-          };
-        } catch (modErr) {
-          console.error('[firestore] Modular import/init failed — Firestore will be unavailable this session:', modErr);
+        // Try multiple CDNs for the modular Firestore SDK. gstatic ESM
+        // sometimes returns a stub that fails to resolve sub-imports in the
+        // browser; jsdelivr's +esm bundles for direct browser use.
+        const modularSources = [
+          'https://cdn.jsdelivr.net/npm/firebase@10.14.1/firestore/+esm',
+          'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js',
+        ];
+        let lastErr = null;
+        for (const url of modularSources) {
+          try {
+            const mod = await import(url);
+            modularDb = mod.initializeFirestore(firebase.app(), {
+              experimentalForceLongPolling: true,
+            });
+            longPollingApplied = true;
+            initMethod = 'modular initializeFirestore via ' + url;
+            window.__fbm = {
+              doc: mod.doc,
+              collection: mod.collection,
+              getDoc: mod.getDoc,
+              getDocs: mod.getDocs,
+              setDoc: mod.setDoc,
+              serverTimestamp: mod.serverTimestamp,
+              deleteField: mod.deleteField,
+            };
+            break;
+          } catch (e) {
+            lastErr = e;
+            console.warn('[firestore] modular import failed for', url, e);
+          }
+        }
+        if (!modularDb) {
+          console.error('[firestore] All modular sources failed — Firestore unavailable this session. Last error:', lastErr);
         }
         console.info('[firestore]', {
           sdk: firebase.SDK_VERSION,
@@ -100,10 +112,13 @@
           origin: location.origin,
         });
         try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
-        window.__fb = modularDb ? {
+        // Always expose auth — even if Firestore failed to load, Auth still
+        // works and the user can sign in/out. Firestore-dependent features
+        // gracefully degrade by checking window.__fbm before use.
+        window.__fb = {
           auth: firebase.auth(),
-          db: modularDb,
-        } : null;
+          db: modularDb,  // may be null if modular import failed
+        };
       } catch (e) {
         console.warn('Firebase init failed:', e);
         window.__fb = null;
@@ -6763,14 +6778,29 @@ match /shared/whitelistSmsTestNumbers {
       }, []);
 
       const hydrateUserState = useCallback(async (user) => {
-        if (!window.__fb || !window.__fbm || !user) return false;
+        if (!window.__fb || !user) return false;
         const { auth, db } = window.__fb;
-        const { doc, getDoc } = window.__fbm;
         // Drop stale results once the user has signed out (or switched accounts)
         // in the time it took the Firestore round-trip to finish. Without this,
         // a late-arriving response would write the old uid back into sync state
         // and hide the AuthModal — leaving a black screen with no sign-in form.
         const isStale = () => auth.currentUser?.uid !== user.uid;
+        // If the modular Firestore failed to load, we still want to recognise
+        // the signed-in user so the AccountChip + sign-out button render —
+        // just go straight to offline mode without trying to read cloud state.
+        if (!window.__fbm || !db) {
+          const role = effectiveRole(user.email, null);
+          setSync({
+            status: 'offline',
+            uid: user.uid,
+            email: user.email,
+            role,
+            message: 'Cloud sync unavailable — Firestore SDK failed to load on this machine. Auth and local data still work.',
+          });
+          hydratedRef.current = true;
+          return false;
+        }
+        const { doc, getDoc } = window.__fbm;
         const dbRole = await upsertUserProfile(user);
         if (isStale()) return false;
         const role = effectiveRole(user.email, dbRole);
