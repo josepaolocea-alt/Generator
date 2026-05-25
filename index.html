@@ -2085,10 +2085,13 @@
         if (trimmed.length < 3) return false;
         return /^[—–\-=_*\s]+$/.test(trimmed) && /[—–\-=_*]/.test(trimmed);
       };
+      const isBlank = (line) => line.trim() === '';
+      const hasDivider = lines.some(isDivider);
+      const isSeparator = hasDivider ? isDivider : isBlank;
       const blocks = [];
       let current = [];
       for (const line of lines) {
-        if (isDivider(line)) {
+        if (isSeparator(line)) {
           const block = current.join('\n').trim();
           if (block) blocks.push(block);
           current = [];
