@@ -33,18 +33,16 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Firebase: compat builds for app/auth/analytics, modular for firestore.
-       Reason: the firebase-firestore-compat.js wrapper creates its own
-       Firestore instance with default WebChannel transport before any inline
-       script can call settings(). On networks where WebChannel breaks (some
-       corporate proxies/AVs), every Firestore call then trips "INTERNAL
-       ASSERTION FAILED: Unexpected state". The modular SDK's
-       initializeFirestore() honors experimentalForceLongPolling because it
-       configures the instance at creation time. Loading compat firestore
-       would just re-create that broken instance, so we don't load it. -->
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-analytics-compat.js"></script>
+  <!-- Firebase: fully modular SDK via jsdelivr +esm bundles. The previous
+       compat-build approach couldn't switch Firestore off WebChannel for
+       users on networks where it breaks ("INTERNAL ASSERTION FAILED:
+       Unexpected state"). Mixing compat + modular failed because compat
+       (gstatic) and modular bundles ship their own internal Firebase app
+       registry and don't share state — modular initializeFirestore() then
+       errored with "Component firestore has not been registered yet". All
+       Firebase modules below come from the same jsdelivr bundle so they
+       share one registry and one default app. -->
+  <!-- (No <script> tags here; Firebase is loaded inside the init script below.) -->
   <script>
     const FIREBASE_CONFIG = {
       apiKey: "AIzaSyAHfgzQoPpojhLFOIRlXF_UJg9lKZjTfA4",
@@ -67,61 +65,51 @@
     // everywhere proxies allow regular requests through.
     window.__firebaseInitPromise = (async () => {
       try {
-        firebase.initializeApp(FIREBASE_CONFIG);
-        let longPollingApplied = false;
-        let initMethod = 'none';
-        let modularDb = null;
-        // Try multiple CDNs for the modular Firestore SDK. gstatic ESM
-        // sometimes returns a stub that fails to resolve sub-imports in the
-        // browser; jsdelivr's +esm bundles for direct browser use.
-        const modularSources = [
-          'https://cdn.jsdelivr.net/npm/firebase@10.14.1/firestore/+esm',
-          'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js',
-        ];
-        let lastErr = null;
-        for (const url of modularSources) {
-          try {
-            const mod = await import(url);
-            modularDb = mod.initializeFirestore(firebase.app(), {
-              experimentalForceLongPolling: true,
-            });
-            longPollingApplied = true;
-            initMethod = 'modular initializeFirestore via ' + url;
-            window.__fbm = {
-              doc: mod.doc,
-              collection: mod.collection,
-              getDoc: mod.getDoc,
-              getDocs: mod.getDocs,
-              setDoc: mod.setDoc,
-              serverTimestamp: mod.serverTimestamp,
-              deleteField: mod.deleteField,
-            };
-            break;
-          } catch (e) {
-            lastErr = e;
-            console.warn('[firestore] modular import failed for', url, e);
-          }
-        }
-        if (!modularDb) {
-          console.error('[firestore] All modular sources failed — Firestore unavailable this session. Last error:', lastErr);
-        }
+        // All Firebase modules must come from the SAME bundle so they share
+        // one internal app registry. Mixing sources (e.g. gstatic compat +
+        // jsdelivr modular) creates separate registries and modular
+        // initializeFirestore() errors with "Component firestore has not been
+        // registered yet" because the app it sees doesn't have firestore.
+        const [appMod, authMod, fsMod] = await Promise.all([
+          import('https://cdn.jsdelivr.net/npm/firebase@10.14.1/app/+esm'),
+          import('https://cdn.jsdelivr.net/npm/firebase@10.14.1/auth/+esm'),
+          import('https://cdn.jsdelivr.net/npm/firebase@10.14.1/firestore/+esm'),
+        ]);
+        const app = appMod.initializeApp(FIREBASE_CONFIG);
+        // Force long polling — this is the whole reason for going modular,
+        // because compat's settings() couldn't actually switch transport.
+        const db = fsMod.initializeFirestore(app, {
+          experimentalForceLongPolling: true,
+        });
+        const auth = authMod.getAuth(app);
+        // Expose modular helpers used throughout the app. App code does:
+        //   const { doc, getDoc, signInWithEmailAndPassword } = window.__fbm;
+        window.__fbm = {
+          // Firestore
+          doc: fsMod.doc,
+          collection: fsMod.collection,
+          getDoc: fsMod.getDoc,
+          getDocs: fsMod.getDocs,
+          setDoc: fsMod.setDoc,
+          serverTimestamp: fsMod.serverTimestamp,
+          deleteField: fsMod.deleteField,
+          // Auth
+          onAuthStateChanged: authMod.onAuthStateChanged,
+          signInWithEmailAndPassword: authMod.signInWithEmailAndPassword,
+          createUserWithEmailAndPassword: authMod.createUserWithEmailAndPassword,
+          sendPasswordResetEmail: authMod.sendPasswordResetEmail,
+          signOut: authMod.signOut,
+        };
+        window.__fb = { auth, db };
         console.info('[firestore]', {
-          sdk: firebase.SDK_VERSION,
-          longPollingApplied,
-          initMethod,
+          longPollingApplied: true,
+          initMethod: 'modular (jsdelivr +esm)',
           origin: location.origin,
         });
-        try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
-        // Always expose auth — even if Firestore failed to load, Auth still
-        // works and the user can sign in/out. Firestore-dependent features
-        // gracefully degrade by checking window.__fbm before use.
-        window.__fb = {
-          auth: firebase.auth(),
-          db: modularDb,  // may be null if modular import failed
-        };
       } catch (e) {
-        console.warn('Firebase init failed:', e);
+        console.error('Firebase modular init failed:', e);
         window.__fb = null;
+        window.__fbm = null;
       }
     })();
 
@@ -2476,7 +2464,7 @@
     function AccountChip({ sync }) {
       if (!sync?.email) return null;
       const onSignOut = async () => {
-        if (!window.__fb) return;
+        if (!window.__fb || !window.__fbm) return;
         const ok = await confirmDialog({
           title: 'Sign out?',
           message: 'Your data stays safely in the cloud and will be there next time you sign in.',
@@ -2484,7 +2472,7 @@
           tone: 'danger',
         });
         if (!ok) return;
-        window.__fb.auth.signOut().catch(() => {});
+        window.__fbm.signOut(window.__fb.auth).catch(() => {});
       };
       return (
         <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
@@ -2565,14 +2553,15 @@
 
       const submit = async (e) => {
         e.preventDefault();
-        if (!window.__fb) return;
+        if (!window.__fb || !window.__fbm) return;
         setBusy(true); setError(null); setInfo(null);
         try {
           const { auth } = window.__fb;
+          const { signInWithEmailAndPassword, createUserWithEmailAndPassword } = window.__fbm;
           if (mode === 'signup') {
-            await auth.createUserWithEmailAndPassword(email.trim(), password);
+            await createUserWithEmailAndPassword(auth, email.trim(), password);
           } else {
-            await auth.signInWithEmailAndPassword(email.trim(), password);
+            await signInWithEmailAndPassword(auth, email.trim(), password);
           }
         } catch (err) {
           setError(humanizeAuthError(err));
@@ -2582,11 +2571,11 @@
       };
 
       const resetPassword = async () => {
-        if (!window.__fb) return;
+        if (!window.__fb || !window.__fbm) return;
         if (!email.trim()) { setError('Enter your email above first, then click "Forgot password".'); return; }
         setBusy(true); setError(null); setInfo(null);
         try {
-          await window.__fb.auth.sendPasswordResetEmail(email.trim());
+          await window.__fbm.sendPasswordResetEmail(window.__fb.auth, email.trim());
           setInfo(`Password reset email sent to ${email.trim()}.`);
         } catch (err) {
           setError(humanizeAuthError(err));
@@ -7048,16 +7037,17 @@ match /shared/whitelistSmsTestNumbers {
 
       // Firebase: wait for email/password sign-in, then hydrate from Firestore
       useEffect(() => {
-        if (!window.__fb) return;
+        if (!window.__fb || !window.__fbm) return;
         const { auth } = window.__fb;
-        const unsub = auth.onAuthStateChanged(async (user) => {
+        const { onAuthStateChanged, signOut } = window.__fbm;
+        const unsub = onAuthStateChanged(auth, async (user) => {
           if (!user) {
             hydratedRef.current = false;
             setSync({ status: 'signed-out', uid: null, email: null, role: 'semi_admin', message: null });
             return;
           }
           if (user.isAnonymous) {
-            try { await auth.signOut(); } catch {}
+            try { await signOut(auth); } catch {}
             return;
           }
           await hydrateUserState(user);
