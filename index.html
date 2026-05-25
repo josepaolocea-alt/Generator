@@ -2066,6 +2066,10 @@
     const WL_SMS_NETWORK_ORDER = ['smart', 'globe', 'dito'];
 
     const wlSmsId = (prefix = 'wl') => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+    // Identity key for a test number — used to dedupe across the shared database.
+    // Matching by digits + network avoids duplicates from formatting differences (spaces, +, etc.).
+    const wlSmsNumberKey = (n) => `${String(n?.number || '').replace(/\D/g, '')}|${n?.network || ''}`;
+    const SHARED_WL_SMS_NUMBERS_DOC = ['shared', 'whitelistSmsTestNumbers'];
 
     const DEFAULT_WL_SMS_STATE = {
       rawPaste: '',
@@ -2119,18 +2123,23 @@
 
     function wlSmsNormalizeState(raw = {}) {
       const merged = { ...DEFAULT_WL_SMS_STATE, ...(raw || {}) };
+      // testNumbers in user state is legacy — the live source is the shared
+      // Firestore database. Keep this field so old caches still parse, but it
+      // will normally be []. Migration in App() drains it into the shared doc.
       const testNumbers = Array.isArray(merged.testNumbers) ? merged.testNumbers.map(n => ({
         id: n?.id || wlSmsId('tn'),
         label: String(n?.label || ''),
         number: String(n?.number || ''),
         network: WL_SMS_NETWORKS[n?.network] ? n.network : 'smart',
-      })) : DEFAULT_WL_SMS_STATE.testNumbers;
+      })) : [];
       const networks = Array.isArray(merged.networks)
         ? merged.networks.filter(n => WL_SMS_NETWORKS[n])
         : DEFAULT_WL_SMS_STATE.networks;
-      const validIds = new Set(testNumbers.map(n => n.id));
+      // Don't filter selectedNumberIds against the legacy personal list — the
+      // valid IDs now live in sharedTestNumbers and aren't visible here.
+      // wlSmsEffectiveNumbers() does the final filtering at use-time.
       const selectedNumberIds = Array.isArray(merged.selectedNumberIds)
-        ? merged.selectedNumberIds.filter(id => validIds.has(id))
+        ? merged.selectedNumberIds.filter(id => typeof id === 'string' && id)
         : [];
       const contents = Array.isArray(merged.contents)
         ? merged.contents.map(s => String(s ?? '')).filter(s => s.trim())
@@ -2149,15 +2158,21 @@
       };
     }
 
-    function wlSmsEffectiveNumbers(wl) {
+    function wlSmsEffectiveNumbers(wl, sharedTestNumbers) {
       const networks = new Set(wl.networks || []);
       const selected = new Set(wl.selectedNumberIds || []);
-      return (wl.testNumbers || []).filter(n => selected.has(n.id) && networks.has(n.network));
+      // sharedTestNumbers is the live cloud database. Fall back to whatever is
+      // in the (legacy) wl.testNumbers when no shared list has been provided,
+      // so this still works in transient states (before sign-in / Firebase load).
+      const source = Array.isArray(sharedTestNumbers) && sharedTestNumbers.length
+        ? sharedTestNumbers
+        : (wl.testNumbers || []);
+      return source.filter(n => selected.has(n.id) && networks.has(n.network));
     }
 
-    function buildWlSmsSheet(ws, wl) {
+    function buildWlSmsSheet(ws, wl, sharedTestNumbers) {
       const contents = (wl.contents || []).map(s => String(s ?? '')).filter(s => s.trim());
-      const numbers = wlSmsEffectiveNumbers(wl);
+      const numbers = wlSmsEffectiveNumbers(wl, sharedTestNumbers);
 
       ws.columns = [
         { key: 'number',  width: 16 },
@@ -2188,10 +2203,10 @@
       ws.views = [{ state: 'frozen', ySplit: 1 }];
     }
 
-    async function generateWlSmsWorkbook(state) {
+    async function generateWlSmsWorkbook(state, sharedTestNumbers) {
       const wl = wlSmsNormalizeState(state.whitelistSms);
       const contents = (wl.contents || []).filter(s => s && s.trim());
-      const numbers = wlSmsEffectiveNumbers(wl);
+      const numbers = wlSmsEffectiveNumbers(wl, sharedTestNumbers);
       if (!contents.length) throw new Error('No content blocks to whitelist. Paste content first.');
       if (!numbers.length) throw new Error('No test numbers selected for the chosen network(s).');
 
@@ -2200,7 +2215,7 @@
       wb.created = new Date();
       const sheetName = safeSheetName(wl.sheetName || 'Sheet1');
       const ws = wb.addWorksheet(sheetName);
-      buildWlSmsSheet(ws, wl);
+      buildWlSmsSheet(ws, wl, sharedTestNumbers);
 
       const buf = await wb.xlsx.writeBuffer();
       const senderPart = (wl.senderId || 'sender').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40) || 'sender';
@@ -5969,7 +5984,7 @@
     /* ============================================================
        Whitelist SMS - UI Components
        ============================================================ */
-    function WlSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync }) {
+    function WlSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, sharedTestNumbers }) {
       const theme = state.theme || 'dark';
       const wl = wlSmsNormalizeState(state.whitelistSms);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
@@ -5982,7 +5997,7 @@
         if (set.has(id)) set.delete(id); else set.add(id);
         return { ...prev, networks: WL_SMS_NETWORK_ORDER.filter(k => set.has(k)) };
       });
-      const numbers = wlSmsEffectiveNumbers(wl);
+      const numbers = wlSmsEffectiveNumbers(wl, sharedTestNumbers);
       return (
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
@@ -6140,11 +6155,11 @@
       );
     }
 
-    function WlSmsNumbersPanel({ wl, onChange }) {
+    function WlSmsNumbersPanel({ wl, onChange, sharedTestNumbers, onChangeSharedTestNumbers, sharedReady }) {
       const [newLabel, setNewLabel] = useState('');
       const [newNumber, setNewNumber] = useState('');
       const [newNetwork, setNewNetwork] = useState('smart');
-      const numbers = wl.testNumbers || [];
+      const numbers = Array.isArray(sharedTestNumbers) ? sharedTestNumbers : [];
       const selected = new Set(wl.selectedNumberIds || []);
       const toggle = (id) => {
         const next = new Set(selected);
@@ -6160,19 +6175,32 @@
         const trimmed = newNumber.trim();
         if (!trimmed) return;
         const entry = { id: wlSmsId('tn'), label: newLabel.trim() || trimmed, number: trimmed, network: newNetwork };
-        onChange({ ...wl, testNumbers: [...numbers, entry], selectedNumberIds: [...(wl.selectedNumberIds || []), entry.id] });
+        // Dedupe by digits + network so two devices adding the same number
+        // don't both succeed.
+        const key = wlSmsNumberKey(entry);
+        if (numbers.some(n => wlSmsNumberKey(n) === key)) {
+          // Already exists — just auto-select the existing entry.
+          const existing = numbers.find(n => wlSmsNumberKey(n) === key);
+          if (existing && !selected.has(existing.id)) {
+            onChange({ ...wl, selectedNumberIds: [...(wl.selectedNumberIds || []), existing.id] });
+          }
+        } else {
+          onChangeSharedTestNumbers([...numbers, entry]);
+          onChange({ ...wl, selectedNumberIds: [...(wl.selectedNumberIds || []), entry.id] });
+        }
         setNewLabel(''); setNewNumber('');
       };
-      const updateNumber = (id, patch) => onChange({ ...wl, testNumbers: numbers.map(n => n.id === id ? { ...n, ...patch } : n) });
-      const deleteNumber = (id) => onChange({
-        ...wl,
-        testNumbers: numbers.filter(n => n.id !== id),
-        selectedNumberIds: (wl.selectedNumberIds || []).filter(x => x !== id),
-      });
+      const updateNumber = (id, patch) => onChangeSharedTestNumbers(numbers.map(n => n.id === id ? { ...n, ...patch } : n));
+      const deleteNumber = (id) => {
+        onChangeSharedTestNumbers(numbers.filter(n => n.id !== id));
+        // Drop the id from this user's selection too. Other users' selections
+        // will get cleaned the next time wlSmsEffectiveNumbers runs.
+        onChange({ ...wl, selectedNumberIds: (wl.selectedNumberIds || []).filter(x => x !== id) });
+      };
       return (
         <div className="space-y-4">
           <Card className="p-4">
-            <SectionLabel hint="Check to include in the generated file">Test number database</SectionLabel>
+            <SectionLabel hint={sharedReady ? 'Shared with all users · check to include in the generated file' : 'Loading shared database…'}>Test number database</SectionLabel>
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <Btn variant="ghost" size="sm" onClick={selectAllVisible}>Select all visible</Btn>
               <Btn variant="ghost" size="sm" onClick={clearSelection}>Clear selection</Btn>
@@ -6226,9 +6254,9 @@
       );
     }
 
-    function WlSmsPreview({ wl }) {
+    function WlSmsPreview({ wl, sharedTestNumbers }) {
       const contents = (wl.contents || []).filter(s => s && s.trim());
-      const numbers = wlSmsEffectiveNumbers(wl);
+      const numbers = wlSmsEffectiveNumbers(wl, sharedTestNumbers);
       const rows = [];
       for (const n of numbers) {
         for (const c of contents) rows.push({ number: n.number, content: c, network: n.network });
@@ -6574,6 +6602,12 @@
   allow update: if isAdmin()
     || (request.auth.uid == uid
         && request.resource.data.role == resource.data.role);
+}
+
+// Shared Whitelist SMS test number database — any signed-in user (admin or
+// semi-admin) may read and write so semi-admins can add numbers too.
+match /shared/whitelistSmsTestNumbers {
+  allow read, write: if request.auth != null;
 }`}</pre>
           </div>
         </div>
@@ -6614,6 +6648,15 @@
       const localSaveTimerRef = useRef(null);
       const saveTimerRef = useRef(null);
       const lastSavedJsonRef = useRef('');
+      // Shared Whitelist SMS test number database. Lives in a single Firestore
+      // doc (shared/whitelistSmsTestNumbers) so every signed-in user — admin
+      // and semi-admin alike — sees and edits the same list. Both roles can
+      // add, edit, and delete; per-device selection state still lives in the
+      // per-user wl.selectedNumberIds.
+      const [sharedTestNumbers, setSharedTestNumbersRaw] = useState(() => DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })));
+      const [sharedTestNumbersReady, setSharedTestNumbersReady] = useState(false);
+      const sharedMigrationDoneRef = useRef(false);
+      const stateRef = useRef(null);
 
       const upsertUserProfile = useCallback(async (user) => {
         if (!window.__fb || !user) return null;
@@ -6709,6 +6752,148 @@
         return () => { if (localSaveTimerRef.current) clearTimeout(localSaveTimerRef.current); };
       }, [state]);
 
+      // Keep a ref to current state so async effects can read it without
+      // forcing themselves to depend on the whole state object.
+      useEffect(() => { stateRef.current = state; }, [state]);
+
+      // Push an updated shared test number list to Firestore (and update the
+      // local copy optimistically). All signed-in users — admin and semi-admin
+      // — may call this; Firestore rules must permit it.
+      const setSharedTestNumbers = useCallback(async (nextItems) => {
+        const safeItems = Array.isArray(nextItems) ? nextItems : [];
+        setSharedTestNumbersRaw(safeItems);
+        if (!window.__fb || !sync.uid) return;
+        try {
+          const { db } = window.__fb;
+          await db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1])
+            .set({
+              items: firestoreSanitize(safeItems),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+              updatedBy: sync.uid,
+            });
+        } catch (e) {
+          console.warn('shared testNumbers save failed', e);
+          setToast({ type: 'err', msg: 'Saving the shared number database failed. Check Firestore rules.' });
+          setTimeout(() => setToast(null), 4000);
+        }
+      }, [sync.uid]);
+
+      // Subscribe to the shared test-numbers doc. Seeds with the built-in
+      // defaults if missing, then migrates any per-user testNumbers that
+      // existed in legacy state into the shared list (one time per session).
+      useEffect(() => {
+        if (!window.__fb || !sync.uid) {
+          // Signed out / Firebase missing — keep showing the built-in defaults.
+          setSharedTestNumbersRaw(DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })));
+          setSharedTestNumbersReady(false);
+          sharedMigrationDoneRef.current = false;
+          return;
+        }
+        const { db } = window.__fb;
+        const ref = db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1]);
+        let cancelled = false;
+
+        // Seed if the doc has never been created. Once it exists — even with
+        // an empty items array (the user explicitly cleared the list) — we
+        // respect it and don't overwrite. Transaction prevents two devices
+        // coming online at once from racing.
+        (async () => {
+          try {
+            await db.runTransaction(async (tx) => {
+              const snap = await tx.get(ref);
+              if (snap.exists) return;
+              tx.set(ref, {
+                items: DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                updatedBy: sync.uid,
+              });
+            });
+          } catch (e) {
+            console.warn('shared testNumbers seed failed', e);
+          }
+        })();
+
+        const unsub = ref.onSnapshot((snap) => {
+          if (cancelled) return;
+          if (!snap.exists) return; // wait for the seed transaction
+          const raw = (snap.data() || {}).items;
+          const items = Array.isArray(raw) ? firestoreDesanitize(raw) : [];
+          setSharedTestNumbersRaw(items);
+          setSharedTestNumbersReady(true);
+        }, (err) => {
+          console.warn('shared testNumbers snapshot failed', err);
+          setSharedTestNumbersReady(true);
+        });
+
+        return () => { cancelled = true; unsub(); };
+      }, [sync.uid]);
+
+      // One-time migration: once shared list is ready and the user's state has
+      // been hydrated, drain any per-user testNumbers (from legacy state) into
+      // the shared list, dedupe by digits+network, then clear the per-user
+      // copy and remap selectedNumberIds onto shared IDs. Runs once per
+      // session (sharedMigrationDoneRef).
+      useEffect(() => {
+        if (!window.__fb || !sync.uid) return;
+        if (!sharedTestNumbersReady) return;
+        if (sharedMigrationDoneRef.current) return;
+        const personal = state?.whitelistSms?.testNumbers || [];
+        if (!personal.length) {
+          sharedMigrationDoneRef.current = true;
+          return;
+        }
+        sharedMigrationDoneRef.current = true;
+
+        const items = sharedTestNumbers;
+        const sharedByKey = new Map(items.map(n => [wlSmsNumberKey(n), n.id]));
+        const sharedIds = new Set(items.map(n => n.id));
+        const toAdd = [];
+        const idMap = new Map();
+        for (const n of personal) {
+          const k = wlSmsNumberKey(n);
+          if (!k.split('|')[0]) continue;
+          if (sharedByKey.has(k)) {
+            idMap.set(n.id, sharedByKey.get(k));
+            continue;
+          }
+          const newId = sharedIds.has(n.id) ? wlSmsId('tn') : n.id;
+          const entry = { id: newId, label: n.label || n.number, number: n.number, network: n.network };
+          toAdd.push(entry);
+          sharedIds.add(newId);
+          sharedByKey.set(k, newId);
+          idMap.set(n.id, newId);
+        }
+
+        if (toAdd.length) {
+          const merged = [...items, ...toAdd];
+          const { db } = window.__fb;
+          db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1])
+            .set({
+              items: firestoreSanitize(merged),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+              updatedBy: sync.uid,
+            })
+            .catch(e => console.warn('shared testNumbers migration write failed', e));
+        }
+
+        // Clear personal testNumbers and remap selectedNumberIds. setStateRaw
+        // (not setState) so this migration isn't tagged as a user edit and
+        // doesn't fight cloud sync over a state that's just being normalized.
+        setStateRaw(prev => {
+          const oldWl = prev.whitelistSms || {};
+          const remappedSelected = (oldWl.selectedNumberIds || [])
+            .map(id => idMap.get(id) || id);
+          return {
+            ...prev,
+            whitelistSms: {
+              ...oldWl,
+              testNumbers: [],
+              selectedNumberIds: Array.from(new Set(remappedSelected)),
+            },
+          };
+        });
+      }, [sync.uid, sharedTestNumbersReady, sharedTestNumbers, state]);
+
       // Apply theme class to <html>
       useEffect(() => {
         const root = document.documentElement;
@@ -6798,7 +6983,7 @@
             const fn = await generateBmrSmsWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else if (state.module === 'whitelist_sms') {
-            const fn = await generateWlSmsWorkbook(state);
+            const fn = await generateWlSmsWorkbook(state, sharedTestNumbers);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else {
             await generateWorkbook(state);
@@ -7191,7 +7376,7 @@
       if (isWlSms) {
         const wl = whitelistSms;
         const setWl = setWhitelistSms;
-        const numbers = wlSmsEffectiveNumbers(wl);
+        const numbers = wlSmsEffectiveNumbers(wl, sharedTestNumbers);
         const rowCount = (wl.contents || []).filter(s => s && s.trim()).length * numbers.length;
         const WL_TABS = [
           { id: 'content', label: 'Content' },
@@ -7201,7 +7386,7 @@
         ];
         return (
           <div className="flex min-h-screen text-neutral-100">
-            <WlSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
+            <WlSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} sharedTestNumbers={sharedTestNumbers} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
                 <div className="app-title-block">
@@ -7237,13 +7422,13 @@
                   {whitelistSmsTab === 'numbers' && (
                     <div className="space-y-6">
                       <SectionLabel hint="Pick the test numbers to include in the output">Test numbers</SectionLabel>
-                      <WlSmsNumbersPanel wl={wl} onChange={setWl} />
+                      <WlSmsNumbersPanel wl={wl} onChange={setWl} sharedTestNumbers={sharedTestNumbers} onChangeSharedTestNumbers={setSharedTestNumbers} sharedReady={sharedTestNumbersReady} />
                     </div>
                   )}
                   {whitelistSmsTab === 'preview' && (
                     <div className="space-y-3">
                       <SectionLabel hint="Same shape as the generated xlsx">Preview</SectionLabel>
-                      <WlSmsPreview wl={wl} />
+                      <WlSmsPreview wl={wl} sharedTestNumbers={sharedTestNumbers} />
                     </div>
                   )}
                   {whitelistSmsTab === 'notes' && (
