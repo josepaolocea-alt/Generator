@@ -2082,12 +2082,16 @@
       notes: '',
     };
 
+    function stripWlSmsLeadingNumber(block) {
+      return block.replace(/^\s*\d+[.\)]\s+/, '');
+    }
+
     function parseWlSmsBlasts(text, mode = 'auto') {
       if (text === null || text === undefined) return [];
       const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       const lines = normalized.split('\n');
       if (mode === 'lines') {
-        return lines.map(l => l.trim()).filter(l => l.length);
+        return lines.map(l => l.trim()).filter(l => l.length).map(stripWlSmsLeadingNumber);
       }
       const isDivider = (line) => {
         const trimmed = line.trim();
@@ -2102,14 +2106,14 @@
       for (const line of lines) {
         if (isSeparator(line)) {
           const block = current.join('\n').trim();
-          if (block) blocks.push(block);
+          if (block) blocks.push(stripWlSmsLeadingNumber(block));
           current = [];
         } else {
           current.push(line);
         }
       }
       const tail = current.join('\n').trim();
-      if (tail) blocks.push(tail);
+      if (tail) blocks.push(stripWlSmsLeadingNumber(tail));
       return blocks;
     }
 
