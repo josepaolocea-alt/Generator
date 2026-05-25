@@ -50,57 +50,57 @@
       appId: "1:583041630798:web:cec475e2be78f31222391f",
       measurementId: "G-FLCL187CN4"
     };
-    try {
-      firebase.initializeApp(FIREBASE_CONFIG);
-      // CRITICAL: Apply Firestore transport settings BEFORE the first
-      // firebase.firestore() call. Once firestore() is called, the underlying
-      // instance is created and settings() can no longer change transport.
-      //
-      // The previous approach (firestore().settings({...})) silently failed
-      // to switch off WebChannel on some users' machines — visible in the
-      // Network tab as Listen/channel?VER=8 requests, which is WebChannel
-      // protocol. Those requests trigger "INTERNAL ASSERTION FAILED:
-      // Unexpected state" on networks where WebChannel's bidi streaming
-      // gets mangled.
-      //
-      // initializeFirestore() is the supported API for setting transport
-      // options at creation time. The compat builds expose it on the
-      // firebase.firestore namespace.
-      let __longPollingApplied = false;
-      let __initMethod = 'firestore()';
+    // Init is now async because we need to dynamically import the modular
+    // Firestore SDK alongside the compat builds. Reason: the compat
+    // firestore().settings({experimentalForceLongPolling:true}) silently
+    // fails to switch transport on some users' networks — Listen/channel
+    // requests still carry VER=8 (WebChannel) and the SDK hits
+    // "INTERNAL ASSERTION FAILED: Unexpected state". The modular SDK's
+    // initializeFirestore() actually honors the setting because it
+    // configures the instance at creation time. Compat and modular share
+    // the same underlying Firestore instance for the default app, so once
+    // modular sets long polling, every compat call uses it too.
+    //
+    // The page sets a `firebase-ready` event when init finishes (success or
+    // failure). React mount below waits for it before rendering App.
+    window.__firebaseInitPromise = (async () => {
       try {
-        if (typeof firebase.firestore.initializeFirestore === 'function') {
-          firebase.firestore.initializeFirestore(firebase.app(), {
+        firebase.initializeApp(FIREBASE_CONFIG);
+        let longPollingApplied = false;
+        let initMethod = 'none';
+        try {
+          const mod = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
+          mod.initializeFirestore(firebase.app(), {
             experimentalForceLongPolling: true,
           });
-          __longPollingApplied = true;
-          __initMethod = 'initializeFirestore';
-        } else {
-          // Fallback: older builds without initializeFirestore. settings()
-          // must run before any other firestore op.
-          firebase.firestore().settings({ experimentalForceLongPolling: true });
-          __longPollingApplied = true;
-          __initMethod = 'settings()';
+          longPollingApplied = true;
+          initMethod = 'modular initializeFirestore';
+        } catch (modErr) {
+          console.error('[firestore] Modular initializeFirestore failed, falling back to compat settings():', modErr);
+          try {
+            firebase.firestore().settings({ experimentalForceLongPolling: true });
+            longPollingApplied = true;
+            initMethod = 'compat settings()';
+          } catch (e) {
+            console.error('[firestore] Compat settings() also failed:', e);
+          }
         }
+        console.info('[firestore]', {
+          sdk: firebase.SDK_VERSION,
+          longPollingApplied,
+          initMethod,
+          origin: location.origin,
+        });
+        try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
+        window.__fb = {
+          auth: firebase.auth(),
+          db: firebase.firestore(),
+        };
       } catch (e) {
-        console.error('[firestore] Long polling NOT applied. WebChannel will be used and may crash with "Unexpected state".', e);
+        console.warn('Firebase init failed:', e);
+        window.__fb = null;
       }
-      const __db = firebase.firestore();
-      console.info('[firestore]', {
-        sdk: firebase.SDK_VERSION,
-        longPollingApplied: __longPollingApplied,
-        initMethod: __initMethod,
-        origin: location.origin,
-      });
-      try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
-      window.__fb = {
-        auth: firebase.auth(),
-        db: __db,
-      };
-    } catch (e) {
-      console.warn('Firebase init failed:', e);
-      window.__fb = null;
-    }
+    })();
 
     // Bootstrap admins — emails in this list are always treated as admin
     // regardless of the role stored in Firestore. Used to seed the first
@@ -7690,9 +7690,19 @@ match /shared/whitelistSmsTestNumbers {
       }
     });
 
-    ReactDOM.createRoot(document.getElementById('root')).render(
-      <AppErrorBoundary><App /></AppErrorBoundary>
-    );
+    // Wait for the async firebase init (modular initializeFirestore) before
+    // mounting React, otherwise App boots with window.__fb still undefined
+    // and lands in offline mode for the entire session.
+    (async () => {
+      try {
+        if (window.__firebaseInitPromise) await window.__firebaseInitPromise;
+      } catch (e) {
+        console.warn('Firebase init promise rejected:', e);
+      }
+      ReactDOM.createRoot(document.getElementById('root')).render(
+        <AppErrorBoundary><App /></AppErrorBoundary>
+      );
+    })();
   </script>
 </body>
 </html>
