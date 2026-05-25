@@ -3533,7 +3533,7 @@
             const ref = window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('templates');
             const snap = await ref.get();
             if (cancelled) return;
-            const remote = snap.exists ? (snap.data().items || []) : null;
+            const remote = snap.exists ? (firestoreDesanitize(snap.data()).items || []) : null;
             if (Array.isArray(remote) && remote.length) {
               const merged = [...remote];
               for (const local of templates) {
@@ -3552,7 +3552,7 @@
         localStorage.setItem(TEMPLATES_KEY, JSON.stringify(next));
         if (window.__fb && sync?.uid) {
           window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('templates')
-            .set({ items: next, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+            .set({ items: firestoreSanitize(next), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
             .catch(e => console.warn('templates save failed', e));
         }
       };
@@ -5722,7 +5722,7 @@
             const ref = window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('editorTemplates');
             const snap = await ref.get();
             if (cancelled) return;
-            const remote = snap.exists ? (snap.data().items || []) : null;
+            const remote = snap.exists ? (firestoreDesanitize(snap.data()).items || []) : null;
             if (Array.isArray(remote) && remote.length) {
               const merged = [...remote];
               for (const local of templates) {
@@ -5741,7 +5741,7 @@
         localStorage.setItem(EDITOR_TEMPLATES_KEY, JSON.stringify(next));
         if (window.__fb && sync?.uid) {
           window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('editorTemplates')
-            .set({ items: next, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+            .set({ items: firestoreSanitize(next), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
             .catch(e => console.warn('editor templates save failed', e));
         }
       };
@@ -6322,6 +6322,45 @@
       return Math.max(timestampMs(data?.localUpdatedAt), timestampMs(data?.updatedAt));
     }
 
+    // Firestore does not allow arrays directly inside arrays. Wrap any nested
+    // array as `{ __arr: [...] }` on write and unwrap on read. This is needed
+    // for editor.cells (a 2D string grid) and future-proofs any other 2D field.
+    const FIRESTORE_NESTED_ARRAY_KEY = '__arr';
+    function firestoreSanitize(value) {
+      if (Array.isArray(value)) {
+        return value.map(v => Array.isArray(v)
+          ? { [FIRESTORE_NESTED_ARRAY_KEY]: firestoreSanitize(v) }
+          : firestoreSanitize(v));
+      }
+      if (value && typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+          if (v === undefined) continue;
+          out[k] = firestoreSanitize(v);
+        }
+        return out;
+      }
+      return value;
+    }
+    function firestoreDesanitize(value) {
+      if (Array.isArray(value)) {
+        return value.map(v => {
+          if (v && typeof v === 'object' && !Array.isArray(v)
+              && Object.prototype.hasOwnProperty.call(v, FIRESTORE_NESTED_ARRAY_KEY)
+              && Object.keys(v).length === 1) {
+            return firestoreDesanitize(v[FIRESTORE_NESTED_ARRAY_KEY]);
+          }
+          return firestoreDesanitize(v);
+        });
+      }
+      if (value && typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value)) out[k] = firestoreDesanitize(v);
+        return out;
+      }
+      return value;
+    }
+
     function migrateSheetItem(item) {
       const label = itemLabel(item);
       const nextLabel = label.trim().toLowerCase() === 'remarks from tse' ? 'Remarks from L2' : label;
@@ -6408,7 +6447,7 @@
           const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
           const snap = await ref.get();
           if (snap.exists) {
-            const remote = normalizeAppState(mergeLocalSheetActiveFlags(snap.data()), { migrateLegacyLabels: true });
+            const remote = normalizeAppState(mergeLocalSheetActiveFlags(firestoreDesanitize(snap.data())), { migrateLegacyLabels: true });
             if (remote && Array.isArray(remote.sheets)) {
               setStateRaw(local => {
                 const current = normalizeAppState(local);
@@ -6504,8 +6543,9 @@
             const { db } = window.__fb;
             try { await db.enableNetwork(); } catch (_) {}
             const { tab, ...persist } = state;
+            const safe = firestoreSanitize({ ...persist, localUpdatedAt });
             await db.collection('users').doc(sync.uid).collection('state').doc('main')
-              .set({ ...persist, localUpdatedAt, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+              .set({ ...safe, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
             if ((state.localUpdatedAt || stateEditedAt(state) || localUpdatedAt) === localUpdatedAt) userEditRef.current = false;
             setSync(s => ({ ...s, status: 'synced', message: null }));
           } catch (e) {
