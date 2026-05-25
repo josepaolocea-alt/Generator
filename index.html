@@ -6661,20 +6661,43 @@ match /shared/whitelistSmsTestNumbers {
       const upsertUserProfile = useCallback(async (user) => {
         if (!window.__fb || !user) return null;
         const { db } = window.__fb;
+        // Hard cap each Firestore call. If rules deny or the network stalls,
+        // the SDK can sit on a get/set indefinitely and the caller (sign-in)
+        // never gets to flip status off "connecting" — that's the "LOADING…"
+        // forever symptom for semi-admins whose profile read is slow/denied.
+        const withTimeout = (p, label) => Promise.race([
+          p,
+          new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timed out')), 10000)),
+        ]);
         try {
           const ref = db.collection('userProfiles').doc(user.uid);
-          const snap = await ref.get();
+          const snap = await withTimeout(ref.get(), 'userProfile read');
           const now = firebase.firestore.FieldValue.serverTimestamp();
           if (!snap.exists) {
             // First-time: write email + createdAt only. Never set `role` here —
             // role must be assigned by an admin via the Users panel.
-            await ref.set({ email: user.email || '', createdAt: now, updatedAt: now }, { merge: true });
+            try {
+              await withTimeout(
+                ref.set({ email: user.email || '', createdAt: now, updatedAt: now }, { merge: true }),
+                'userProfile create'
+              );
+            } catch (e) {
+              // Profile create failing shouldn't block sign-in. Worst case the
+              // user shows up in the Users panel only after a later write.
+              console.warn('userProfile create failed', e);
+            }
             return null;
           }
           // Keep email up to date in case the user changed it in Firebase Auth.
           const patch = { updatedAt: now };
           if ((snap.data() || {}).email !== user.email) patch.email = user.email || '';
-          if (Object.keys(patch).length > 1) await ref.set(patch, { merge: true });
+          if (Object.keys(patch).length > 1) {
+            try {
+              await withTimeout(ref.set(patch, { merge: true }), 'userProfile update');
+            } catch (e) {
+              console.warn('userProfile update failed', e);
+            }
+          }
           return (snap.data() || {}).role || null;
         } catch (e) {
           console.warn('userProfile upsert failed', e);
@@ -6684,14 +6707,27 @@ match /shared/whitelistSmsTestNumbers {
 
       const hydrateUserState = useCallback(async (user) => {
         if (!window.__fb || !user) return false;
-        const { db } = window.__fb;
+        const { auth, db } = window.__fb;
+        // Drop stale results once the user has signed out (or switched accounts)
+        // in the time it took the Firestore round-trip to finish. Without this,
+        // a late-arriving response would write the old uid back into sync state
+        // and hide the AuthModal — leaving a black screen with no sign-in form.
+        const isStale = () => auth.currentUser?.uid !== user.uid;
         const dbRole = await upsertUserProfile(user);
+        if (isStale()) return false;
         const role = effectiveRole(user.email, dbRole);
         setSync({ status: 'loading', uid: user.uid, email: user.email, role, message: null });
         try {
           try { await db.enableNetwork(); } catch (_) {}
+          if (isStale()) return false;
           const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
-          const snap = await ref.get();
+          // Hard cap the network read. If it hangs (e.g. rules path that the
+          // SDK keeps retrying), we'd otherwise be stuck on "Loading…" forever.
+          const snap = await Promise.race([
+            ref.get(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('Firestore read timed out after 15s')), 15000)),
+          ]);
+          if (isStale()) return false;
           if (snap.exists) {
             const remote = normalizeAppState(mergeLocalSheetActiveFlags(firestoreDesanitize(snap.data())), { migrateLegacyLabels: true });
             if (remote && Array.isArray(remote.sheets)) {
@@ -6708,6 +6744,7 @@ match /shared/whitelistSmsTestNumbers {
           return true;
         } catch (e) {
           console.warn('Firestore hydrate failed', e);
+          if (isStale()) return false;
           hydratedRef.current = true;
           setSync({
             status: 'offline',
