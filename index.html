@@ -65,15 +65,20 @@
     // everywhere proxies allow regular requests through.
     window.__firebaseInitPromise = (async () => {
       try {
-        // All Firebase modules must come from the SAME bundle so they share
-        // one internal app registry. Mixing sources (e.g. gstatic compat +
-        // jsdelivr modular) creates separate registries and modular
-        // initializeFirestore() errors with "Component firestore has not been
-        // registered yet" because the app it sees doesn't have firestore.
+        // All Firebase modules must share the SAME internal firebase/app
+        // module instance, otherwise firestore registers its component on a
+        // different app than the one we initialize and you get
+        // "Component firestore has not been registered yet".
+        //
+        // jsdelivr's +esm modifier bundles each subpackage separately — each
+        // bundle ships its own copy of firebase/app, so they don't share.
+        // gstatic's modular URLs (without -compat) use relative imports
+        // internally; the browser dedupes those by URL, so all three modules
+        // resolve to the SAME firebase-app.js instance.
         const [appMod, authMod, fsMod] = await Promise.all([
-          import('https://cdn.jsdelivr.net/npm/firebase@10.14.1/app/+esm'),
-          import('https://cdn.jsdelivr.net/npm/firebase@10.14.1/auth/+esm'),
-          import('https://cdn.jsdelivr.net/npm/firebase@10.14.1/firestore/+esm'),
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js'),
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js'),
+          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'),
         ]);
         const app = appMod.initializeApp(FIREBASE_CONFIG);
         // Force long polling — this is the whole reason for going modular,
@@ -103,7 +108,7 @@
         window.__fb = { auth, db };
         console.info('[firestore]', {
           longPollingApplied: true,
-          initMethod: 'modular (jsdelivr +esm)',
+          initMethod: 'modular (gstatic)',
           origin: location.origin,
         });
       } catch (e) {
