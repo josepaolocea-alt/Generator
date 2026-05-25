@@ -6821,6 +6821,51 @@ match /shared/whitelistSmsTestNumbers {
       // forcing themselves to depend on the whole state object.
       useEffect(() => { stateRef.current = state; }, [state]);
 
+      // One-shot loader for the shared test-numbers doc. The previous
+      // implementation used onSnapshot for real-time updates, but Firestore's
+      // watch_change.ts hits "INTERNAL ASSERTION FAILED: Unexpected state" on
+      // some users' networks/machines — even with experimentalForceLongPolling
+      // — and once that fires the entire SDK is unreliable for the session.
+      // A plain get() doesn't go through the watch target lifecycle, so it
+      // sidesteps the bug entirely. Trade-off: no live updates from other
+      // devices, but the data refreshes on sign-in and after every save.
+      const loadSharedTestNumbers = useCallback(async () => {
+        if (!window.__fb || !sync.uid) return;
+        const { db } = window.__fb;
+        const ref = db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1]);
+        try {
+          const snap = await ref.get();
+          if (!snap.exists) {
+            // Doc missing — try to seed with defaults (best effort; harmless
+            // if it fails for permissions, the user just sees built-ins).
+            try {
+              await ref.set({
+                items: DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                updatedBy: sync.uid,
+              });
+              setSharedTestNumbersRaw(DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })));
+            } catch (seedErr) {
+              console.warn('shared testNumbers seed failed', {
+                code: seedErr?.code, message: seedErr?.message, uid: sync.uid, error: seedErr,
+              });
+            }
+            setSharedTestNumbersReady(true);
+            return;
+          }
+          const raw = (snap.data() || {}).items;
+          const items = Array.isArray(raw) ? firestoreDesanitize(raw) : [];
+          setSharedTestNumbersRaw(items);
+          setSharedTestNumbersReady(true);
+        } catch (err) {
+          console.warn('shared testNumbers load failed', {
+            code: err?.code, message: err?.message, uid: sync.uid, error: err,
+          });
+          // Don't block the UI — show built-in defaults and let the user retry.
+          setSharedTestNumbersReady(true);
+        }
+      }, [sync.uid]);
+
       // Push an updated shared test number list to Firestore (and update the
       // local copy optimistically). All signed-in users — admin and semi-admin
       // — may call this; Firestore rules must permit it.
@@ -6852,63 +6897,17 @@ match /shared/whitelistSmsTestNumbers {
         }
       }, [sync.uid, sync.role]);
 
-      // Subscribe to the shared test-numbers doc. Seeds with the built-in
-      // defaults if missing, then migrates any per-user testNumbers that
-      // existed in legacy state into the shared list (one time per session).
+      // Load the shared test numbers once on sign-in (replaces the realtime
+      // listener). Sign-out resets to built-in defaults.
       useEffect(() => {
         if (!window.__fb || !sync.uid) {
-          // Signed out / Firebase missing — keep showing the built-in defaults.
           setSharedTestNumbersRaw(DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })));
           setSharedTestNumbersReady(false);
           sharedMigrationDoneRef.current = false;
           return;
         }
-        const { db } = window.__fb;
-        const ref = db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1]);
-        let cancelled = false;
-
-        // Seed if the doc has never been created. The original implementation
-        // used runTransaction(), but that creates a watch target that races
-        // against the onSnapshot listener below and reliably triggers the
-        // Firestore SDK's "INTERNAL ASSERTION FAILED: Unexpected state" bug
-        // (forEachTarget in watch_change.ts) for users whose first sign-in
-        // hits this codepath. Instead: do a plain get() first; only fall
-        // through to a plain set() if it's missing. No transaction, no
-        // overlapping targets — the listener owns the watch lifecycle.
-        (async () => {
-          try {
-            const initialSnap = await ref.get();
-            if (cancelled || initialSnap.exists) return;
-            await ref.set({
-              items: DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })),
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-              updatedBy: sync.uid,
-            });
-          } catch (e) {
-            console.warn('shared testNumbers seed failed', {
-              code: e?.code, message: e?.message, uid: sync.uid, error: e,
-            });
-          }
-        })();
-
-        const unsub = ref.onSnapshot((snap) => {
-          if (cancelled) return;
-          if (!snap.exists) return; // wait for the seed transaction
-          const raw = (snap.data() || {}).items;
-          const items = Array.isArray(raw) ? firestoreDesanitize(raw) : [];
-          setSharedTestNumbersRaw(items);
-          setSharedTestNumbersReady(true);
-        }, (err) => {
-          // If onSnapshot fails with permission-denied, the deployed rules don't
-          // allow this signed-in user to read /shared/whitelistSmsTestNumbers.
-          console.warn('shared testNumbers snapshot failed', {
-            code: err?.code, message: err?.message, uid: sync.uid, error: err,
-          });
-          setSharedTestNumbersReady(true);
-        });
-
-        return () => { cancelled = true; unsub(); };
-      }, [sync.uid]);
+        loadSharedTestNumbers();
+      }, [sync.uid, loadSharedTestNumbers]);
 
       // One-time migration: once shared list is ready and the user's state has
       // been hydrated, drain any per-user testNumbers (from legacy state) into
