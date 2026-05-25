@@ -6867,20 +6867,22 @@ match /shared/whitelistSmsTestNumbers {
         const ref = db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1]);
         let cancelled = false;
 
-        // Seed if the doc has never been created. Once it exists — even with
-        // an empty items array (the user explicitly cleared the list) — we
-        // respect it and don't overwrite. Transaction prevents two devices
-        // coming online at once from racing.
+        // Seed if the doc has never been created. The original implementation
+        // used runTransaction(), but that creates a watch target that races
+        // against the onSnapshot listener below and reliably triggers the
+        // Firestore SDK's "INTERNAL ASSERTION FAILED: Unexpected state" bug
+        // (forEachTarget in watch_change.ts) for users whose first sign-in
+        // hits this codepath. Instead: do a plain get() first; only fall
+        // through to a plain set() if it's missing. No transaction, no
+        // overlapping targets — the listener owns the watch lifecycle.
         (async () => {
           try {
-            await db.runTransaction(async (tx) => {
-              const snap = await tx.get(ref);
-              if (snap.exists) return;
-              tx.set(ref, {
-                items: DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })),
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                updatedBy: sync.uid,
-              });
+            const initialSnap = await ref.get();
+            if (cancelled || initialSnap.exists) return;
+            await ref.set({
+              items: DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+              updatedBy: sync.uid,
             });
           } catch (e) {
             console.warn('shared testNumbers seed failed', {
@@ -7623,7 +7625,56 @@ match /shared/whitelistSmsTestNumbers {
       );
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    // Error boundary — if Firestore (or anything else) throws during render,
+    // React 18 unmounts the whole tree by default, producing the "black screen
+    // after sign-out" symptom. This catches the error and shows a recovery UI
+    // with a Reload button instead of nothing.
+    class AppErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+      componentDidCatch(error, info) {
+        console.error('App crashed:', error, info);
+      }
+      render() {
+        if (this.state.error) {
+          const msg = String(this.state.error?.message || this.state.error || 'Unknown error');
+          return (
+            <div className="min-h-screen flex items-center justify-center p-8 bg-[#0a0a0a] text-neutral-100">
+              <div className="max-w-lg w-full border border-red-500/40 bg-red-500/5 rounded-xl p-6">
+                <div className="text-red-300 text-sm font-semibold mb-2">Something went wrong</div>
+                <pre className="text-[11px] text-neutral-400 font-mono whitespace-pre-wrap break-words mb-4">{msg}</pre>
+                <button
+                  onClick={() => location.reload()}
+                  className="px-3 py-1.5 text-xs font-semibold rounded bg-blue-500/20 text-blue-200 border border-blue-500/40 hover:bg-blue-500/30">
+                  Reload
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // Surface unhandled Firestore SDK assertion errors. They originate inside
+    // the SDK's promise queue and React never sees them — but they corrupt the
+    // SDK's internal state, so we at least log a clear hint instead of leaving
+    // the user staring at a half-broken app.
+    window.addEventListener('unhandledrejection', (e) => {
+      const msg = String(e.reason?.message || e.reason || '');
+      if (msg.includes('INTERNAL ASSERTION FAILED')) {
+        console.error('[firestore] Internal SDK assertion — Firestore state is now unreliable until reload. Reason:', e.reason);
+      }
+    });
+
+    ReactDOM.createRoot(document.getElementById('root')).render(
+      <AppErrorBoundary><App /></AppErrorBoundary>
+    );
   </script>
 </body>
 </html>
