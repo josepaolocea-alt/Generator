@@ -34,10 +34,12 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <!-- Firebase (compat builds for non-module use) -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics-compat.js"></script>
+  <!-- 10.14.1 includes the Firestore stability fixes for "INTERNAL ASSERTION
+       FAILED: Unexpected state" that 10.12.5 still had. -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-analytics-compat.js"></script>
   <script>
     const FIREBASE_CONFIG = {
       apiKey: "AIzaSyAHfgzQoPpojhLFOIRlXF_UJg9lKZjTfA4",
@@ -53,16 +55,17 @@
       try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
       const __db = firebase.firestore();
       // Firestore's default WebChannel transport breaks behind some corporate
-      // proxies / antivirus / VPNs, surfacing as "FIRESTORE (10.x.x) INTERNAL
-      // ASSERTION FAILED: Unexpected state" — every subsequent call then fails
-      // and the app misreads it as a rules deny. Auto-detect long polling lets
-      // the SDK fall back to regular HTTP when WebChannel is blocked. Must be
-      // called BEFORE any other Firestore method (incl. firestore() use).
+      // proxies / antivirus / VPNs, surfacing as "FIRESTORE INTERNAL ASSERTION
+      // FAILED: Unexpected state" — every subsequent call then fails and the
+      // app misreads it as a rules deny. Forcing long polling skips WebChannel
+      // entirely and uses regular HTTP requests, which proxies handle fine.
+      // Auto-detect wasn't enough because the SDK still attempts WebChannel
+      // first and the assertion fires before the fallback can kick in.
+      // .settings() MUST be called before any other Firestore method.
       try {
         __db.settings({
-          experimentalAutoDetectLongPolling: true,
+          experimentalForceLongPolling: true,
           useFetchStreams: false,
-          merge: true,
         });
       } catch (e) {
         console.warn('Firestore settings failed (may already be initialized):', e);
