@@ -6743,7 +6743,12 @@ match /shared/whitelistSmsTestNumbers {
           setSync({ status: 'synced', uid: user.uid, email: user.email, role, message: null });
           return true;
         } catch (e) {
-          console.warn('Firestore hydrate failed', e);
+          // Log the structured error so we can tell rules-deny from timeout
+          // from offline. role/uid included to correlate with the deployed
+          // Firestore rules when triaging.
+          console.warn('Firestore hydrate failed', {
+            code: e?.code, message: e?.message, role, uid: user.uid, error: e,
+          });
           if (isStale()) return false;
           hydratedRef.current = true;
           setSync({
@@ -6809,11 +6814,20 @@ match /shared/whitelistSmsTestNumbers {
               updatedBy: sync.uid,
             });
         } catch (e) {
-          console.warn('shared testNumbers save failed', e);
-          setToast({ type: 'err', msg: 'Saving the shared number database failed. Check Firestore rules.' });
-          setTimeout(() => setToast(null), 4000);
+          // Surface the actual Firestore error code (e.g. permission-denied) in
+          // both the console and the toast — a bare "check rules" message hides
+          // whether it's a rules deny, a network error, or something else.
+          console.warn('shared testNumbers save failed', {
+            code: e?.code, message: e?.message, role: sync.role, uid: sync.uid, error: e,
+          });
+          const code = e?.code ? ` (${e.code})` : '';
+          setToast({
+            type: 'err',
+            msg: `Saving the shared number database failed${code}. ${e?.code === 'permission-denied' ? 'Firestore rules denied the write — verify the deployed rules allow signed-in writes to /shared/whitelistSmsTestNumbers.' : 'Check the browser console for details.'}`,
+          });
+          setTimeout(() => setToast(null), 8000);
         }
-      }, [sync.uid]);
+      }, [sync.uid, sync.role]);
 
       // Subscribe to the shared test-numbers doc. Seeds with the built-in
       // defaults if missing, then migrates any per-user testNumbers that
@@ -6846,7 +6860,9 @@ match /shared/whitelistSmsTestNumbers {
               });
             });
           } catch (e) {
-            console.warn('shared testNumbers seed failed', e);
+            console.warn('shared testNumbers seed failed', {
+              code: e?.code, message: e?.message, uid: sync.uid, error: e,
+            });
           }
         })();
 
@@ -6858,7 +6874,11 @@ match /shared/whitelistSmsTestNumbers {
           setSharedTestNumbersRaw(items);
           setSharedTestNumbersReady(true);
         }, (err) => {
-          console.warn('shared testNumbers snapshot failed', err);
+          // If onSnapshot fails with permission-denied, the deployed rules don't
+          // allow this signed-in user to read /shared/whitelistSmsTestNumbers.
+          console.warn('shared testNumbers snapshot failed', {
+            code: err?.code, message: err?.message, uid: sync.uid, error: err,
+          });
           setSharedTestNumbersReady(true);
         });
 
