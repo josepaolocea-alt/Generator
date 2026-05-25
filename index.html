@@ -6613,6 +6613,7 @@
       const hydratedRef = useRef(false);
       const localSaveTimerRef = useRef(null);
       const saveTimerRef = useRef(null);
+      const lastSavedJsonRef = useRef('');
 
       const upsertUserProfile = useCallback(async (user) => {
         if (!window.__fb || !user) return null;
@@ -6738,24 +6739,26 @@
       useEffect(() => {
         if (!window.__fb || !hydratedRef.current || !sync.uid) return;
         if (!userEditRef.current) return;
+        const { tab, ...persist } = state;
+        const snapshotJson = JSON.stringify(persist);
+        if (snapshotJson === lastSavedJsonRef.current) return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         setSync(s => s.status === 'saving' ? s : { ...s, status: 'saving', message: null });
         saveTimerRef.current = setTimeout(async () => {
           const localUpdatedAt = state.localUpdatedAt || stateEditedAt(state) || Date.now();
           try {
             const { db } = window.__fb;
-            try { await db.enableNetwork(); } catch (_) {}
-            const { tab, ...persist } = state;
             const safe = firestoreSanitize({ ...persist, localUpdatedAt });
             await db.collection('users').doc(sync.uid).collection('state').doc('main')
               .set({ ...safe, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+            lastSavedJsonRef.current = snapshotJson;
             if ((state.localUpdatedAt || stateEditedAt(state) || localUpdatedAt) === localUpdatedAt) userEditRef.current = false;
             setSync(s => ({ ...s, status: 'synced', message: null }));
           } catch (e) {
             console.warn('Firestore save failed', e);
             setSync(s => ({ ...s, status: 'offline', message: syncErrorMessage(e, 'Cloud sync save failed') }));
           }
-        }, 800);
+        }, 400);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
       }, [state, sync.uid]);
 
