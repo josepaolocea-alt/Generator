@@ -2050,6 +2050,149 @@
     }
 
     /* ============================================================
+       Whitelist SMS module - paste content blocks, pick test numbers,
+       generate xlsx blast file
+       ============================================================ */
+    const WL_SMS_NETWORKS = {
+      smart: { id: 'smart', label: 'PH Smart Mob', shortLabel: 'Smart', color: '#22C55E' },
+      globe: { id: 'globe', label: 'PH Globe Mob', shortLabel: 'Globe', color: '#3B82F6' },
+      dito:  { id: 'dito',  label: 'PH DITO',      shortLabel: 'DITO',  color: '#F59E0B' },
+    };
+    const WL_SMS_NETWORK_ORDER = ['smart', 'globe', 'dito'];
+
+    const wlSmsId = (prefix = 'wl') => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+
+    const DEFAULT_WL_SMS_STATE = {
+      rawPaste: '',
+      contents: [],
+      senderId: '',
+      networks: ['smart', 'globe', 'dito'],
+      testNumbers: [
+        { id: 'tn_smart_1', label: 'Smart Test (Pao)', number: '639081989019', network: 'smart' },
+        { id: 'tn_globe_1', label: 'Globe Test (Pao)', number: '639766707548', network: 'globe' },
+      ],
+      selectedNumberIds: ['tn_smart_1', 'tn_globe_1'],
+      sheetName: 'Sheet1',
+      notes: '',
+    };
+
+    function parseWlSmsBlasts(text) {
+      if (text === null || text === undefined) return [];
+      const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const lines = normalized.split('\n');
+      const isDivider = (line) => {
+        const trimmed = line.trim();
+        if (trimmed.length < 3) return false;
+        return /^[—–\-=_*\s]+$/.test(trimmed) && /[—–\-=_*]/.test(trimmed);
+      };
+      const blocks = [];
+      let current = [];
+      for (const line of lines) {
+        if (isDivider(line)) {
+          const block = current.join('\n').trim();
+          if (block) blocks.push(block);
+          current = [];
+        } else {
+          current.push(line);
+        }
+      }
+      const tail = current.join('\n').trim();
+      if (tail) blocks.push(tail);
+      return blocks;
+    }
+
+    function wlSmsNormalizeState(raw = {}) {
+      const merged = { ...DEFAULT_WL_SMS_STATE, ...(raw || {}) };
+      const testNumbers = Array.isArray(merged.testNumbers) ? merged.testNumbers.map(n => ({
+        id: n?.id || wlSmsId('tn'),
+        label: String(n?.label || ''),
+        number: String(n?.number || ''),
+        network: WL_SMS_NETWORKS[n?.network] ? n.network : 'smart',
+      })) : DEFAULT_WL_SMS_STATE.testNumbers;
+      const networks = Array.isArray(merged.networks)
+        ? merged.networks.filter(n => WL_SMS_NETWORKS[n])
+        : DEFAULT_WL_SMS_STATE.networks;
+      const validIds = new Set(testNumbers.map(n => n.id));
+      const selectedNumberIds = Array.isArray(merged.selectedNumberIds)
+        ? merged.selectedNumberIds.filter(id => validIds.has(id))
+        : [];
+      const contents = Array.isArray(merged.contents)
+        ? merged.contents.map(s => String(s ?? '')).filter(s => s.trim())
+        : [];
+      return {
+        ...merged,
+        rawPaste: String(merged.rawPaste || ''),
+        senderId: String(merged.senderId || ''),
+        sheetName: String(merged.sheetName || 'Sheet1'),
+        notes: String(merged.notes || ''),
+        contents,
+        testNumbers,
+        networks: networks.length ? networks : ['smart', 'globe', 'dito'],
+        selectedNumberIds,
+      };
+    }
+
+    function wlSmsEffectiveNumbers(wl) {
+      const networks = new Set(wl.networks || []);
+      const selected = new Set(wl.selectedNumberIds || []);
+      return (wl.testNumbers || []).filter(n => selected.has(n.id) && networks.has(n.network));
+    }
+
+    function buildWlSmsSheet(ws, wl) {
+      const contents = (wl.contents || []).map(s => String(s ?? '')).filter(s => s.trim());
+      const numbers = wlSmsEffectiveNumbers(wl);
+
+      ws.columns = [
+        { key: 'number',  width: 16 },
+        { key: 'content', width: 110 },
+      ];
+
+      const headerRow = ws.getRow(1);
+      headerRow.getCell(1).value = 'Number';
+      headerRow.getCell(2).value = 'Content';
+      headerRow.font = { bold: true };
+      headerRow.alignment = { vertical: 'middle' };
+
+      let rowIdx = 2;
+      for (const num of numbers) {
+        const cleanNum = String(num.number || '').replace(/\D/g, '');
+        const numericNumber = cleanNum && /^\d+$/.test(cleanNum) ? Number(cleanNum) : (num.number || '');
+        for (const content of contents) {
+          const row = ws.getRow(rowIdx);
+          row.getCell(1).value = numericNumber;
+          row.getCell(1).numFmt = '0';
+          row.getCell(2).value = content;
+          row.getCell(2).alignment = { wrapText: true, vertical: 'top' };
+          row.height = 57.6;
+          rowIdx++;
+        }
+      }
+
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
+    }
+
+    async function generateWlSmsWorkbook(state) {
+      const wl = wlSmsNormalizeState(state.whitelistSms);
+      const contents = (wl.contents || []).filter(s => s && s.trim());
+      const numbers = wlSmsEffectiveNumbers(wl);
+      if (!contents.length) throw new Error('No content blocks to whitelist. Paste content first.');
+      if (!numbers.length) throw new Error('No test numbers selected for the chosen network(s).');
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Whitelist SMS Generator';
+      wb.created = new Date();
+      const sheetName = safeSheetName(wl.sheetName || 'Sheet1');
+      const ws = wb.addWorksheet(sheetName);
+      buildWlSmsSheet(ws, wl);
+
+      const buf = await wb.xlsx.writeBuffer();
+      const senderPart = (wl.senderId || 'sender').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40) || 'sender';
+      const filename = `Whitelist_SMS_${senderPart}_${bmrTodayString()}.xlsx`;
+      saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
+      return filename;
+    }
+
+    /* ============================================================
        UI Primitives
        ============================================================ */
     function Pill({ children, tone = 'default', onClick, className = '' }) {
@@ -5821,6 +5964,289 @@
     }
 
     /* ============================================================
+       Whitelist SMS - UI Components
+       ============================================================ */
+    function WlSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync }) {
+      const theme = state.theme || 'dark';
+      const wl = wlSmsNormalizeState(state.whitelistSms);
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      const setWl = (next) => setState(s => {
+        const prev = wlSmsNormalizeState(s.whitelistSms);
+        return { ...s, whitelistSms: typeof next === 'function' ? next(prev) : next };
+      });
+      const toggleNetwork = (id) => setWl(prev => {
+        const set = new Set(prev.networks || []);
+        if (set.has(id)) set.delete(id); else set.add(id);
+        return { ...prev, networks: WL_SMS_NETWORK_ORDER.filter(k => set.has(k)) };
+      });
+      const numbers = wlSmsEffectiveNumbers(wl);
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Whitelist SMS</h1>
+            <p className="text-xs text-neutral-500 mt-1">Content blast file generator</p>
+          </div>
+
+          <div className="p-5 border-b border-neutral-900">
+            <SectionLabel>Sender ID</SectionLabel>
+            <Input value={wl.senderId} placeholder="e.g. JILIBET"
+              onChange={e => setWl({ ...wl, senderId: e.target.value })} />
+          </div>
+
+          <div className="p-5 border-b border-neutral-900 space-y-2">
+            <SectionLabel hint="Multi-select">Networks</SectionLabel>
+            {WL_SMS_NETWORK_ORDER.map(key => {
+              const net = WL_SMS_NETWORKS[key];
+              const on = (wl.networks || []).includes(key);
+              return (
+                <label key={key} className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+                  <input type="checkbox" checked={on}
+                    onChange={() => toggleNetwork(key)}
+                    className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+                  <span className="inline-block w-2 h-2 rounded-full" style={{ background: net.color }}></span>
+                  <span>{net.label}</span>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="p-5 flex-1 overflow-y-auto">
+            <SectionLabel hint={`${numbers.length} ready`}>Will generate</SectionLabel>
+            <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                <Pill>{(wl.contents || []).length} contents</Pill>
+                <Pill>{numbers.length} numbers</Pill>
+                <Pill tone={(wl.contents || []).length && numbers.length ? 'accent' : 'muted'}>
+                  {(wl.contents || []).length * numbers.length} rows
+                </Pill>
+              </div>
+              {numbers.slice(0, 8).map(n => {
+                const net = WL_SMS_NETWORKS[n.network];
+                return (
+                  <div key={n.id} className="flex items-center gap-2 text-[11px] text-neutral-300">
+                    <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: net?.color || '#666' }}></span>
+                    <span className="font-mono">{n.number}</span>
+                    <span className="text-neutral-600 truncate">· {n.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="p-5 border-t border-neutral-900 space-y-3">
+            <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
+              {busy ? <><span className="loader"></span> Generating...</> : <><IconDownload /> Generate Whitelist</>}
+            </Btn>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">.xlsx · Number + Content per row</p>
+          </div>
+        </aside>
+      );
+    }
+
+    function WlSmsContentPanel({ wl, onChange }) {
+      const [pasteText, setPasteText] = useState(wl.rawPaste || '');
+      const loadText = (text) => {
+        const blocks = parseWlSmsBlasts(text);
+        onChange({ ...wl, rawPaste: text, contents: blocks });
+      };
+      const onPaste = (e) => {
+        const text = e.clipboardData?.getData('text/plain');
+        if (text === undefined || text === null || text === '') return;
+        e.preventDefault();
+        setPasteText(text);
+        loadText(text);
+      };
+      const updateBlock = (index, value) => {
+        const next = [...(wl.contents || [])];
+        next[index] = value;
+        onChange({ ...wl, contents: next });
+      };
+      const deleteBlock = (index) => {
+        const next = (wl.contents || []).filter((_, i) => i !== index);
+        onChange({ ...wl, contents: next });
+      };
+      const addBlock = () => onChange({ ...wl, contents: [...(wl.contents || []), ''] });
+      const clearAll = () => { setPasteText(''); onChange({ ...wl, rawPaste: '', contents: [] }); };
+      return (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <SectionLabel hint="Splits on lines of dashes (————————)">Paste content</SectionLabel>
+            <Textarea rows={6} value={pasteText} onPaste={onPaste}
+              onChange={e => setPasteText(e.target.value)}
+              placeholder={`Paste blast content here. Use a divider line like ———————— between each content.`} />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Btn variant="ghost" size="md" onClick={() => loadText(pasteText)} disabled={!pasteText}>Parse pasted text</Btn>
+              <Btn variant="ghost" size="md" onClick={clearAll} disabled={!pasteText && !(wl.contents || []).length}>Clear all</Btn>
+              <span className="text-[11px] text-neutral-500">{(wl.contents || []).length} content block{(wl.contents || []).length === 1 ? '' : 's'}</span>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <SectionLabel hint="One block = one row in column B">Parsed contents</SectionLabel>
+            <div className="space-y-2">
+              {(wl.contents || []).length === 0 && (
+                <div className="text-[12px] text-neutral-500 italic">Nothing parsed yet. Paste content above.</div>
+              )}
+              {(wl.contents || []).map((block, i) => (
+                <div key={i} className="rounded-md border border-neutral-900 bg-neutral-950 p-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] uppercase tracking-wide text-neutral-500">Content {i + 1}</span>
+                    <button onClick={() => deleteBlock(i)} className="text-[10px] text-neutral-500 hover:text-red-300">Remove</button>
+                  </div>
+                  <Textarea rows={3} value={block} onChange={e => updateBlock(i, e.target.value)} />
+                </div>
+              ))}
+              <div>
+                <Btn variant="ghost" size="sm" onClick={addBlock}><IconPlus /> Add empty content</Btn>
+              </div>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    function WlSmsNumbersPanel({ wl, onChange }) {
+      const [newLabel, setNewLabel] = useState('');
+      const [newNumber, setNewNumber] = useState('');
+      const [newNetwork, setNewNetwork] = useState('smart');
+      const numbers = wl.testNumbers || [];
+      const selected = new Set(wl.selectedNumberIds || []);
+      const toggle = (id) => {
+        const next = new Set(selected);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        onChange({ ...wl, selectedNumberIds: Array.from(next) });
+      };
+      const selectAllVisible = () => {
+        const visibleIds = numbers.filter(n => (wl.networks || []).includes(n.network)).map(n => n.id);
+        onChange({ ...wl, selectedNumberIds: visibleIds });
+      };
+      const clearSelection = () => onChange({ ...wl, selectedNumberIds: [] });
+      const addNumber = () => {
+        const trimmed = newNumber.trim();
+        if (!trimmed) return;
+        const entry = { id: wlSmsId('tn'), label: newLabel.trim() || trimmed, number: trimmed, network: newNetwork };
+        onChange({ ...wl, testNumbers: [...numbers, entry], selectedNumberIds: [...(wl.selectedNumberIds || []), entry.id] });
+        setNewLabel(''); setNewNumber('');
+      };
+      const updateNumber = (id, patch) => onChange({ ...wl, testNumbers: numbers.map(n => n.id === id ? { ...n, ...patch } : n) });
+      const deleteNumber = (id) => onChange({
+        ...wl,
+        testNumbers: numbers.filter(n => n.id !== id),
+        selectedNumberIds: (wl.selectedNumberIds || []).filter(x => x !== id),
+      });
+      return (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <SectionLabel hint="Check to include in the generated file">Test number database</SectionLabel>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <Btn variant="ghost" size="sm" onClick={selectAllVisible}>Select all visible</Btn>
+              <Btn variant="ghost" size="sm" onClick={clearSelection}>Clear selection</Btn>
+              <span className="text-[11px] text-neutral-500">{selected.size} selected / {numbers.length} total</span>
+            </div>
+            <div className="space-y-1.5">
+              {numbers.length === 0 && (
+                <div className="text-[12px] text-neutral-500 italic">No numbers yet. Add one below.</div>
+              )}
+              {numbers.map(n => {
+                const net = WL_SMS_NETWORKS[n.network] || WL_SMS_NETWORKS.smart;
+                const visible = (wl.networks || []).includes(n.network);
+                return (
+                  <div key={n.id} className={`flex flex-wrap items-center gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2 py-1.5 ${visible ? '' : 'opacity-40'}`}>
+                    <input type="checkbox" checked={selected.has(n.id)} onChange={() => toggle(n.id)}
+                      className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+                    <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: net.color }}></span>
+                    <Input className="!w-40" value={n.label} onChange={e => updateNumber(n.id, { label: e.target.value })} placeholder="Label" />
+                    <Input className="!w-44" value={n.number} onChange={e => updateNumber(n.id, { number: e.target.value })} placeholder="639XXXXXXXXX" />
+                    <Select className="!w-32" value={n.network} onChange={e => updateNumber(n.id, { network: e.target.value })}>
+                      {WL_SMS_NETWORK_ORDER.map(k => <option key={k} value={k}>{WL_SMS_NETWORKS[k].shortLabel}</option>)}
+                    </Select>
+                    <button onClick={() => deleteNumber(n.id)} className="ml-auto text-[10px] text-neutral-500 hover:text-red-300">Delete</button>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <SectionLabel>Add test number</SectionLabel>
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex-1 min-w-[160px]">
+                <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Label</label>
+                <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="e.g. Globe Test" />
+              </div>
+              <div className="flex-1 min-w-[180px]">
+                <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Number</label>
+                <Input value={newNumber} onChange={e => setNewNumber(e.target.value)} placeholder="639XXXXXXXXX" />
+              </div>
+              <div className="min-w-[120px]">
+                <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Network</label>
+                <Select value={newNetwork} onChange={e => setNewNetwork(e.target.value)}>
+                  {WL_SMS_NETWORK_ORDER.map(k => <option key={k} value={k}>{WL_SMS_NETWORKS[k].label}</option>)}
+                </Select>
+              </div>
+              <Btn variant="accent" size="md" onClick={addNumber} disabled={!newNumber.trim()}><IconPlus /> Add</Btn>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    function WlSmsPreview({ wl }) {
+      const contents = (wl.contents || []).filter(s => s && s.trim());
+      const numbers = wlSmsEffectiveNumbers(wl);
+      const rows = [];
+      for (const n of numbers) {
+        for (const c of contents) rows.push({ number: n.number, content: c, network: n.network });
+      }
+      return (
+        <Card className="p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b border-neutral-900 flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Preview · same as generated file</span>
+            <span className="text-[11px] text-neutral-500">{rows.length} row{rows.length === 1 ? '' : 's'}</span>
+          </div>
+          <div className="overflow-x-auto max-h-[60vh]">
+            <table className="min-w-full text-[12px]">
+              <thead className="bg-neutral-950 sticky top-0">
+                <tr>
+                  <th className="text-left font-semibold text-neutral-300 px-3 py-2 border-b border-neutral-900 w-40">Number</th>
+                  <th className="text-left font-semibold text-neutral-300 px-3 py-2 border-b border-neutral-900">Content</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && (
+                  <tr><td colSpan={2} className="px-3 py-6 text-center text-neutral-500 italic">Nothing to preview. Add content and select numbers.</td></tr>
+                )}
+                {rows.map((r, i) => {
+                  const net = WL_SMS_NETWORKS[r.network];
+                  return (
+                    <tr key={i} className="border-b border-neutral-900 align-top">
+                      <td className="px-3 py-2 font-mono text-neutral-200">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: net?.color || '#666' }}></span>
+                          <span>{r.number}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-neutral-200 whitespace-pre-wrap">{r.content}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      );
+    }
+
+    /* ============================================================
        App
        ============================================================ */
     const APP_STATE_SCHEMA_VERSION = 2;
@@ -5844,6 +6270,8 @@
       bmrSmsTab: 'clients',
       editor: DEFAULT_EDITOR_STATE,
       editorTab: 'table',
+      whitelistSms: DEFAULT_WL_SMS_STATE,
+      whitelistSmsTab: 'content',
     };
 
     function timestampMs(value) {
@@ -5901,10 +6329,11 @@
       const bmrSms = normalizeBmrSmsState(merged.bmrSms);
       const editorRaw = merged.editor || {};
       const editor = { ...DEFAULT_EDITOR_STATE, ...editorRaw, cells: editorNormalizeGrid(editorRaw.cells || DEFAULT_EDITOR_STATE.cells) };
+      const whitelistSms = wlSmsNormalizeState(merged.whitelistSms);
       const sheets = migrateLegacyLabels
         ? migrateSheets(merged.sheets)
         : (Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS);
-      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor };
+      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor, whitelistSms };
     }
 
     function App() {
@@ -6092,6 +6521,9 @@
           } else if (state.module === 'bmr_sms') {
             const fn = await generateBmrSmsWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
+          } else if (state.module === 'whitelist_sms') {
+            const fn = await generateWlSmsWorkbook(state);
+            setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else {
             await generateWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
@@ -6132,12 +6564,20 @@
         { id: 'sip_fcs', label: 'SIP / FCS' },
         { id: 'bmr',     label: 'BMR VOIP' },
         { id: 'bmr_sms', label: 'BMR SMS' },
+        { id: 'whitelist_sms', label: 'Whitelist SMS' },
         { id: 'editor',  label: 'Editor' },
       ];
 
       const isEditor = state.module === 'editor';
       const isBmr = state.module === 'bmr';
       const isBmrSms = state.module === 'bmr_sms';
+      const isWlSms = state.module === 'whitelist_sms';
+      const whitelistSms = wlSmsNormalizeState(state.whitelistSms);
+      const setWhitelistSms = useCallback((next) => setState(s => {
+        const prev = wlSmsNormalizeState(s.whitelistSms);
+        return { ...s, whitelistSms: typeof next === 'function' ? next(prev) : next };
+      }), []);
+      const whitelistSmsTab = state.whitelistSmsTab || 'content';
       const bmr = state.bmr || DEFAULT_BMR_STATE;
       const setBmr = useCallback((next) => setState(s => {
         const prevBmr = s.bmr || DEFAULT_BMR_STATE;
@@ -6403,6 +6843,91 @@
               <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
                 <span className="font-mono">localStorage · key {STORAGE_KEY}</span>
                 <span>{visibleRetail} RES · {visibleWholesale} WHS · {activeBmrSmsRules} active rules · {bmrTodayString()}</span>
+              </footer>
+            </main>
+
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
+
+      if (isWlSms) {
+        const wl = whitelistSms;
+        const setWl = setWhitelistSms;
+        const numbers = wlSmsEffectiveNumbers(wl);
+        const rowCount = (wl.contents || []).filter(s => s && s.trim()).length * numbers.length;
+        const WL_TABS = [
+          { id: 'content', label: 'Content' },
+          { id: 'numbers', label: 'Numbers' },
+          { id: 'preview', label: 'Preview' },
+          { id: 'notes',   label: 'Notes' },
+        ];
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <WlSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
+            <main className="flex-1 min-w-0 flex flex-col">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div className="app-title-block">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
+                  <h2 className="text-[22px] font-bold tracking-tight">Whitelist SMS{wl.senderId ? ` · ${wl.senderId}` : ''}</h2>
+                </div>
+                <div className="app-pill-row hidden xl:flex items-center gap-2">
+                  <Pill>{(wl.contents || []).length} contents</Pill>
+                  <Pill>{numbers.length} numbers</Pill>
+                  <Pill tone={rowCount ? 'accent' : 'default'}>{rowCount} rows</Pill>
+                </div>
+                <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
+                  {ModuleSwitch}
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                    {WL_TABS.map(t => (
+                      <button key={t.id} onClick={() => setState(s => ({ ...s, whitelistSmsTab: t.id }))}
+                        className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${whitelistSmsTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </nav>
+                </div>
+              </header>
+
+              <div className="p-8 max-w-6xl w-full">
+                <div key={whitelistSmsTab} className="anim-fade-in">
+                  {whitelistSmsTab === 'content' && (
+                    <div className="space-y-6">
+                      <SectionLabel hint="Paste content separated by a dash line — each block becomes one row">Content</SectionLabel>
+                      <WlSmsContentPanel wl={wl} onChange={setWl} />
+                    </div>
+                  )}
+                  {whitelistSmsTab === 'numbers' && (
+                    <div className="space-y-6">
+                      <SectionLabel hint="Pick the test numbers to include in the output">Test numbers</SectionLabel>
+                      <WlSmsNumbersPanel wl={wl} onChange={setWl} />
+                    </div>
+                  )}
+                  {whitelistSmsTab === 'preview' && (
+                    <div className="space-y-3">
+                      <SectionLabel hint="Same shape as the generated xlsx">Preview</SectionLabel>
+                      <WlSmsPreview wl={wl} />
+                    </div>
+                  )}
+                  {whitelistSmsTab === 'notes' && (
+                    <div>
+                      <SectionLabel hint="Free-form notes carried with the Whitelist SMS config">Notes</SectionLabel>
+                      <Textarea rows={12} value={wl.notes || ''} onChange={e => setWl({ ...wl, notes: e.target.value })}
+                        placeholder={`Notes for whitelist runs...\n\ne.g. Sender ID approval ticket, vendor name, request date.`} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+                <span className="font-mono">localStorage · key {STORAGE_KEY}</span>
+                <span>{(wl.contents || []).length} contents · {numbers.length} numbers · {rowCount} rows · {bmrTodayString()}</span>
               </footer>
             </main>
 
