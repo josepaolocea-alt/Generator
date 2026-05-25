@@ -2073,13 +2073,17 @@
       ],
       selectedNumberIds: ['tn_smart_1', 'tn_globe_1'],
       sheetName: 'Sheet1',
+      separatorMode: 'auto',
       notes: '',
     };
 
-    function parseWlSmsBlasts(text) {
+    function parseWlSmsBlasts(text, mode = 'auto') {
       if (text === null || text === undefined) return [];
       const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       const lines = normalized.split('\n');
+      if (mode === 'lines') {
+        return lines.map(l => l.trim()).filter(l => l.length);
+      }
       const isDivider = (line) => {
         const trimmed = line.trim();
         if (trimmed.length < 3) return false;
@@ -2128,6 +2132,7 @@
         senderId: String(merged.senderId || ''),
         sheetName: String(merged.sheetName || 'Sheet1'),
         notes: String(merged.notes || ''),
+        separatorMode: merged.separatorMode === 'lines' ? 'lines' : 'auto',
         contents,
         testNumbers,
         networks: networks.length ? networks : ['smart', 'globe', 'dito'],
@@ -6057,9 +6062,10 @@
 
     function WlSmsContentPanel({ wl, onChange }) {
       const [pasteText, setPasteText] = useState(wl.rawPaste || '');
-      const loadText = (text) => {
-        const blocks = parseWlSmsBlasts(text);
-        onChange({ ...wl, rawPaste: text, contents: blocks });
+      const mode = wl.separatorMode === 'lines' ? 'lines' : 'auto';
+      const loadText = (text, useMode = mode) => {
+        const blocks = parseWlSmsBlasts(text, useMode);
+        onChange({ ...wl, rawPaste: text, contents: blocks, separatorMode: useMode });
       };
       const onPaste = (e) => {
         const text = e.clipboardData?.getData('text/plain');
@@ -6067,6 +6073,11 @@
         e.preventDefault();
         setPasteText(text);
         loadText(text);
+      };
+      const setMode = (nextMode) => {
+        if (nextMode === mode) return;
+        if (pasteText) loadText(pasteText, nextMode);
+        else onChange({ ...wl, separatorMode: nextMode });
       };
       const updateBlock = (index, value) => {
         const next = [...(wl.contents || [])];
@@ -6079,13 +6090,29 @@
       };
       const addBlock = () => onChange({ ...wl, contents: [...(wl.contents || []), ''] });
       const clearAll = () => { setPasteText(''); onChange({ ...wl, rawPaste: '', contents: [] }); };
+      const modeHint = mode === 'lines'
+        ? 'Every non-empty line becomes one content'
+        : 'Splits on ———— / === lines, or blank lines if no dashes';
       return (
         <div className="space-y-4">
           <Card className="p-4">
-            <SectionLabel hint="Splits on lines of dashes (————————)">Paste content</SectionLabel>
+            <SectionLabel hint={modeHint}>Paste content</SectionLabel>
+            <div className="mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5 w-fit">
+              {[
+                { id: 'auto',  label: 'With separator' },
+                { id: 'lines', label: 'Without separator' },
+              ].map(opt => (
+                <button key={opt.id} onClick={() => setMode(opt.id)}
+                  className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors ${mode === opt.id ? 'bg-blue-500/20 text-blue-200 border border-blue-500/40' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <Textarea rows={6} value={pasteText} onPaste={onPaste}
               onChange={e => setPasteText(e.target.value)}
-              placeholder={`Paste blast content here. Use a divider line like ———————— between each content.`} />
+              placeholder={mode === 'lines'
+                ? `Paste blast content here. Each non-empty line will be treated as one content.`
+                : `Paste blast content here. Use a divider line like ———————— between each content, or leave a blank line between them.`} />
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Btn variant="ghost" size="md" onClick={() => loadText(pasteText)} disabled={!pasteText}>Parse pasted text</Btn>
               <Btn variant="ghost" size="md" onClick={clearAll} disabled={!pasteText && !(wl.contents || []).length}>Clear all</Btn>
