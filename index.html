@@ -33,12 +33,17 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Firebase (compat builds for non-module use) -->
-  <!-- 10.14.1 includes the Firestore stability fixes for "INTERNAL ASSERTION
-       FAILED: Unexpected state" that 10.12.5 still had. -->
+  <!-- Firebase: compat builds for app/auth/analytics, modular for firestore.
+       Reason: the firebase-firestore-compat.js wrapper creates its own
+       Firestore instance with default WebChannel transport before any inline
+       script can call settings(). On networks where WebChannel breaks (some
+       corporate proxies/AVs), every Firestore call then trips "INTERNAL
+       ASSERTION FAILED: Unexpected state". The modular SDK's
+       initializeFirestore() honors experimentalForceLongPolling because it
+       configures the instance at creation time. Loading compat firestore
+       would just re-create that broken instance, so we don't load it. -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-analytics-compat.js"></script>
   <script>
     const FIREBASE_CONFIG = {
@@ -50,40 +55,43 @@
       appId: "1:583041630798:web:cec475e2be78f31222391f",
       measurementId: "G-FLCL187CN4"
     };
-    // Init is now async because we need to dynamically import the modular
-    // Firestore SDK alongside the compat builds. Reason: the compat
-    // firestore().settings({experimentalForceLongPolling:true}) silently
-    // fails to switch transport on some users' networks — Listen/channel
-    // requests still carry VER=8 (WebChannel) and the SDK hits
-    // "INTERNAL ASSERTION FAILED: Unexpected state". The modular SDK's
-    // initializeFirestore() actually honors the setting because it
-    // configures the instance at creation time. Compat and modular share
-    // the same underlying Firestore instance for the default app, so once
-    // modular sets long polling, every compat call uses it too.
+    // Init is async because the modular Firestore SDK loads via dynamic
+    // import. The compat firestore wrapper is no longer loaded (see the
+    // <script src> block above) — every Firestore call below uses the
+    // modular API via window.__fbm helpers exposed here.
     //
-    // The page sets a `firebase-ready` event when init finishes (success or
-    // failure). React mount below waits for it before rendering App.
+    // We initialize Firestore with experimentalForceLongPolling: true
+    // because some users' networks break Firestore's default WebChannel
+    // transport (visible as "INTERNAL ASSERTION FAILED: Unexpected state"
+    // in their console). Long polling uses plain HTTPS instead and works
+    // everywhere proxies allow regular requests through.
     window.__firebaseInitPromise = (async () => {
       try {
         firebase.initializeApp(FIREBASE_CONFIG);
         let longPollingApplied = false;
         let initMethod = 'none';
+        let modularDb = null;
         try {
           const mod = await import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js');
-          mod.initializeFirestore(firebase.app(), {
+          modularDb = mod.initializeFirestore(firebase.app(), {
             experimentalForceLongPolling: true,
           });
           longPollingApplied = true;
           initMethod = 'modular initializeFirestore';
+          // Expose the modular fns the app needs. App code does:
+          //   const { doc, getDoc, setDoc, ... } = window.__fbm;
+          //   await getDoc(doc(db, 'users', uid, 'state', 'main'));
+          window.__fbm = {
+            doc: mod.doc,
+            collection: mod.collection,
+            getDoc: mod.getDoc,
+            getDocs: mod.getDocs,
+            setDoc: mod.setDoc,
+            serverTimestamp: mod.serverTimestamp,
+            deleteField: mod.deleteField,
+          };
         } catch (modErr) {
-          console.error('[firestore] Modular initializeFirestore failed, falling back to compat settings():', modErr);
-          try {
-            firebase.firestore().settings({ experimentalForceLongPolling: true });
-            longPollingApplied = true;
-            initMethod = 'compat settings()';
-          } catch (e) {
-            console.error('[firestore] Compat settings() also failed:', e);
-          }
+          console.error('[firestore] Modular import/init failed — Firestore will be unavailable this session:', modErr);
         }
         console.info('[firestore]', {
           sdk: firebase.SDK_VERSION,
@@ -92,10 +100,10 @@
           origin: location.origin,
         });
         try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
-        window.__fb = {
+        window.__fb = modularDb ? {
           auth: firebase.auth(),
-          db: firebase.firestore(),
-        };
+          db: modularDb,
+        } : null;
       } catch (e) {
         console.warn('Firebase init failed:', e);
         window.__fb = null;
@@ -3596,14 +3604,15 @@
 
       // Hydrate templates from Firestore once auth is ready
       useEffect(() => {
-        if (!window.__fb || !sync?.uid) return;
+        if (!window.__fb || !window.__fbm || !sync?.uid) return;
         let cancelled = false;
         (async () => {
           try {
-            const ref = window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('templates');
-            const snap = await ref.get();
+            const { doc, getDoc } = window.__fbm;
+            const ref = doc(window.__fb.db, 'users', sync.uid, 'state', 'templates');
+            const snap = await getDoc(ref);
             if (cancelled) return;
-            const remote = snap.exists ? (firestoreDesanitize(snap.data()).items || []) : null;
+            const remote = snap.exists() ? (firestoreDesanitize(snap.data()).items || []) : null;
             if (Array.isArray(remote) && remote.length) {
               const merged = [...remote];
               for (const local of templates) {
@@ -3620,9 +3629,10 @@
       const persist = (next) => {
         setTemplates(next);
         localStorage.setItem(TEMPLATES_KEY, JSON.stringify(next));
-        if (window.__fb && sync?.uid) {
-          window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('templates')
-            .set({ items: firestoreSanitize(next), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+        if (window.__fb && window.__fbm && sync?.uid) {
+          const { doc, setDoc, serverTimestamp } = window.__fbm;
+          const ref = doc(window.__fb.db, 'users', sync.uid, 'state', 'templates');
+          setDoc(ref, { items: firestoreSanitize(next), updatedAt: serverTimestamp() })
             .catch(e => console.warn('templates save failed', e));
         }
       };
@@ -5767,14 +5777,15 @@
       const [name, setName] = useState('');
 
       useEffect(() => {
-        if (!window.__fb || !sync?.uid) return;
+        if (!window.__fb || !window.__fbm || !sync?.uid) return;
         let cancelled = false;
         (async () => {
           try {
-            const ref = window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('editorTemplates');
-            const snap = await ref.get();
+            const { doc, getDoc } = window.__fbm;
+            const ref = doc(window.__fb.db, 'users', sync.uid, 'state', 'editorTemplates');
+            const snap = await getDoc(ref);
             if (cancelled) return;
-            const remote = snap.exists ? (firestoreDesanitize(snap.data()).items || []) : null;
+            const remote = snap.exists() ? (firestoreDesanitize(snap.data()).items || []) : null;
             if (Array.isArray(remote) && remote.length) {
               const merged = [...remote];
               for (const local of templates) {
@@ -5791,9 +5802,10 @@
       const persist = (next) => {
         setTemplates(next);
         localStorage.setItem(EDITOR_TEMPLATES_KEY, JSON.stringify(next));
-        if (window.__fb && sync?.uid) {
-          window.__fb.db.collection('users').doc(sync.uid).collection('state').doc('editorTemplates')
-            .set({ items: firestoreSanitize(next), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+        if (window.__fb && window.__fbm && sync?.uid) {
+          const { doc, setDoc, serverTimestamp } = window.__fbm;
+          const ref = doc(window.__fb.db, 'users', sync.uid, 'state', 'editorTemplates');
+          setDoc(ref, { items: firestoreSanitize(next), updatedAt: serverTimestamp() })
             .catch(e => console.warn('editor templates save failed', e));
         }
       };
@@ -6497,10 +6509,11 @@
       const [filter, setFilter] = useState('');
 
       const load = useCallback(async () => {
-        if (!window.__fb) { setError('Firebase is not available.'); setLoading(false); return; }
+        if (!window.__fb || !window.__fbm) { setError('Firebase is not available.'); setLoading(false); return; }
         setLoading(true); setError(null);
         try {
-          const snap = await window.__fb.db.collection('userProfiles').get();
+          const { collection, getDocs } = window.__fbm;
+          const snap = await getDocs(collection(window.__fb.db, 'userProfiles'));
           const list = snap.docs.map(d => {
             const data = d.data() || {};
             return {
@@ -6524,14 +6537,15 @@
       useEffect(() => { load(); }, [load]);
 
       const setRole = async (uid, nextRole) => {
-        if (!window.__fb) return;
+        if (!window.__fb || !window.__fbm) return;
         setSavingUid(uid); setError(null);
         try {
+          const { doc, setDoc, serverTimestamp, deleteField } = window.__fbm;
           const patch = {
-            role: nextRole === 'semi_admin' ? firebase.firestore.FieldValue.delete() : nextRole,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            role: nextRole === 'semi_admin' ? deleteField() : nextRole,
+            updatedAt: serverTimestamp(),
           };
-          await window.__fb.db.collection('userProfiles').doc(uid).set(patch, { merge: true });
+          await setDoc(doc(window.__fb.db, 'userProfiles', uid), patch, { merge: true });
           setRows(rs => rs.map(r => r.uid === uid ? { ...r, dbRole: nextRole === 'semi_admin' ? null : nextRole } : r));
         } catch (e) {
           console.warn('role update failed', e);
@@ -6701,8 +6715,9 @@ match /shared/whitelistSmsTestNumbers {
       const stateRef = useRef(null);
 
       const upsertUserProfile = useCallback(async (user) => {
-        if (!window.__fb || !user) return null;
+        if (!window.__fb || !window.__fbm || !user) return null;
         const { db } = window.__fb;
+        const { doc, getDoc, setDoc, serverTimestamp } = window.__fbm;
         // Hard cap each Firestore call. If rules deny or the network stalls,
         // the SDK can sit on a get/set indefinitely and the caller (sign-in)
         // never gets to flip status off "connecting" — that's the "LOADING…"
@@ -6712,15 +6727,15 @@ match /shared/whitelistSmsTestNumbers {
           new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timed out')), 10000)),
         ]);
         try {
-          const ref = db.collection('userProfiles').doc(user.uid);
-          const snap = await withTimeout(ref.get(), 'userProfile read');
-          const now = firebase.firestore.FieldValue.serverTimestamp();
-          if (!snap.exists) {
+          const ref = doc(db, 'userProfiles', user.uid);
+          const snap = await withTimeout(getDoc(ref), 'userProfile read');
+          const now = serverTimestamp();
+          if (!snap.exists()) {
             // First-time: write email + createdAt only. Never set `role` here —
             // role must be assigned by an admin via the Users panel.
             try {
               await withTimeout(
-                ref.set({ email: user.email || '', createdAt: now, updatedAt: now }, { merge: true }),
+                setDoc(ref, { email: user.email || '', createdAt: now, updatedAt: now }, { merge: true }),
                 'userProfile create'
               );
             } catch (e) {
@@ -6735,7 +6750,7 @@ match /shared/whitelistSmsTestNumbers {
           if ((snap.data() || {}).email !== user.email) patch.email = user.email || '';
           if (Object.keys(patch).length > 1) {
             try {
-              await withTimeout(ref.set(patch, { merge: true }), 'userProfile update');
+              await withTimeout(setDoc(ref, patch, { merge: true }), 'userProfile update');
             } catch (e) {
               console.warn('userProfile update failed', e);
             }
@@ -6748,8 +6763,9 @@ match /shared/whitelistSmsTestNumbers {
       }, []);
 
       const hydrateUserState = useCallback(async (user) => {
-        if (!window.__fb || !user) return false;
+        if (!window.__fb || !window.__fbm || !user) return false;
         const { auth, db } = window.__fb;
+        const { doc, getDoc } = window.__fbm;
         // Drop stale results once the user has signed out (or switched accounts)
         // in the time it took the Firestore round-trip to finish. Without this,
         // a late-arriving response would write the old uid back into sync state
@@ -6760,17 +6776,16 @@ match /shared/whitelistSmsTestNumbers {
         const role = effectiveRole(user.email, dbRole);
         setSync({ status: 'loading', uid: user.uid, email: user.email, role, message: null });
         try {
-          try { await db.enableNetwork(); } catch (_) {}
           if (isStale()) return false;
-          const ref = db.collection('users').doc(user.uid).collection('state').doc('main');
+          const ref = doc(db, 'users', user.uid, 'state', 'main');
           // Hard cap the network read. If it hangs (e.g. rules path that the
           // SDK keeps retrying), we'd otherwise be stuck on "Loading…" forever.
           const snap = await Promise.race([
-            ref.get(),
+            getDoc(ref),
             new Promise((_, rej) => setTimeout(() => rej(new Error('Firestore read timed out after 15s')), 15000)),
           ]);
           if (isStale()) return false;
-          if (snap.exists) {
+          if (snap.exists()) {
             const remote = normalizeAppState(mergeLocalSheetActiveFlags(firestoreDesanitize(snap.data())), { migrateLegacyLabels: true });
             if (remote && Array.isArray(remote.sheets)) {
               setStateRaw(local => {
@@ -6849,18 +6864,19 @@ match /shared/whitelistSmsTestNumbers {
       // sidesteps the bug entirely. Trade-off: no live updates from other
       // devices, but the data refreshes on sign-in and after every save.
       const loadSharedTestNumbers = useCallback(async () => {
-        if (!window.__fb || !sync.uid) return;
+        if (!window.__fb || !window.__fbm || !sync.uid) return;
         const { db } = window.__fb;
-        const ref = db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1]);
+        const { doc, getDoc, setDoc, serverTimestamp } = window.__fbm;
+        const ref = doc(db, SHARED_WL_SMS_NUMBERS_DOC[0], SHARED_WL_SMS_NUMBERS_DOC[1]);
         try {
-          const snap = await ref.get();
-          if (!snap.exists) {
+          const snap = await getDoc(ref);
+          if (!snap.exists()) {
             // Doc missing — try to seed with defaults (best effort; harmless
             // if it fails for permissions, the user just sees built-ins).
             try {
-              await ref.set({
+              await setDoc(ref, {
                 items: DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })),
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                updatedAt: serverTimestamp(),
                 updatedBy: sync.uid,
               });
               setSharedTestNumbersRaw(DEFAULT_WL_SMS_STATE.testNumbers.map(n => ({ ...n })));
@@ -6891,15 +6907,15 @@ match /shared/whitelistSmsTestNumbers {
       const setSharedTestNumbers = useCallback(async (nextItems) => {
         const safeItems = Array.isArray(nextItems) ? nextItems : [];
         setSharedTestNumbersRaw(safeItems);
-        if (!window.__fb || !sync.uid) return;
+        if (!window.__fb || !window.__fbm || !sync.uid) return;
         try {
           const { db } = window.__fb;
-          await db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1])
-            .set({
-              items: firestoreSanitize(safeItems),
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-              updatedBy: sync.uid,
-            });
+          const { doc, setDoc, serverTimestamp } = window.__fbm;
+          await setDoc(doc(db, SHARED_WL_SMS_NUMBERS_DOC[0], SHARED_WL_SMS_NUMBERS_DOC[1]), {
+            items: firestoreSanitize(safeItems),
+            updatedAt: serverTimestamp(),
+            updatedBy: sync.uid,
+          });
         } catch (e) {
           // Surface the actual Firestore error code (e.g. permission-denied) in
           // both the console and the toast — a bare "check rules" message hides
@@ -6964,16 +6980,15 @@ match /shared/whitelistSmsTestNumbers {
           idMap.set(n.id, newId);
         }
 
-        if (toAdd.length) {
+        if (toAdd.length && window.__fbm) {
           const merged = [...items, ...toAdd];
           const { db } = window.__fb;
-          db.collection(SHARED_WL_SMS_NUMBERS_DOC[0]).doc(SHARED_WL_SMS_NUMBERS_DOC[1])
-            .set({
-              items: firestoreSanitize(merged),
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-              updatedBy: sync.uid,
-            })
-            .catch(e => console.warn('shared testNumbers migration write failed', e));
+          const { doc, setDoc, serverTimestamp } = window.__fbm;
+          setDoc(doc(db, SHARED_WL_SMS_NUMBERS_DOC[0], SHARED_WL_SMS_NUMBERS_DOC[1]), {
+            items: firestoreSanitize(merged),
+            updatedAt: serverTimestamp(),
+            updatedBy: sync.uid,
+          }).catch(e => console.warn('shared testNumbers migration write failed', e));
         }
 
         // Clear personal testNumbers and remap selectedNumberIds. setStateRaw
@@ -7022,7 +7037,7 @@ match /shared/whitelistSmsTestNumbers {
 
       // Firebase: debounced write-back on state change (only after hydration)
       useEffect(() => {
-        if (!window.__fb || !hydratedRef.current || !sync.uid) return;
+        if (!window.__fb || !window.__fbm || !hydratedRef.current || !sync.uid) return;
         if (!userEditRef.current) return;
         const { tab, ...persist } = state;
         const snapshotJson = JSON.stringify(persist);
@@ -7033,9 +7048,13 @@ match /shared/whitelistSmsTestNumbers {
           const localUpdatedAt = state.localUpdatedAt || stateEditedAt(state) || Date.now();
           try {
             const { db } = window.__fb;
+            const { doc, setDoc, serverTimestamp } = window.__fbm;
             const safe = firestoreSanitize({ ...persist, localUpdatedAt });
-            await db.collection('users').doc(sync.uid).collection('state').doc('main')
-              .set({ ...safe, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: false });
+            await setDoc(
+              doc(db, 'users', sync.uid, 'state', 'main'),
+              { ...safe, updatedAt: serverTimestamp() },
+              { merge: false }
+            );
             lastSavedJsonRef.current = snapshotJson;
             if ((state.localUpdatedAt || stateEditedAt(state) || localUpdatedAt) === localUpdatedAt) userEditRef.current = false;
             setSync(s => ({ ...s, status: 'synced', message: null }));
