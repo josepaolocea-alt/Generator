@@ -2389,6 +2389,30 @@
       );
     }
 
+    function AccountChip({ sync }) {
+      if (!sync?.email) return null;
+      const onSignOut = async () => {
+        if (!window.__fb) return;
+        const ok = await confirmDialog({
+          title: 'Sign out?',
+          message: 'Your data stays safely in the cloud and will be there next time you sign in.',
+          confirmText: 'Sign out',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        window.__fb.auth.signOut().catch(() => {});
+      };
+      return (
+        <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
+          <span className="text-[11px] text-neutral-400 truncate" title={sync.email}>{sync.email}</span>
+          <button onClick={onSignOut} title="Sign out"
+            className="text-[10px] uppercase tracking-wide text-neutral-500 hover:text-red-300 transition-colors shrink-0">
+            Sign out
+          </button>
+        </div>
+      );
+    }
+
     function humanizeAuthError(e) {
       const code = e?.code || '';
       if (code === 'auth/invalid-email')           return 'Invalid email address.';
@@ -2714,27 +2738,7 @@
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Monthly Report Generator</h1>
             <p className="text-xs text-neutral-500 mt-1">24/7 ops · SIP/FCS hourly record</p>
-            {sync?.email && (
-              <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
-                <span className="text-[11px] text-neutral-400 truncate" title={sync.email}>{sync.email}</span>
-                <button
-                  onClick={async () => {
-                    if (!window.__fb) return;
-                    const ok = await confirmDialog({
-                      title: 'Sign out?',
-                      message: 'Your data stays safely in the cloud and will be there next time you sign in.',
-                      confirmText: 'Sign out',
-                      tone: 'danger',
-                    });
-                    if (!ok) return;
-                    window.__fb.auth.signOut().catch(() => {});
-                  }}
-                  title="Sign out"
-                  className="text-[10px] uppercase tracking-wide text-neutral-500 hover:text-red-300 transition-colors shrink-0">
-                  Sign out
-                </button>
-              </div>
-            )}
+            <AccountChip sync={sync} />
           </div>
 
           {/* Period */}
@@ -5062,27 +5066,7 @@
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">BMR VOIP Generator</h1>
             <p className="text-xs text-neutral-500 mt-1">Daily · Balance Day &amp; Night</p>
-            {sync?.email && (
-              <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-1.5">
-                <span className="text-[11px] text-neutral-400 truncate" title={sync.email}>{sync.email}</span>
-                <button
-                  onClick={async () => {
-                    if (!window.__fb) return;
-                    const ok = await confirmDialog({
-                      title: 'Sign out?',
-                      message: 'Your data stays safely in the cloud and will be there next time you sign in.',
-                      confirmText: 'Sign out',
-                      tone: 'danger',
-                    });
-                    if (!ok) return;
-                    window.__fb.auth.signOut().catch(() => {});
-                  }}
-                  title="Sign out"
-                  className="text-[10px] uppercase tracking-wide text-neutral-500 hover:text-red-300 transition-colors shrink-0">
-                  Sign out
-                </button>
-              </div>
-            )}
+            <AccountChip sync={sync} />
           </div>
 
           <div className="p-5 border-b border-neutral-900">
@@ -5427,6 +5411,7 @@
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">BMR SMS Generator</h1>
             <p className="text-xs text-neutral-500 mt-1">Retail and Wholesale · Day &amp; Night</p>
+            <AccountChip sync={sync} />
           </div>
 
           <div className="p-5 border-b border-neutral-900">
@@ -5511,6 +5496,7 @@
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Table Editor</h1>
             <p className="text-xs text-neutral-500 mt-1">Pasted table workbook</p>
+            <AccountChip sync={sync} />
           </div>
           <div className="p-5 flex-1">
             <SectionLabel>Table</SectionLabel>
@@ -6007,6 +5993,7 @@
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Whitelist SMS</h1>
             <p className="text-xs text-neutral-500 mt-1">Content blast file generator</p>
+            <AccountChip sync={sync} />
           </div>
 
           <div className="p-5 border-b border-neutral-900">
