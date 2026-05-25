@@ -52,24 +52,28 @@
     };
     try {
       firebase.initializeApp(FIREBASE_CONFIG);
-      try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
+      // Apply Firestore settings BEFORE firebase.analytics() and BEFORE any
+      // other Firestore use — once any read/write/listener fires, settings()
+      // throws "Firestore has already been started". Skip analytics on the
+      // first pass so it can't accidentally touch firestore first.
       const __db = firebase.firestore();
       // Firestore's default WebChannel transport breaks behind some corporate
       // proxies / antivirus / VPNs, surfacing as "FIRESTORE INTERNAL ASSERTION
-      // FAILED: Unexpected state" — every subsequent call then fails and the
-      // app misreads it as a rules deny. Forcing long polling skips WebChannel
-      // entirely and uses regular HTTP requests, which proxies handle fine.
-      // Auto-detect wasn't enough because the SDK still attempts WebChannel
-      // first and the assertion fires before the fallback can kick in.
-      // .settings() MUST be called before any other Firestore method.
+      // FAILED: Unexpected state" on every subsequent call. Forcing long
+      // polling skips WebChannel and uses plain HTTPS, which proxies handle.
+      let __longPollingApplied = false;
       try {
-        __db.settings({
-          experimentalForceLongPolling: true,
-          useFetchStreams: false,
-        });
+        __db.settings({ experimentalForceLongPolling: true });
+        __longPollingApplied = true;
       } catch (e) {
-        console.warn('Firestore settings failed (may already be initialized):', e);
+        console.error('Firestore settings() failed — long polling NOT applied. WebChannel will be used and may crash with "Unexpected state".', e);
       }
+      console.info('[firestore]', {
+        sdk: firebase.SDK_VERSION,
+        longPollingApplied: __longPollingApplied,
+        origin: location.origin,
+      });
+      try { firebase.analytics(); } catch (e) { /* analytics may fail on file:// — ignore */ }
       window.__fb = {
         auth: firebase.auth(),
         db: __db,
