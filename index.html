@@ -6584,9 +6584,14 @@
 
     function rcaDataUrlToUint8(dataUrl) {
       if (!dataUrl || typeof dataUrl !== 'string') return null;
-      const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      const m = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
       if (!m) return null;
-      const binary = atob(m[2]);
+      // Strip whitespace and any stray non-base64 characters before
+      // atob so a single corrupted image never crashes the export.
+      const cleaned = m[2].replace(/[^A-Za-z0-9+/=]/g, '');
+      if (!cleaned || cleaned.length % 4 !== 0) return null;
+      let binary;
+      try { binary = atob(cleaned); } catch (_) { return null; }
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return { bytes, mime: m[1] };
@@ -6875,15 +6880,20 @@
       const sourceNode = previewNode || document.querySelector('[data-rca-preview-root]');
       if (!sourceNode) throw new Error('Preview is not visible — open the RCA editor and try again.');
 
-      // Clone the preview into a clean off-screen container so the PDF
+      // Clone the preview into a hidden in-flow container so the PDF
       // renderer doesn't capture any dark-mode wrappers or scrollbars.
+      // html2canvas measures the source element via getBoundingClientRect
+      // on its captured layout — `position: fixed; left: -10000px` returns
+      // height: 0 from html2canvas's perspective and produces a blank PDF,
+      // so we keep the clone in normal document flow but collapse the
+      // wrapper to height: 0 with opacity: 0 to avoid any visible flash.
       const wrapper = document.createElement('div');
-      wrapper.style.position = 'fixed';
-      wrapper.style.left = '-10000px';
-      wrapper.style.top = '0';
-      wrapper.style.width = '8.5in';
-      wrapper.style.background = '#ffffff';
-      wrapper.style.color = '#111';
+      wrapper.style.position = 'relative';
+      wrapper.style.height = '0';
+      wrapper.style.overflow = 'hidden';
+      wrapper.style.opacity = '0';
+      wrapper.style.pointerEvents = 'none';
+      wrapper.setAttribute('aria-hidden', 'true');
       const clone = sourceNode.cloneNode(true);
       clone.style.width = '8.5in';
       clone.style.maxWidth = '8.5in';
@@ -6901,7 +6911,7 @@
           html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
           jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
           pagebreak: { mode: ['css', 'legacy', 'avoid-all'] },
-        }).from(wrapper).save();
+        }).from(clone).save();
       } finally {
         document.body.removeChild(wrapper);
       }
