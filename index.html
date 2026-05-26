@@ -6969,6 +6969,37 @@
       const placeholder = section.bullets
         ? 'One bullet per line…'
         : 'Paragraph text (use blank lines for paragraph breaks)…';
+
+      // Strip leading bullet markers from pasted text so users can paste
+      // bulleted content from Word/email/Slack without doubling up with the
+      // bullet style the export applies on its own.
+      const handlePaste = (e) => {
+        const cd = e.clipboardData || window.clipboardData;
+        if (!cd) return;
+        const raw = cd.getData('text/plain');
+        if (!raw) return;
+        const stripRe = /^[ \t ]*(?:[•·●○◦▪▫■□▶►▸➢❖\-–—*]|\d+[.)]|[a-z][.)])[ \t ]+/;
+        const cleaned = raw
+          .replace(/\r\n/g, '\n')
+          .split('\n')
+          .map(line => line.replace(stripRe, ''))
+          .join('\n');
+        if (cleaned === raw) return;
+        e.preventDefault();
+        const ta = e.target;
+        ta.focus();
+        let inserted = false;
+        if (document.execCommand) {
+          try { inserted = document.execCommand('insertText', false, cleaned); } catch (_) {}
+        }
+        if (!inserted) {
+          const start = ta.selectionStart ?? (section.content || '').length;
+          const end = ta.selectionEnd ?? start;
+          const current = section.content || '';
+          update({ content: current.slice(0, start) + cleaned + current.slice(end) });
+        }
+      };
+
       return (
         <Card className={`p-4 ${section.show === false ? 'opacity-50' : ''}`}>
           <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
@@ -7000,8 +7031,8 @@
             </div>
           </div>
           <Textarea rows={section.bullets ? 5 : 4} value={section.content || ''}
-            onChange={e => update({ content: e.target.value })} placeholder={placeholder}
-            disabled={section.show === false} />
+            onChange={e => update({ content: e.target.value })} onPaste={handlePaste}
+            placeholder={placeholder} disabled={section.show === false} />
         </Card>
       );
     }
