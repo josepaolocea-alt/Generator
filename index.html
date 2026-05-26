@@ -293,7 +293,9 @@
       min-width: min(100%, 360px);
       justify-content: flex-end;
     }
-    .app-segmented,
+    .app-segmented {
+      max-width: 100%;
+    }
     .app-tab-nav {
       max-width: 100%;
       overflow-x: auto;
@@ -303,6 +305,28 @@
     .app-tab-nav button {
       min-height: 36px;
       white-space: nowrap;
+    }
+    .app-segment-more-menu {
+      animation: app-segment-more-fade 120ms ease-out;
+    }
+    @keyframes app-segment-more-fade {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    html.light .app-segment-more-menu {
+      background-color: #ffffff !important;
+      border-color: #e4e4e7 !important;
+    }
+    html.light .app-segment-more-item {
+      color: #52525b !important;
+    }
+    html.light .app-segment-more-item:hover {
+      background-color: #f4f4f5 !important;
+      color: #18181b !important;
+    }
+    html.light .app-segment-more-item.is-active {
+      background-color: rgba(37,99,235,0.14) !important;
+      color: #1d4ed8 !important;
     }
     html.light .text-blue-200 { color: #1d4ed8 !important; }
     html.light .bg-blue-500\/20 { background-color: rgba(59,130,246,0.16) !important; }
@@ -341,23 +365,11 @@
         flex-basis: 100%;
         min-width: 0;
       }
-      .app-segmented,
       .app-tab-nav {
         width: 100%;
       }
-      .app-segmented {
-        display: grid !important;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-      }
-      .app-segmented button {
-        padding-inline: 0.5rem !important;
-        text-align: center;
-      }
     }
     @media (max-width: 560px) {
-      .app-segmented {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
       .app-tab-nav button {
         flex: 1 1 calc(50% - 2px);
       }
@@ -368,7 +380,7 @@
   <div id="root"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+    const { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } = React;
 
     /* ============================================================
        Constants
@@ -7719,6 +7731,143 @@ match /shared/whitelistSmsTestNumbers {
       );
     }
 
+    function ModuleSwitcher({ modules, current, onSelect }) {
+      const containerRef = useRef(null);
+      const measureRef = useRef(null);
+      const moreRef = useRef(null);
+      const [visibleCount, setVisibleCount] = useState(modules.length);
+      const [open, setOpen] = useState(false);
+
+      const recalculate = useCallback(() => {
+        const container = containerRef.current;
+        const strip = measureRef.current;
+        if (!container || !strip) return;
+        // Measure the available width from the parent so the segmented bar
+        // can shrink/grow correctly — its own clientWidth only reflects
+        // what its current children occupy.
+        const parent = container.parentElement;
+        const parentStyle = parent ? window.getComputedStyle(parent) : null;
+        const parentPad = parentStyle
+          ? (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0)
+          : 0;
+        const available = parent
+          ? Math.max(0, parent.clientWidth - parentPad - 8)
+          : container.clientWidth;
+        const buttons = Array.from(strip.children);
+        if (!buttons.length || !available) return;
+        const widths = buttons.map(b => b.offsetWidth);
+        const gap = 4;
+        const padding = 4;
+        const moreWidth = 78;
+        const allWidth = widths.reduce((s, w) => s + w, 0) + Math.max(0, widths.length - 1) * gap + padding;
+        if (allWidth <= available) {
+          setVisibleCount(modules.length);
+          return;
+        }
+        let used = padding + moreWidth + gap;
+        let count = 0;
+        for (let i = 0; i < widths.length; i++) {
+          const next = used + widths[i] + (count > 0 ? gap : 0);
+          if (next > available) break;
+          used = next;
+          count++;
+        }
+        setVisibleCount(Math.max(1, count));
+      }, [modules]);
+
+      useLayoutEffect(() => { recalculate(); }, [recalculate]);
+
+      useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        // Observe the parent element — the segmented bar itself only resizes
+        // when its children change, so watching it would miss viewport
+        // resizes when the visible-count is already accurate. The parent
+        // (app-header-controls) reflects the actual available width.
+        const target = container.parentElement || container;
+        const ro = new ResizeObserver(() => recalculate());
+        ro.observe(target);
+        window.addEventListener('resize', recalculate);
+        return () => {
+          ro.disconnect();
+          window.removeEventListener('resize', recalculate);
+        };
+      }, [recalculate]);
+
+      useEffect(() => {
+        if (!open) return;
+        const closeOutside = (e) => {
+          if (!moreRef.current?.contains(e.target)) setOpen(false);
+        };
+        const closeOnEscape = (e) => {
+          if (e.key === 'Escape') setOpen(false);
+        };
+        window.addEventListener('pointerdown', closeOutside);
+        window.addEventListener('keydown', closeOnEscape);
+        return () => {
+          window.removeEventListener('pointerdown', closeOutside);
+          window.removeEventListener('keydown', closeOnEscape);
+        };
+      }, [open]);
+
+      const safeCount = Math.min(visibleCount, modules.length);
+      const visible = modules.slice(0, safeCount);
+      const overflow = modules.slice(safeCount);
+      const overflowHasActive = overflow.some(m => current === m.id);
+
+      const baseBtn = 'px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap';
+      const activeCls = 'app-segment-active bg-blue-500/20 text-blue-200 border border-blue-500/40';
+      const mutedCls = 'app-segment-muted text-neutral-500 hover:text-neutral-200';
+
+      return (
+        <div ref={containerRef} className="app-segmented relative flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
+          <div ref={measureRef} aria-hidden="true"
+            style={{ position: 'fixed', left: '-99999px', top: 0, display: 'flex', gap: '4px', pointerEvents: 'none', visibility: 'hidden' }}>
+            {modules.map(m => (
+              <button key={`m-${m.id}`} type="button" tabIndex={-1} className={`${baseBtn} ${mutedCls}`}>{m.label}</button>
+            ))}
+          </div>
+
+          {visible.map(m => {
+            const isActive = current === m.id || (m.id === 'sip_fcs' && !current);
+            return (
+              <button key={m.id} type="button" onClick={() => onSelect(m.id)}
+                className={`${baseBtn} ${isActive ? activeCls : mutedCls}`}>
+                {m.label}
+              </button>
+            );
+          })}
+
+          {overflow.length > 0 && (
+            <div ref={moreRef} className="relative">
+              <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} aria-haspopup="menu" aria-label="More modules"
+                className={`${baseBtn} inline-flex items-center gap-1 ${overflowHasActive ? activeCls : mutedCls}`}>
+                More
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                  <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              {open && (
+                <div role="menu"
+                  className="app-segment-more-menu absolute right-0 top-full z-30 mt-1 min-w-[170px] rounded-md border border-neutral-800 bg-[#0c0c0c] p-1 shadow-2xl">
+                  {overflow.map(m => {
+                    const isActive = current === m.id;
+                    return (
+                      <button key={m.id} type="button" role="menuitem"
+                        onClick={() => { onSelect(m.id); setOpen(false); }}
+                        className={`app-segment-more-item ${isActive ? 'is-active bg-blue-500/20 text-blue-200' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100'} block w-full text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap`}>
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function App() {
       const [state, setStateRaw] = useState(() => {
         try {
@@ -8310,14 +8459,11 @@ match /shared/whitelistSmsTestNumbers {
       };
 
       const ModuleSwitch = (
-        <div className="app-segmented flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
-          {MODULES.map(m => (
-            <button key={m.id} onClick={() => setState(s => ({ ...s, module: m.id }))}
-              className={`px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors ${state.module === m.id || (m.id === 'sip_fcs' && !state.module) ? 'app-segment-active bg-blue-500/20 text-blue-200 border border-blue-500/40' : 'app-segment-muted text-neutral-500 hover:text-neutral-200'}`}>
-              {m.label}
-            </button>
-          ))}
-        </div>
+        <ModuleSwitcher
+          modules={MODULES}
+          current={state.module}
+          onSelect={(id) => setState(s => ({ ...s, module: id }))}
+        />
       );
 
       if (isUsers) {
