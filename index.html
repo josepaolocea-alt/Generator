@@ -29,6 +29,9 @@
 
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <!-- docx for RCA .docx export, html2pdf for RCA .pdf export -->
+  <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -463,6 +466,8 @@
     const STORAGE_KEY = 'mrg_state_v1';
     const TEMPLATES_KEY = 'mrg_templates_v1';
     const EDITOR_TEMPLATES_KEY = 'mrg_editor_templates_v1';
+    const RCA_TEMPLATES_KEY = 'mrg_rca_templates_v1';
+    const RCA_SIGNATORIES_KEY = 'mrg_rca_signatories_v1';
 
     /* ============================================================
        Helpers
@@ -6364,6 +6369,1037 @@
     }
 
     /* ============================================================
+       RCA module — Root Cause Analysis / Incident Report editor
+       ============================================================ */
+    const rcaId = (prefix = 'rca') => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+
+    // CYN logo embedded so RCAs work offline. Replaceable per-document
+    // via the "Header logo" upload in the editor.
+    const RCA_DEFAULT_LOGO_DATA_URL =
+      'data:image/png;base64,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';
+
+    const RCA_SAMPLE_SIGNATURE_DATA_URL =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHoAAABCCAIAAAAXElVzAAACPklEQVR4nO2b25KEIAwFYWv//5fdB2opSu4hOUFIP045I7bHENHxz/M4A8WP9gDuwnRDMd1QTDcU0w3FdEMx3VBMNxTTDcV0QzHdUEw3FNMNRVm39153AGAs3VJ47/Mw/aoM5VRSv8UHCaabTq0SNp7YaOr+VuHOR/s8z+vD7qMxNd3e+3y4WiMZ2SyqjNuHQ5ja19XFJIgbUZbOeytPd3V0E3LBPgDXE9ed9whcke5i2e1uLxGIc3Q3SvC4ODnRAQXdsZLMlpT27LroSFp0YPd0v+RKFH2M6ABadzfajU6W1zVLpzGLfrpzv0WtXB26iuUIVHc41PQ2wf0fdpp6uV07JcsRQd1FccVK0lVMvgXdxHJERHdx8iE3JMUfz38/36CxjRbMumuzfENxTG78brHa5J8IdYSi8Ogev2Zr3mtnKF+kb6zDxblhW+N03ePXbDfaje/mjUqt7qfFCtlKTzEdhB2WTCPxZGzr94X4dddoQtpzXVo0GoP8iuiArG5aGd2te2NE/64yMPsU6qMo6y4GeavpgRfZu0pCzd25jVtHSne7+XOVcnFwrgO4YnLwBDiO1JpJ/prAoOWzT4ZsuscL8fFlJMCve+U27+xoO0AxMVKYXzimhfqe08P/fjdN3CXGOXVfomwFNt3k1uKqk8Sj+yplK3Cmm7bWWnux5Ejsr1BQ2HRbtEewdENh0L1Stdf3/i0s3VD0/6R9VcYt3VA0dd8Wbceim6zsNtcO8BaVkWK1G4rphmK6oZhuKH8gG1nmI3dIxgAAAABJRU5ErkJggg==';
+
+    const RCA_BULLET_STYLES = [
+      { value: '•',  label: '• Bullet' },
+      { value: '◦',  label: '◦ Open circle' },
+      { value: '▪',  label: '▪ Square' },
+      { value: '–',  label: '– Dash' },
+      { value: '*',  label: '* Asterisk' },
+      { value: '1.', label: '1. Numbered' },
+      { value: 'a.', label: 'a. Lower alpha' },
+    ];
+
+    // Section blueprints in render order. Each section gets its own toggle,
+    // formatting state, and content textarea in the editor.
+    const RCA_SECTION_DEFS = [
+      { key: 'summary',     title: 'Summary of Issue',  defaultBullets: false },
+      { key: 'details',     title: 'Details of Incident', defaultBullets: false },
+      { key: 'resolved',    title: 'Resolved',          defaultBullets: false },
+      { key: 'findings',    title: 'Findings',          defaultBullets: true  },
+      { key: 'actionTaken', title: 'Action Taken',      defaultBullets: true  },
+      { key: 'actionPlan',  title: 'Action Plan',       defaultBullets: true  },
+    ];
+
+    function makeRcaDefaultSections() {
+      const out = {};
+      RCA_SECTION_DEFS.forEach((def) => {
+        out[def.key] = {
+          title: def.title,
+          show: true,
+          content: '',
+          bullets: def.defaultBullets,
+          bold: false,
+          italic: false,
+          underline: false,
+        };
+      });
+      return out;
+    }
+
+    function rcaTodayIso() {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = pad(d.getMonth() + 1);
+      const day = pad(d.getDate());
+      return `${y}-${m}-${day}`;
+    }
+
+    function rcaFormatLongDate(iso) {
+      if (!iso) return '';
+      const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return iso;
+      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    }
+
+    function rcaFormatDateTime(iso) {
+      if (!iso) return '';
+      const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+      if (!m) return iso;
+      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+      return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+
+    const DEFAULT_RCA_SIGNATORIES = [
+      { id: 'sig_aries', name: 'Aries Yuson',     position: 'Senior Technical Support', signature: RCA_SAMPLE_SIGNATURE_DATA_URL },
+      { id: 'sig_efren', name: 'Efren Bonavente', position: '', signature: '' },
+    ];
+
+    const DEFAULT_RCA_STATE = {
+      fileName: '',
+      date: rcaTodayIso(),
+      customerCid: '',
+      incidentStart: '',
+      incidentEnd: '',
+      reportedBy: '',
+      sections: makeRcaDefaultSections(),
+      font: 'Calibri',
+      fontSize: 11,
+      bulletStyle: '•',
+      signatoryIds: ['sig_aries', 'sig_efren'],
+      headerLogo: RCA_DEFAULT_LOGO_DATA_URL,
+      companyName: 'CLOUD YOUR NETWORK SOLUTIONS, INC.',
+      companyAddress: '55 Sta. Rosa Street, Barrio Kapitolyo, Pasig City 1603',
+      companyContact: 'PH Tel: +632 396-6399 / US Tel: +1213 550-3937 / Email: info@cynsolutions.ph',
+      companyWebsite: 'www.cynsolutions.ph',
+      docTitle: 'INCIDENT REPORT',
+      notes: '',
+    };
+
+    function rcaNormalizeSections(raw) {
+      const base = makeRcaDefaultSections();
+      if (!raw || typeof raw !== 'object') return base;
+      RCA_SECTION_DEFS.forEach((def) => {
+        const src = raw[def.key];
+        if (!src || typeof src !== 'object') return;
+        base[def.key] = {
+          ...base[def.key],
+          ...src,
+          title: typeof src.title === 'string' && src.title.trim() ? src.title : base[def.key].title,
+          show: src.show !== false,
+          content: typeof src.content === 'string' ? src.content : '',
+          bullets: !!src.bullets,
+          bold: !!src.bold,
+          italic: !!src.italic,
+          underline: !!src.underline,
+        };
+      });
+      return base;
+    }
+
+    function rcaNormalizeState(raw) {
+      const merged = { ...DEFAULT_RCA_STATE, ...(raw || {}) };
+      return {
+        ...merged,
+        sections: rcaNormalizeSections(merged.sections),
+        signatoryIds: Array.isArray(merged.signatoryIds) ? merged.signatoryIds.filter(Boolean) : [],
+        fontSize: Number(merged.fontSize) || 11,
+        font: merged.font || 'Calibri',
+        bulletStyle: merged.bulletStyle || '•',
+        headerLogo: typeof merged.headerLogo === 'string' ? merged.headerLogo : '',
+        date: merged.date || '',
+        customerCid: merged.customerCid || '',
+        incidentStart: merged.incidentStart || '',
+        incidentEnd: merged.incidentEnd || '',
+        reportedBy: merged.reportedBy || '',
+      };
+    }
+
+    // Template payload — captures everything except the live, per-report fields
+    // (date, incident times, customer id). Lets a "CYN MAYA" template carry
+    // section content, signatories, and styling without overwriting today's
+    // incident metadata when loaded.
+    function rcaTemplateData(rca) {
+      const r = rcaNormalizeState(rca);
+      return {
+        sections: r.sections,
+        font: r.font,
+        fontSize: r.fontSize,
+        bulletStyle: r.bulletStyle,
+        signatoryIds: r.signatoryIds,
+        headerLogo: r.headerLogo,
+        companyName: r.companyName,
+        companyAddress: r.companyAddress,
+        companyContact: r.companyContact,
+        companyWebsite: r.companyWebsite,
+        docTitle: r.docTitle,
+        reportedBy: r.reportedBy,
+        customerCid: r.customerCid,
+      };
+    }
+
+    function rcaApplyTemplate(current, data) {
+      const cur = rcaNormalizeState(current);
+      const next = rcaNormalizeState({ ...cur, ...(data || {}) });
+      // Preserve the user-facing per-report fields the template should NOT clobber.
+      return { ...next, date: cur.date, incidentStart: cur.incidentStart, incidentEnd: cur.incidentEnd, fileName: cur.fileName };
+    }
+
+    function rcaFileNameStem(rca) {
+      const r = rcaNormalizeState(rca);
+      if (r.fileName && r.fileName.trim()) return r.fileName.trim();
+      const cid = (r.customerCid || '').trim().replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_') || 'CLIENT';
+      const date = (r.date || '').trim() || rcaTodayIso();
+      return `RCA_${cid}_${date}`;
+    }
+
+    /* ---------------- RCA DOCX / PDF generation ---------------- */
+
+    function rcaSplitLines(text) {
+      return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map(s => s.replace(/\s+$/, ''))
+        .filter(s => s.length > 0);
+    }
+
+    function rcaDataUrlToUint8(dataUrl) {
+      if (!dataUrl || typeof dataUrl !== 'string') return null;
+      const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (!m) return null;
+      const binary = atob(m[2]);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return { bytes, mime: m[1] };
+    }
+
+    function rcaImageType(mime) {
+      if (!mime) return 'png';
+      const t = mime.toLowerCase();
+      if (t.includes('jpeg') || t.includes('jpg')) return 'jpg';
+      if (t.includes('gif')) return 'gif';
+      if (t.includes('bmp')) return 'bmp';
+      if (t.includes('svg')) return 'svg';
+      return 'png';
+    }
+
+    async function rcaImageNaturalSize(dataUrl) {
+      if (!dataUrl) return null;
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      });
+    }
+
+    async function generateRcaDocx(state) {
+      if (!window.docx) throw new Error('docx library not loaded');
+      const D = window.docx;
+      const rca = rcaNormalizeState(state.rca);
+      const signatories = rcaResolveSignatories(state, rca.signatoryIds);
+
+      const baseFont = rca.font || 'Calibri';
+      const baseHalf = Math.max(8, Math.round((Number(rca.fontSize) || 11) * 2)); // half-points for docx
+
+      const runText = (text, opts = {}) => new D.TextRun({
+        text: String(text == null ? '' : text),
+        font: baseFont,
+        size: opts.size || baseHalf,
+        bold: !!opts.bold,
+        italics: !!opts.italic,
+        underline: opts.underline ? { type: 'single' } : undefined,
+        color: opts.color || undefined,
+      });
+
+      const para = (children, opts = {}) => new D.Paragraph({
+        children: Array.isArray(children) ? children : [children],
+        spacing: opts.spacing || { after: 80 },
+        alignment: opts.alignment,
+      });
+
+      const children = [];
+
+      // Header: logo (if any) + company contact block, right-aligned
+      const logo = rcaDataUrlToUint8(rca.headerLogo);
+      if (logo) {
+        const size = await rcaImageNaturalSize(rca.headerLogo);
+        const targetH = 70;
+        const ratio = size ? (size.width / size.height) : 1;
+        const targetW = Math.max(40, Math.round(targetH * ratio));
+        children.push(new D.Paragraph({
+          alignment: D.AlignmentType.LEFT,
+          children: [new D.ImageRun({
+            type: rcaImageType(logo.mime),
+            data: logo.bytes,
+            transformation: { width: targetW, height: targetH },
+            altText: { title: 'Logo', description: rca.companyName || 'Logo', name: 'logo' },
+          })],
+          spacing: { after: 60 },
+        }));
+      }
+      if (rca.companyName) children.push(para(runText(rca.companyName, { bold: true, size: Math.max(16, baseHalf) })));
+      if (rca.companyAddress) children.push(para(runText(rca.companyAddress, { size: Math.max(16, baseHalf - 2) })));
+      if (rca.companyContact)  children.push(para(runText(rca.companyContact,  { size: Math.max(16, baseHalf - 2) })));
+      if (rca.companyWebsite)  children.push(para(runText('Website: ' + rca.companyWebsite, { size: Math.max(16, baseHalf - 2) })));
+
+      // Title
+      children.push(new D.Paragraph({
+        alignment: D.AlignmentType.CENTER,
+        spacing: { before: 240, after: 200 },
+        children: [runText(rca.docTitle || 'INCIDENT REPORT', { bold: true, size: Math.max(28, baseHalf + 8) })],
+      }));
+
+      // Metadata table — 2 columns
+      const labelRun = (t) => runText(t, { bold: true });
+      const metaRow = (l1, v1, l2, v2) => new D.TableRow({
+        children: [
+          new D.TableCell({
+            width: { size: 4680, type: D.WidthType.DXA },
+            margins: { top: 80, bottom: 80, left: 120, right: 120 },
+            borders: rcaCellBorders(),
+            children: [new D.Paragraph({ children: [labelRun(l1 + ' '), runText(v1)] })],
+          }),
+          new D.TableCell({
+            width: { size: 4680, type: D.WidthType.DXA },
+            margins: { top: 80, bottom: 80, left: 120, right: 120 },
+            borders: rcaCellBorders(),
+            children: [new D.Paragraph({ children: [labelRun(l2 + ' '), runText(v2)] })],
+          }),
+        ],
+      });
+      const dateStr = rcaFormatLongDate(rca.date);
+      const startStr = rcaFormatDateTime(rca.incidentStart);
+      const endStr = rcaFormatDateTime(rca.incidentEnd);
+      const metaRows = [];
+      metaRows.push(metaRow('DATE:', dateStr, 'CUSTOMER ID:', rca.customerCid || ''));
+      metaRows.push(metaRow('DATE & TIME OF INCIDENT:', startStr, 'DATE & TIME OF RESOLVE:', endStr));
+      metaRows.push(new D.TableRow({
+        children: [
+          new D.TableCell({
+            width: { size: 9360, type: D.WidthType.DXA },
+            columnSpan: 2,
+            margins: { top: 80, bottom: 80, left: 120, right: 120 },
+            borders: rcaCellBorders(),
+            children: [new D.Paragraph({ children: [labelRun('REPORTED BY: '), runText(rca.reportedBy || '')] })],
+          }),
+        ],
+      }));
+      children.push(new D.Table({
+        width: { size: 9360, type: D.WidthType.DXA },
+        columnWidths: [4680, 4680],
+        rows: metaRows,
+      }));
+      children.push(para([runText('')]));
+
+      // Each enabled section: heading + content lines (paragraph or bullet)
+      RCA_SECTION_DEFS.forEach((def) => {
+        const sec = rca.sections[def.key];
+        if (!sec || sec.show === false) return;
+        const lines = rcaSplitLines(sec.content);
+        children.push(new D.Paragraph({
+          spacing: { before: 200, after: 100 },
+          children: [runText(sec.title, { bold: true, size: baseHalf + 2 })],
+        }));
+        if (!lines.length) {
+          children.push(para([runText('—', { italic: true, color: '999999' })]));
+          return;
+        }
+        if (sec.bullets) {
+          const bullet = rca.bulletStyle || '•';
+          const numbered = /^\d+\./.test(bullet);
+          const alpha = /^[a-z]\./i.test(bullet);
+          lines.forEach((ln, idx) => {
+            let marker;
+            if (numbered) marker = `${idx + 1}. `;
+            else if (alpha) marker = `${String.fromCharCode(97 + (idx % 26))}. `;
+            else marker = `${bullet}  `;
+            children.push(new D.Paragraph({
+              indent: { left: 360, hanging: 240 },
+              spacing: { after: 40 },
+              children: [
+                runText(marker, { bold: sec.bold, italic: sec.italic, underline: sec.underline }),
+                runText(ln, { bold: sec.bold, italic: sec.italic, underline: sec.underline }),
+              ],
+            }));
+          });
+        } else {
+          lines.forEach((ln) => {
+            children.push(para([runText(ln, { bold: sec.bold, italic: sec.italic, underline: sec.underline })]));
+          });
+        }
+      });
+
+      // Signatories
+      if (signatories.length) {
+        children.push(new D.Paragraph({
+          spacing: { before: 360, after: 120 },
+          children: [runText('Signed by:', { bold: true })],
+        }));
+        const sigCells = await Promise.all(signatories.map(async (s) => {
+          const cellChildren = [];
+          const img = rcaDataUrlToUint8(s.signature);
+          if (img) {
+            const sz = await rcaImageNaturalSize(s.signature);
+            const targetH = 50;
+            const ratio = sz ? (sz.width / sz.height) : 2;
+            const targetW = Math.max(80, Math.min(220, Math.round(targetH * ratio)));
+            cellChildren.push(new D.Paragraph({
+              alignment: D.AlignmentType.CENTER,
+              spacing: { after: 40 },
+              children: [new D.ImageRun({
+                type: rcaImageType(img.mime),
+                data: img.bytes,
+                transformation: { width: targetW, height: targetH },
+                altText: { title: s.name || 'Signature', description: s.name || 'Signature', name: 'signature' },
+              })],
+            }));
+          } else {
+            cellChildren.push(new D.Paragraph({ spacing: { after: 320 }, children: [runText(' ')] }));
+          }
+          cellChildren.push(new D.Paragraph({
+            alignment: D.AlignmentType.CENTER,
+            border: { top: { style: D.BorderStyle.SINGLE, size: 4, color: '666666', space: 1 } },
+            spacing: { before: 20, after: 40 },
+            children: [runText(s.name || '', { bold: true })],
+          }));
+          if (s.position) cellChildren.push(new D.Paragraph({
+            alignment: D.AlignmentType.CENTER,
+            children: [runText(s.position, { italic: true, size: Math.max(14, baseHalf - 2) })],
+          }));
+          const cellWidth = Math.floor(9360 / signatories.length);
+          return new D.TableCell({
+            width: { size: cellWidth, type: D.WidthType.DXA },
+            margins: { top: 120, bottom: 120, left: 160, right: 160 },
+            borders: rcaCellBorders('FFFFFF'),
+            children: cellChildren,
+          });
+        }));
+        const cellWidth = Math.floor(9360 / signatories.length);
+        children.push(new D.Table({
+          width: { size: 9360, type: D.WidthType.DXA },
+          columnWidths: signatories.map(() => cellWidth),
+          rows: [new D.TableRow({ children: sigCells })],
+        }));
+      }
+
+      const doc = new D.Document({
+        creator: 'RCA Editor',
+        title: rca.docTitle || 'INCIDENT REPORT',
+        styles: { default: { document: { run: { font: baseFont, size: baseHalf } } } },
+        sections: [{
+          properties: {
+            page: {
+              size: { width: 12240, height: 15840 },
+              margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 },
+            },
+          },
+          children,
+        }],
+      });
+
+      const blob = await D.Packer.toBlob(doc);
+      const filename = rcaFileNameStem(rca) + '.docx';
+      saveAs(blob, filename);
+      return filename;
+    }
+
+    function rcaCellBorders(color = 'CCCCCC') {
+      const D = window.docx;
+      if (!D) return undefined;
+      const b = { style: D.BorderStyle.SINGLE, size: 4, color };
+      return { top: b, bottom: b, left: b, right: b };
+    }
+
+    function rcaResolveSignatories(state, ids) {
+      const list = Array.isArray(state.rcaSignatories) ? state.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
+      const byId = new Map(list.map(s => [s.id, s]));
+      return (Array.isArray(ids) ? ids : []).map(id => byId.get(id)).filter(Boolean);
+    }
+
+    async function generateRcaPdf(state, previewNode) {
+      if (!window.html2pdf) throw new Error('html2pdf library not loaded');
+      const rca = rcaNormalizeState(state.rca);
+      const filename = rcaFileNameStem(rca) + '.pdf';
+      const sourceNode = previewNode || document.querySelector('[data-rca-preview-root]');
+      if (!sourceNode) throw new Error('Preview is not visible — open the RCA editor and try again.');
+
+      // Clone the preview into a clean off-screen container so the PDF
+      // renderer doesn't capture any dark-mode wrappers or scrollbars.
+      const wrapper = document.createElement('div');
+      wrapper.style.position = 'fixed';
+      wrapper.style.left = '-10000px';
+      wrapper.style.top = '0';
+      wrapper.style.width = '8.5in';
+      wrapper.style.background = '#ffffff';
+      wrapper.style.color = '#111';
+      const clone = sourceNode.cloneNode(true);
+      clone.style.width = '8.5in';
+      clone.style.maxWidth = '8.5in';
+      clone.style.padding = '0.5in';
+      clone.style.background = '#ffffff';
+      clone.style.color = '#111';
+      wrapper.appendChild(clone);
+      document.body.appendChild(wrapper);
+
+      try {
+        await window.html2pdf().set({
+          filename,
+          margin: 0,
+          image: { type: 'jpeg', quality: 0.95 },
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+          jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+          pagebreak: { mode: ['css', 'legacy', 'avoid-all'] },
+        }).from(wrapper).save();
+      } finally {
+        document.body.removeChild(wrapper);
+      }
+      return filename;
+    }
+
+    /* ---------------- RCA components ---------------- */
+
+    function RcaSidebar({ state, setState, onGenerateDocx, onGeneratePdf, busy, sync, onRetrySync }) {
+      const theme = state.theme || 'dark';
+      const rca = rcaNormalizeState(state.rca);
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      const update = (patch) => setState(s => ({ ...s, rca: { ...rcaNormalizeState(s.rca), ...patch } }));
+      const enabledSections = RCA_SECTION_DEFS.filter(def => rca.sections[def.key]?.show !== false).length;
+      const fileStem = rcaFileNameStem(rca);
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">RCA Editor</h1>
+            <p className="text-xs text-neutral-500 mt-1">Incident reports · DOCX / PDF</p>
+            <AccountChip sync={sync} />
+          </div>
+          <div className="p-5 flex-1 overflow-y-auto space-y-4">
+            <div>
+              <SectionLabel>Output file name</SectionLabel>
+              <Input value={rca.fileName} onChange={e => update({ fileName: e.target.value })} placeholder={fileStem} />
+              <p className="mt-1 text-[10px] text-neutral-600 font-mono break-all">{fileStem}.docx / .pdf</p>
+            </div>
+            <div>
+              <SectionLabel>Status</SectionLabel>
+              <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
+                <div className="flex flex-wrap gap-1.5">
+                  <Pill>{enabledSections} of {RCA_SECTION_DEFS.length} sections</Pill>
+                  <Pill tone={rca.signatoryIds.length ? 'accent' : 'muted'}>{rca.signatoryIds.length} signers</Pill>
+                </div>
+                <div className="text-[11px] text-neutral-400 truncate">{rca.customerCid || '—'}</div>
+                <div className="text-[10px] text-neutral-600">{rca.date || '—'}</div>
+              </div>
+            </div>
+          </div>
+          <div className="p-5 border-t border-neutral-900 space-y-2">
+            <Btn variant="primary" size="lg" onClick={onGenerateDocx} disabled={busy} className="w-full">
+              {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Export .docx</>}
+            </Btn>
+            <Btn variant="ghost" size="md" onClick={onGeneratePdf} disabled={busy} className="w-full">
+              <IconDownload /> Export .pdf
+            </Btn>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">Word + PDF outputs</p>
+          </div>
+        </aside>
+      );
+    }
+
+    function RcaSectionEditor({ sectionKey, section, bulletStyle, onChange }) {
+      const update = (patch) => onChange({ ...section, ...patch });
+      const placeholder = section.bullets
+        ? 'One bullet per line…'
+        : 'Paragraph text (use blank lines for paragraph breaks)…';
+      return (
+        <Card className={`p-4 ${section.show === false ? 'opacity-50' : ''}`}>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+            <label className="inline-flex items-center gap-2 cursor-pointer text-sm font-semibold text-neutral-100">
+              <input type="checkbox" checked={section.show !== false} onChange={e => update({ show: e.target.checked })}
+                className="h-4 w-4 rounded border-neutral-700 bg-neutral-950" />
+              <span>{section.title}</span>
+              {section.show === false && <span className="text-[10px] text-neutral-500 font-normal">(hidden in output)</span>}
+            </label>
+            <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={!!section.bullets} onChange={e => update({ bullets: e.target.checked })}
+                  className="h-3.5 w-3.5" />
+                <span>Bullets</span>
+                {section.bullets && <span className="text-neutral-500 font-mono">{bulletStyle}</span>}
+              </label>
+              <label className={`inline-flex h-7 items-center gap-1 rounded-md border border-neutral-800 px-2 cursor-pointer ${section.bold ? 'bg-neutral-900 text-neutral-100' : ''}`}>
+                <input type="checkbox" checked={!!section.bold} onChange={e => update({ bold: e.target.checked })} className="sr-only" />
+                <span className="font-bold">B</span>
+              </label>
+              <label className={`inline-flex h-7 items-center gap-1 rounded-md border border-neutral-800 px-2 cursor-pointer ${section.italic ? 'bg-neutral-900 text-neutral-100' : ''}`}>
+                <input type="checkbox" checked={!!section.italic} onChange={e => update({ italic: e.target.checked })} className="sr-only" />
+                <span className="italic">I</span>
+              </label>
+              <label className={`inline-flex h-7 items-center gap-1 rounded-md border border-neutral-800 px-2 cursor-pointer ${section.underline ? 'bg-neutral-900 text-neutral-100' : ''}`}>
+                <input type="checkbox" checked={!!section.underline} onChange={e => update({ underline: e.target.checked })} className="sr-only" />
+                <span className="underline">U</span>
+              </label>
+            </div>
+          </div>
+          <Textarea rows={section.bullets ? 5 : 4} value={section.content || ''}
+            onChange={e => update({ content: e.target.value })} placeholder={placeholder}
+            disabled={section.show === false} />
+        </Card>
+      );
+    }
+
+    function RcaSignatoriesPanel({ state, setState, sync }) {
+      const signatories = Array.isArray(state.rcaSignatories) ? state.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
+      // The whole app state is auto-saved to localStorage and synced to
+      // Firestore (see the localStorage/Firestore sync effects in App).
+      // Signatories live in state.rcaSignatories so they ride that pipeline
+      // and stay in sync across devices for the signed-in user.
+      const setSignatories = (next) => setState(s => ({ ...s, rcaSignatories: next }));
+      const rca = rcaNormalizeState(state.rca);
+      const selectedIds = new Set(rca.signatoryIds || []);
+      const setSelected = (ids) => setState(s => ({ ...s, rca: { ...rcaNormalizeState(s.rca), signatoryIds: ids } }));
+
+      const addSignatory = () => setSignatories([
+        ...signatories,
+        { id: rcaId('sig'), name: '', position: '', signature: '' },
+      ]);
+      const updateSignatory = (id, patch) =>
+        setSignatories(signatories.map(s => s.id === id ? { ...s, ...patch } : s));
+      const removeSignatory = async (id) => {
+        const ok = await confirmDialog({
+          title: 'Remove signatory?',
+          message: 'This will remove them from your saved signatory list and from any RCA where they were selected.',
+          confirmText: 'Remove',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setSignatories(signatories.filter(s => s.id !== id));
+        if (selectedIds.has(id)) setSelected(Array.from(selectedIds).filter(x => x !== id));
+      };
+      const toggleSelected = (id) => {
+        const next = new Set(selectedIds);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        // Preserve order across signatories list
+        const ordered = signatories.map(s => s.id).filter(x => next.has(x));
+        setSelected(ordered);
+      };
+      const onSigUpload = (id) => (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => updateSignatory(id, { signature: String(reader.result || '') });
+        reader.readAsDataURL(file);
+      };
+      const moveSig = (idx, delta) => {
+        const next = signatories.slice();
+        const j = idx + delta;
+        if (j < 0 || j >= next.length) return;
+        const [item] = next.splice(idx, 1);
+        next.splice(j, 0, item);
+        setSignatories(next);
+      };
+
+      return (
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel hint="Add to your library and tick who signs this RCA">Signatories</SectionLabel>
+            <Btn variant="ghost" size="sm" onClick={addSignatory}><IconPlus /> Add signatory</Btn>
+          </div>
+          {signatories.length === 0 ? (
+            <div className="rounded-md border border-dashed border-neutral-800 px-3 py-4 text-xs text-neutral-500">
+              No signatories saved yet. Click "Add signatory" to create one.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {signatories.map((s, idx) => (
+                <div key={s.id} className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <label className="inline-flex items-center gap-2 cursor-pointer text-sm">
+                      <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggleSelected(s.id)}
+                        className="h-4 w-4 rounded border-neutral-700 bg-neutral-950" />
+                      <span className="font-medium text-neutral-100">{s.name || '(unnamed)'}</span>
+                      {selectedIds.has(s.id) && <Pill tone="accent">in this RCA</Pill>}
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => moveSig(idx, -1)} disabled={idx === 0}
+                        title="Move up" className="p-1.5 text-neutral-500 hover:text-neutral-200 disabled:opacity-30"><IconUp /></button>
+                      <button onClick={() => moveSig(idx, 1)} disabled={idx === signatories.length - 1}
+                        title="Move down" className="p-1.5 text-neutral-500 hover:text-neutral-200 disabled:opacity-30"><IconDown /></button>
+                      <button onClick={() => removeSignatory(s.id)} title="Remove signatory"
+                        className="p-1.5 text-neutral-500 hover:text-red-400"><IconX /></button>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-[1fr_1fr_minmax(180px,220px)]">
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Name</label>
+                      <Input value={s.name || ''} onChange={e => updateSignatory(s.id, { name: e.target.value })} placeholder="e.g. Aries Yuson" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Position</label>
+                      <Input value={s.position || ''} onChange={e => updateSignatory(s.id, { position: e.target.value })} placeholder="e.g. Senior Technical Support" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Signature image</label>
+                      <div className="flex items-center gap-2">
+                        {s.signature
+                          ? <img src={s.signature} alt={s.name || 'sig'} className="h-9 max-w-[120px] object-contain rounded bg-white p-1 border border-neutral-800" />
+                          : <span className="text-[11px] text-neutral-600">no image</span>}
+                        <label className="inline-flex items-center gap-1 cursor-pointer rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-900 hover:border-neutral-700">
+                          <IconUpload /> Upload
+                          <input type="file" accept="image/*" onChange={onSigUpload(s.id)} className="sr-only" />
+                        </label>
+                        {s.signature && (
+                          <button onClick={() => updateSignatory(s.id, { signature: '' })}
+                            className="text-[11px] text-neutral-500 hover:text-red-300" title="Clear signature">clear</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      );
+    }
+
+    function RcaTemplatesPanel({ state, setState, sync }) {
+      const [templates, setTemplates] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(RCA_TEMPLATES_KEY)) || []; } catch { return []; }
+      });
+      const [name, setName] = useState('');
+
+      useEffect(() => {
+        if (!window.__fb || !window.__fbm || !sync?.uid) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            const { doc, getDoc } = window.__fbm;
+            const ref = doc(window.__fb.db, 'users', sync.uid, 'state', 'rcaTemplates');
+            const snap = await getDoc(ref);
+            if (cancelled) return;
+            const remote = snap.exists() ? (firestoreDesanitize(snap.data()).items || []) : null;
+            if (Array.isArray(remote) && remote.length) {
+              const merged = [...remote];
+              for (const local of templates) {
+                if (!merged.some(t => t.name === local.name)) merged.push(local);
+              }
+              setTemplates(merged);
+              localStorage.setItem(RCA_TEMPLATES_KEY, JSON.stringify(merged));
+            }
+          } catch (e) { console.warn('rca templates hydrate failed', e); }
+        })();
+        return () => { cancelled = true; };
+      }, [sync?.uid]);
+
+      const persist = (next) => {
+        setTemplates(next);
+        try { localStorage.setItem(RCA_TEMPLATES_KEY, JSON.stringify(next)); } catch {}
+        if (window.__fb && window.__fbm && sync?.uid) {
+          const { doc, setDoc, serverTimestamp } = window.__fbm;
+          const ref = doc(window.__fb.db, 'users', sync.uid, 'state', 'rcaTemplates');
+          setDoc(ref, { items: firestoreSanitize(next), updatedAt: serverTimestamp() })
+            .catch(e => console.warn('rca templates save failed', e));
+        }
+      };
+      const save = () => {
+        const cleanName = name.trim();
+        if (!cleanName) return;
+        const t = { id: rcaId('tpl'), name: cleanName, savedAt: new Date().toISOString(), data: rcaTemplateData(state.rca) };
+        persist([...templates.filter(x => x.name !== t.name), t]);
+        setName('');
+      };
+      const load = (id) => {
+        const t = templates.find(x => x.id === id);
+        if (!t) return;
+        setState(s => ({ ...s, rca: rcaApplyTemplate(s.rca, t.data) }));
+      };
+      const del = (id) => persist(templates.filter(x => x.id !== id));
+
+      return (
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel hint="Save per-client headings, signatories, and styling (not date/incident times)">Client templates</SectionLabel>
+            <Pill>{templates.length} saved</Pill>
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_auto]">
+            <Input value={name} onChange={e => setName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), save())}
+              placeholder="e.g. CYN MAYA" />
+            <Btn variant="ghost" size="md" onClick={save} disabled={!name.trim()}>Save current as template</Btn>
+          </div>
+          {templates.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {templates.map(t => (
+                <div key={t.id} className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-900 bg-neutral-950/60 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-neutral-200">{t.name}</div>
+                    <div className="text-[10px] text-neutral-600 font-mono">{new Date(t.savedAt).toLocaleDateString()}</div>
+                  </div>
+                  <Btn variant="ghost" size="sm" onClick={() => load(t.id)}>Use</Btn>
+                  <button onClick={() => del(t.id)} title="Delete template" className="p-1.5 text-neutral-500 hover:text-red-400"><IconX /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      );
+    }
+
+    function RcaPreview({ state }) {
+      const rca = rcaNormalizeState(state.rca);
+      const signatories = rcaResolveSignatories(state, rca.signatoryIds);
+      const baseFont = rca.font || 'Calibri';
+      const baseSize = Number(rca.fontSize) || 11;
+      return (
+        <div data-rca-preview-root className="rca-preview" style={{
+          background: '#ffffff',
+          color: '#111',
+          fontFamily: `'${baseFont}', Calibri, Arial, sans-serif`,
+          fontSize: baseSize,
+          lineHeight: 1.45,
+          padding: '0.6in 0.7in',
+          minHeight: '11in',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+          borderRadius: 4,
+          width: '100%',
+          boxSizing: 'border-box',
+        }}>
+          {/* Letterhead */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 12 }}>
+            {rca.headerLogo && (
+              <img src={rca.headerLogo} alt="Logo" style={{ height: 70, width: 'auto', objectFit: 'contain' }} />
+            )}
+            <div style={{ flex: 1, fontSize: baseSize - 1, lineHeight: 1.35 }}>
+              {rca.companyName && <div style={{ fontWeight: 700, fontSize: baseSize + 1 }}>{rca.companyName}</div>}
+              {rca.companyAddress && <div>{rca.companyAddress}</div>}
+              {rca.companyContact && <div>{rca.companyContact}</div>}
+              {rca.companyWebsite && <div>Website: {rca.companyWebsite}</div>}
+            </div>
+          </div>
+
+          {/* Title */}
+          <h1 style={{ textAlign: 'center', fontSize: baseSize + 9, fontWeight: 800, margin: '18px 0 14px', letterSpacing: 1 }}>
+            {rca.docTitle || 'INCIDENT REPORT'}
+          </h1>
+
+          {/* Metadata grid */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 14, fontSize: baseSize - 1 }}>
+            <tbody>
+              <tr>
+                <td style={previewMetaCell}><strong>DATE:</strong> {rcaFormatLongDate(rca.date) || <em style={{ color: '#999' }}>—</em>}</td>
+                <td style={previewMetaCell}><strong>CUSTOMER ID:</strong> {rca.customerCid || <em style={{ color: '#999' }}>—</em>}</td>
+              </tr>
+              <tr>
+                <td style={previewMetaCell}><strong>DATE & TIME OF INCIDENT:</strong> {rcaFormatDateTime(rca.incidentStart) || <em style={{ color: '#999' }}>—</em>}</td>
+                <td style={previewMetaCell}><strong>DATE & TIME OF RESOLVE:</strong> {rcaFormatDateTime(rca.incidentEnd) || <em style={{ color: '#999' }}>—</em>}</td>
+              </tr>
+              <tr>
+                <td colSpan={2} style={previewMetaCell}><strong>REPORTED BY:</strong> {rca.reportedBy || <em style={{ color: '#999' }}>—</em>}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* Sections */}
+          {RCA_SECTION_DEFS.map((def) => {
+            const sec = rca.sections[def.key];
+            if (!sec || sec.show === false) return null;
+            const lines = rcaSplitLines(sec.content);
+            const segStyle = {
+              fontWeight: sec.bold ? 700 : 'inherit',
+              fontStyle: sec.italic ? 'italic' : 'inherit',
+              textDecoration: sec.underline ? 'underline' : 'inherit',
+            };
+            return (
+              <div key={def.key} style={{ marginBottom: 14, breakInside: 'avoid' }}>
+                <h2 style={{ fontSize: baseSize + 1, fontWeight: 700, margin: '14px 0 6px' }}>{sec.title}</h2>
+                {lines.length === 0
+                  ? <div style={{ color: '#aaa', fontStyle: 'italic' }}>—</div>
+                  : sec.bullets
+                    ? <RcaBulletList lines={lines} style={segStyle} bulletStyle={rca.bulletStyle} />
+                    : lines.map((ln, i) => (
+                        <p key={i} style={{ margin: '4px 0', ...segStyle }}>{ln}</p>
+                      ))
+                }
+              </div>
+            );
+          })}
+
+          {/* Signatures */}
+          {signatories.length > 0 && (
+            <div style={{ marginTop: 36, breakInside: 'avoid' }}>
+              <div style={{ fontWeight: 700, marginBottom: 12 }}>Signed by:</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${signatories.length}, 1fr)`, gap: 18 }}>
+                {signatories.map(s => (
+                  <div key={s.id} style={{ textAlign: 'center' }}>
+                    <div style={{ minHeight: 56, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 4 }}>
+                      {s.signature
+                        ? <img src={s.signature} alt={s.name || 'signature'} style={{ maxHeight: 56, maxWidth: '90%', objectFit: 'contain' }} />
+                        : <span style={{ fontSize: baseSize - 2, color: '#bbb' }}>(no signature image)</span>}
+                    </div>
+                    <div style={{ borderTop: '1px solid #666', padding: '4px 8px 0' }}>
+                      <div style={{ fontWeight: 700 }}>{s.name || '—'}</div>
+                      {s.position && <div style={{ fontStyle: 'italic', fontSize: baseSize - 2, color: '#444' }}>{s.position}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const previewMetaCell = { border: '1px solid #d0d0d0', padding: '6px 10px', verticalAlign: 'top' };
+
+    function RcaBulletList({ lines, style, bulletStyle }) {
+      const numbered = /^\d+\./.test(bulletStyle || '');
+      const alpha = /^[a-z]\./i.test(bulletStyle || '');
+      if (numbered) {
+        return <ol style={{ paddingLeft: 24, margin: '4px 0', ...style }}>{lines.map((ln, i) => <li key={i}>{ln}</li>)}</ol>;
+      }
+      if (alpha) {
+        return <ol style={{ paddingLeft: 24, margin: '4px 0', listStyleType: 'lower-alpha', ...style }}>{lines.map((ln, i) => <li key={i}>{ln}</li>)}</ol>;
+      }
+      return (
+        <ul style={{ paddingLeft: 24, margin: '4px 0', listStyleType: 'none', ...style }}>
+          {lines.map((ln, i) => (
+            <li key={i} style={{ position: 'relative', paddingLeft: 14 }}>
+              <span style={{ position: 'absolute', left: 0 }}>{bulletStyle || '•'}</span>{ln}
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    function RcaForm({ state, setState, sync }) {
+      const rca = rcaNormalizeState(state.rca);
+      const update = (patch) => setState(s => ({ ...s, rca: { ...rcaNormalizeState(s.rca), ...patch } }));
+      const updateSection = (key, sec) => setState(s => {
+        const cur = rcaNormalizeState(s.rca);
+        return { ...s, rca: { ...cur, sections: { ...cur.sections, [key]: sec } } };
+      });
+      const onLogoUpload = (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => update({ headerLogo: String(reader.result || '') });
+        reader.readAsDataURL(file);
+      };
+      const restoreDefaultLogo = () => update({ headerLogo: RCA_DEFAULT_LOGO_DATA_URL });
+
+      return (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <SectionLabel hint="Letterhead text and logo">Header / letterhead</SectionLabel>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Company name</label>
+                <Input value={rca.companyName || ''} onChange={e => update({ companyName: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Document title</label>
+                <Input value={rca.docTitle || ''} onChange={e => update({ docTitle: e.target.value })} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Address</label>
+                <Input value={rca.companyAddress || ''} onChange={e => update({ companyAddress: e.target.value })} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Contact line</label>
+                <Input value={rca.companyContact || ''} onChange={e => update({ companyContact: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Website</label>
+                <Input value={rca.companyWebsite || ''} onChange={e => update({ companyWebsite: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Header logo</label>
+                <div className="flex items-center gap-2">
+                  {rca.headerLogo
+                    ? <img src={rca.headerLogo} alt="logo" className="h-9 max-w-[80px] object-contain rounded bg-white p-1 border border-neutral-800" />
+                    : <span className="text-[11px] text-neutral-600">no logo</span>}
+                  <label className="inline-flex items-center gap-1 cursor-pointer rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-900 hover:border-neutral-700">
+                    <IconUpload /> Upload
+                    <input type="file" accept="image/*" onChange={onLogoUpload} className="sr-only" />
+                  </label>
+                  {rca.headerLogo && rca.headerLogo !== RCA_DEFAULT_LOGO_DATA_URL && (
+                    <button onClick={restoreDefaultLogo} className="text-[11px] text-neutral-500 hover:text-neutral-200" title="Use CYN default">default</button>
+                  )}
+                  {rca.headerLogo && (
+                    <button onClick={() => update({ headerLogo: '' })} className="text-[11px] text-neutral-500 hover:text-red-300" title="Remove logo">clear</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <SectionLabel hint="Incident metadata that shows in the report header">Incident details</SectionLabel>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Date</label>
+                <Input type="date" value={rca.date || ''} onChange={e => update({ date: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Customer CID</label>
+                <Input value={rca.customerCid || ''} onChange={e => update({ customerCid: e.target.value })} placeholder="e.g. CYN MAYA" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Date & time of incident</label>
+                <Input type="datetime-local" value={rca.incidentStart || ''} onChange={e => update({ incidentStart: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Date & time of resolve</label>
+                <Input type="datetime-local" value={rca.incidentEnd || ''} onChange={e => update({ incidentEnd: e.target.value })} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Reported by</label>
+                <Input value={rca.reportedBy || ''} onChange={e => update({ reportedBy: e.target.value })} placeholder="e.g. Sir Paul of MAYA" />
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <SectionLabel hint="Applied to all sections in the output">Document styling</SectionLabel>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Font family</label>
+                <Select value={rca.font || 'Calibri'} onChange={e => update({ font: e.target.value })}>
+                  {FONT_FAMILIES.map(f => <option key={f} value={f}>{f}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Font size</label>
+                <Select value={String(rca.fontSize || 11)} onChange={e => update({ fontSize: Number(e.target.value) || 11 })}>
+                  {FONT_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                </Select>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Bullet style</label>
+                <Select value={rca.bulletStyle || '•'} onChange={e => update({ bulletStyle: e.target.value })}>
+                  {RCA_BULLET_STYLES.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </Select>
+              </div>
+            </div>
+          </Card>
+
+          {RCA_SECTION_DEFS.map((def) => (
+            <RcaSectionEditor key={def.key} sectionKey={def.key}
+              section={rca.sections[def.key]}
+              bulletStyle={rca.bulletStyle}
+              onChange={(sec) => updateSection(def.key, sec)} />
+          ))}
+
+          <RcaSignatoriesPanel state={state} setState={setState} sync={sync} />
+
+          <RcaTemplatesPanel state={state} setState={setState} sync={sync} />
+        </div>
+      );
+    }
+
+    /* ============================================================
        App
        ============================================================ */
     const APP_STATE_SCHEMA_VERSION = 2;
@@ -6389,6 +7425,9 @@
       editorTab: 'table',
       whitelistSms: DEFAULT_WL_SMS_STATE,
       whitelistSmsTab: 'content',
+      rca: DEFAULT_RCA_STATE,
+      rcaTab: 'editor',
+      rcaSignatories: DEFAULT_RCA_SIGNATORIES,
     };
 
     function timestampMs(value) {
@@ -6486,17 +7525,20 @@
       const editorRaw = merged.editor || {};
       const editor = { ...DEFAULT_EDITOR_STATE, ...editorRaw, cells: editorNormalizeGrid(editorRaw.cells || DEFAULT_EDITOR_STATE.cells) };
       const whitelistSms = wlSmsNormalizeState(merged.whitelistSms);
+      const rca = rcaNormalizeState(merged.rca);
+      const rcaSignatories = Array.isArray(merged.rcaSignatories) && merged.rcaSignatories.length
+        ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const sheets = migrateLegacyLabels
         ? migrateSheets(merged.sheets)
         : (Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS);
-      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor, whitelistSms };
+      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor, whitelistSms, rca, rcaSignatories };
     }
 
     // Role-based access. Admin sees everything; semi-admin only gets the two
     // light-touch modules. Anyone signed in defaults to semi_admin.
     const ROLE_MODULES = {
-      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor'],
-      semi_admin: ['whitelist_sms', 'editor'],
+      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca'],
+      semi_admin: ['whitelist_sms', 'editor', 'rca'],
     };
     const ROLE_LABELS = { admin: 'Admin', semi_admin: 'Semi-admin' };
     function isSuperAdminEmail(email) {
@@ -7129,6 +8171,9 @@ match /shared/whitelistSmsTestNumbers {
           } else if (state.module === 'whitelist_sms') {
             const fn = await generateWlSmsWorkbook(state, sharedTestNumbers);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
+          } else if (state.module === 'rca') {
+            const fn = await generateRcaDocx(state);
+            setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else {
             await generateWorkbook(state);
             setToast({ type: 'ok', msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
@@ -7136,6 +8181,20 @@ match /shared/whitelistSmsTestNumbers {
         } catch (e) {
           console.error(e);
           setToast({ type: 'err', msg: 'Generation failed: ' + (e.message || e) });
+        } finally {
+          setBusy(false);
+          setTimeout(() => setToast(null), 4000);
+        }
+      };
+
+      const onGenerateRcaPdf = async () => {
+        setBusy(true);
+        try {
+          const fn = await generateRcaPdf(state);
+          setToast({ type: 'ok', msg: `Generated ${fn}` });
+        } catch (e) {
+          console.error(e);
+          setToast({ type: 'err', msg: 'PDF failed: ' + (e.message || e) });
         } finally {
           setBusy(false);
           setTimeout(() => setToast(null), 4000);
@@ -7171,6 +8230,7 @@ match /shared/whitelistSmsTestNumbers {
         { id: 'bmr_sms', label: 'BMR SMS' },
         { id: 'whitelist_sms', label: 'Whitelist SMS' },
         { id: 'editor',  label: 'Editor' },
+        { id: 'rca',     label: 'RCA' },
         { id: 'users',   label: 'Users', adminOnly: true },
       ];
       const role = sync.role || 'semi_admin';
@@ -7196,6 +8256,7 @@ match /shared/whitelistSmsTestNumbers {
       const isBmr = state.module === 'bmr';
       const isBmrSms = state.module === 'bmr_sms';
       const isWlSms = state.module === 'whitelist_sms';
+      const isRca = state.module === 'rca';
       const isUsers = state.module === 'users';
       const whitelistSms = wlSmsNormalizeState(state.whitelistSms);
       const setWhitelistSms = useCallback((next) => setState(s => {
@@ -7591,6 +8652,57 @@ match /shared/whitelistSmsTestNumbers {
               </footer>
             </main>
 
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
+
+      if (isRca) {
+        const rca = rcaNormalizeState(state.rca);
+        const enabledSections = RCA_SECTION_DEFS.filter(def => rca.sections[def.key]?.show !== false).length;
+        const signatories = rcaResolveSignatories(state, rca.signatoryIds);
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <RcaSidebar state={state} setState={setState} onGenerateDocx={onGenerate} onGeneratePdf={onGenerateRcaPdf} busy={busy} sync={sync} onRetrySync={retrySync} />
+            <main className="flex-1 min-w-0 flex flex-col">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+                <div className="app-title-block min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
+                  <h2 className="truncate text-[22px] font-bold tracking-tight">RCA · {rca.customerCid || 'New Incident Report'}</h2>
+                </div>
+                <div className="app-pill-row hidden xl:flex items-center gap-2">
+                  <Pill>{enabledSections} sections</Pill>
+                  <Pill tone={signatories.length ? 'accent' : 'muted'}>{signatories.length} signers</Pill>
+                  <Pill>{rca.font} · {rca.fontSize}pt</Pill>
+                </div>
+                <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
+                  {ModuleSwitch}
+                </div>
+              </header>
+
+              <div className="p-4 sm:p-6 lg:p-8 w-full max-w-[1700px]">
+                <div className="anim-fade-in grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]">
+                  <div>
+                    <RcaForm state={state} setState={setState} sync={sync} />
+                  </div>
+                  <div className="xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto">
+                    <SectionLabel hint="Updates live as you edit">Preview</SectionLabel>
+                    <RcaPreview state={state} />
+                  </div>
+                </div>
+              </div>
+
+              <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+                <span className="font-mono">RCA · {rcaFileNameStem(rca)}</span>
+                <span>{enabledSections} sections · {signatories.length} signers</span>
+              </footer>
+            </main>
             {toast && (
               <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
                 {toast.msg}
