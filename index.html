@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6585,14 +6584,26 @@
 
     function rcaDataUrlToUint8(dataUrl) {
       if (!dataUrl || typeof dataUrl !== 'string') return null;
-      const m = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+      // Tolerate data URLs with extra params (e.g. ;charset=utf-8;base64,...).
+      const m = dataUrl.match(/^data:([^;,]+)(?:;[^,]*)?;base64,([\s\S]+)$/);
       if (!m) return null;
-      // Strip whitespace and any stray non-base64 characters before
-      // atob so a single corrupted image never crashes the export.
-      const cleaned = m[2].replace(/[^A-Za-z0-9+/=]/g, '');
-      if (!cleaned || cleaned.length % 4 !== 0) return null;
+      // Strip whitespace and any stray non-base64 characters before atob so
+      // a single corrupted image never crashes the export.
+      let cleaned = m[2].replace(/[^A-Za-z0-9+/=]/g, '');
+      // Reject `=` anywhere except the final 1-2 chars — that combo passes
+      // length % 4 === 0 but makes atob throw, which is precisely the
+      // "Failed to execute atob on Window" error users have hit.
+      const eqIdx = cleaned.indexOf('=');
+      if (eqIdx !== -1 && eqIdx < cleaned.length - 2) return null;
+      // Pad to a multiple of 4 instead of dropping the image when the
+      // stored data is missing its trailing `=` padding.
+      const padNeeded = (4 - (cleaned.length % 4)) % 4;
+      if (padNeeded === 3) return null; // not recoverable
+      cleaned += '='.repeat(padNeeded);
+      if (!cleaned) return null;
       let binary;
       try { binary = atob(cleaned); } catch (_) { return null; }
+      if (!binary || !binary.length) return null;
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return { bytes, mime: m[1] };
@@ -6604,8 +6615,31 @@
       if (t.includes('jpeg') || t.includes('jpg')) return 'jpg';
       if (t.includes('gif')) return 'gif';
       if (t.includes('bmp')) return 'bmp';
-      if (t.includes('svg')) return 'svg';
+      // docx 8.x SVG handling needs a fallback raster + the SVG string —
+      // we don't ship that, and shipping bare SVG bytes makes the docx
+      // library try to atob the data. Coerce to png so the image is
+      // packed as raw bytes safely.
+      if (t.includes('svg')) return 'png';
       return 'png';
+    }
+
+    // Build an ImageRun safely: returns null if the image data cannot be
+    // expressed as a Uint8Array. This is the single chokepoint that
+    // prevents docx's internal atob from ever seeing a string and
+    // throwing "Failed to execute 'atob' on 'Window'".
+    function rcaSafeImageRun(D, opts) {
+      const bytes = opts && opts.data;
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+      try {
+        return new D.ImageRun({
+          type: opts.type || 'png',
+          data: bytes,
+          transformation: opts.transformation,
+          altText: opts.altText,
+        });
+      } catch (_) {
+        return null;
+      }
     }
 
     async function rcaImageNaturalSize(dataUrl) {
@@ -6656,19 +6690,23 @@
         new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText('Website: ' + RCA_LETTERHEAD.companyWebsite, { size: Math.max(16, baseHalf - 2) })] }),
       ];
       const logoCellChildren = [];
+      let logoRun = null;
       if (logo) {
         const size = await rcaImageNaturalSize(RCA_LETTERHEAD.logo);
         const targetH = 78;
         const ratio = size ? (size.width / size.height) : 1;
         const targetW = Math.max(40, Math.round(targetH * ratio));
+        logoRun = rcaSafeImageRun(D, {
+          type: rcaImageType(logo.mime),
+          data: logo.bytes,
+          transformation: { width: targetW, height: targetH },
+          altText: { title: 'Logo', description: RCA_LETTERHEAD.companyName, name: 'logo' },
+        });
+      }
+      if (logoRun) {
         logoCellChildren.push(new D.Paragraph({
           alignment: D.AlignmentType.LEFT,
-          children: [new D.ImageRun({
-            type: rcaImageType(logo.mime),
-            data: logo.bytes,
-            transformation: { width: targetW, height: targetH },
-            altText: { title: 'Logo', description: RCA_LETTERHEAD.companyName, name: 'logo' },
-          })],
+          children: [logoRun],
         }));
       } else {
         logoCellChildren.push(new D.Paragraph({ children: [runText(' ')] }));
@@ -6796,20 +6834,24 @@
         const sigCells = await Promise.all(signatories.map(async (s) => {
           const cellChildren = [];
           const img = rcaDataUrlToUint8(s.signature);
+          let sigRun = null;
           if (img) {
             const sz = await rcaImageNaturalSize(s.signature);
             const targetH = 50;
             const ratio = sz ? (sz.width / sz.height) : 2;
             const targetW = Math.max(80, Math.min(220, Math.round(targetH * ratio)));
+            sigRun = rcaSafeImageRun(D, {
+              type: rcaImageType(img.mime),
+              data: img.bytes,
+              transformation: { width: targetW, height: targetH },
+              altText: { title: s.name || 'Signature', description: s.name || 'Signature', name: 'signature' },
+            });
+          }
+          if (sigRun) {
             cellChildren.push(new D.Paragraph({
               alignment: D.AlignmentType.CENTER,
               spacing: { after: 40 },
-              children: [new D.ImageRun({
-                type: rcaImageType(img.mime),
-                data: img.bytes,
-                transformation: { width: targetW, height: targetH },
-                altText: { title: s.name || 'Signature', description: s.name || 'Signature', name: 'signature' },
-              })],
+              children: [sigRun],
             }));
           } else {
             cellChildren.push(new D.Paragraph({ spacing: { after: 320 }, children: [runText(' ')] }));
@@ -6855,7 +6897,16 @@
         }],
       });
 
-      const blob = await D.Packer.toBlob(doc);
+      let blob;
+      try {
+        blob = await D.Packer.toBlob(doc);
+      } catch (e) {
+        const msg = String(e && e.message || e);
+        if (/atob/i.test(msg)) {
+          throw new Error("Couldn't read an embedded image (logo or signature). Re-upload it and try again.");
+        }
+        throw e;
+      }
       const filename = rcaFileNameStem(rca) + '.docx';
       saveAs(blob, filename);
       return filename;
