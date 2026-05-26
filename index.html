@@ -6391,6 +6391,21 @@
       { value: 'a.', label: 'a. Lower alpha' },
     ];
 
+    // Locked letterhead — these always appear on every generated RCA and are
+    // intentionally NOT editable in the UI. The user asked that the logo,
+    // company info, and the "INCIDENT REPORT" title stay baked into the
+    // template so they never have to retype them per report. To change any
+    // of these (e.g. rebrand or fix an address), edit this constant and the
+    // change flows through to the preview, docx, and pdf simultaneously.
+    const RCA_LETTERHEAD = Object.freeze({
+      logo: RCA_DEFAULT_LOGO_DATA_URL,
+      companyName: 'CLOUD YOUR NETWORK SOLUTIONS, INC.',
+      companyAddress: '55 Sta. Rosa Street, Barrio Kapitolyo, Pasig City 1603',
+      companyContact: 'PH Tel: +632 396-6399 / US Tel: +1213 550-3937 / Email: info@cynsolutions.ph',
+      companyWebsite: 'www.cynsolutions.ph',
+      docTitle: 'INCIDENT REPORT',
+    });
+
     // Section blueprints in render order. Each section gets its own toggle,
     // formatting state, and content textarea in the editor.
     const RCA_SECTION_DEFS = [
@@ -6459,13 +6474,11 @@
       fontSize: 11,
       bulletStyle: '•',
       signatoryIds: ['sig_aries', 'sig_efren'],
-      headerLogo: RCA_DEFAULT_LOGO_DATA_URL,
-      companyName: 'CLOUD YOUR NETWORK SOLUTIONS, INC.',
-      companyAddress: '55 Sta. Rosa Street, Barrio Kapitolyo, Pasig City 1603',
-      companyContact: 'PH Tel: +632 396-6399 / US Tel: +1213 550-3937 / Email: info@cynsolutions.ph',
-      companyWebsite: 'www.cynsolutions.ph',
-      docTitle: 'INCIDENT REPORT',
       notes: '',
+      // NOTE: letterhead (logo, company name, address, contact, website, doc
+      // title) is intentionally NOT in state — it lives in the RCA_LETTERHEAD
+      // constant above so every generated RCA carries the same branding
+      // without per-report edits.
     };
 
     function rcaNormalizeSections(raw) {
@@ -6491,6 +6504,14 @@
 
     function rcaNormalizeState(raw) {
       const merged = { ...DEFAULT_RCA_STATE, ...(raw || {}) };
+      // Strip any stale letterhead fields off old persisted state so they
+      // can never accidentally override the locked RCA_LETTERHEAD constant.
+      delete merged.headerLogo;
+      delete merged.companyName;
+      delete merged.companyAddress;
+      delete merged.companyContact;
+      delete merged.companyWebsite;
+      delete merged.docTitle;
       return {
         ...merged,
         sections: rcaNormalizeSections(merged.sections),
@@ -6498,7 +6519,6 @@
         fontSize: Number(merged.fontSize) || 11,
         font: merged.font || 'Calibri',
         bulletStyle: merged.bulletStyle || '•',
-        headerLogo: typeof merged.headerLogo === 'string' ? merged.headerLogo : '',
         date: merged.date || '',
         customerCid: merged.customerCid || '',
         incidentStart: merged.incidentStart || '',
@@ -6508,9 +6528,10 @@
     }
 
     // Template payload — captures everything except the live, per-report fields
-    // (date, incident times, customer id). Lets a "CYN MAYA" template carry
-    // section content, signatories, and styling without overwriting today's
-    // incident metadata when loaded.
+    // (date, incident times). Lets a "CYN MAYA" template carry section
+    // content, signatories, and styling without overwriting today's incident
+    // metadata when loaded. Letterhead is intentionally NOT part of templates
+    // — it's locked in RCA_LETTERHEAD and shared across every RCA.
     function rcaTemplateData(rca) {
       const r = rcaNormalizeState(rca);
       return {
@@ -6519,12 +6540,6 @@
         fontSize: r.fontSize,
         bulletStyle: r.bulletStyle,
         signatoryIds: r.signatoryIds,
-        headerLogo: r.headerLogo,
-        companyName: r.companyName,
-        companyAddress: r.companyAddress,
-        companyContact: r.companyContact,
-        companyWebsite: r.companyWebsite,
-        docTitle: r.docTitle,
         reportedBy: r.reportedBy,
         customerCid: r.customerCid,
       };
@@ -6612,34 +6627,66 @@
 
       const children = [];
 
-      // Header: logo (if any) + company contact block, right-aligned
-      const logo = rcaDataUrlToUint8(rca.headerLogo);
+      // ---- Locked letterhead ----
+      // Logo (left) and company info (right) sit on the same row via a
+      // single 2-column table — matches the screenshot the user shared.
+      const logo = rcaDataUrlToUint8(RCA_LETTERHEAD.logo);
+      const infoLines = [
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyName, { bold: true, size: Math.max(18, baseHalf) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyAddress, { size: Math.max(16, baseHalf - 2) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyContact,  { size: Math.max(16, baseHalf - 2) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText('Website: ' + RCA_LETTERHEAD.companyWebsite, { size: Math.max(16, baseHalf - 2) })] }),
+      ];
+      const logoCellChildren = [];
       if (logo) {
-        const size = await rcaImageNaturalSize(rca.headerLogo);
-        const targetH = 70;
+        const size = await rcaImageNaturalSize(RCA_LETTERHEAD.logo);
+        const targetH = 78;
         const ratio = size ? (size.width / size.height) : 1;
         const targetW = Math.max(40, Math.round(targetH * ratio));
-        children.push(new D.Paragraph({
+        logoCellChildren.push(new D.Paragraph({
           alignment: D.AlignmentType.LEFT,
           children: [new D.ImageRun({
             type: rcaImageType(logo.mime),
             data: logo.bytes,
             transformation: { width: targetW, height: targetH },
-            altText: { title: 'Logo', description: rca.companyName || 'Logo', name: 'logo' },
+            altText: { title: 'Logo', description: RCA_LETTERHEAD.companyName, name: 'logo' },
           })],
-          spacing: { after: 60 },
         }));
+      } else {
+        logoCellChildren.push(new D.Paragraph({ children: [runText(' ')] }));
       }
-      if (rca.companyName) children.push(para(runText(rca.companyName, { bold: true, size: Math.max(16, baseHalf) })));
-      if (rca.companyAddress) children.push(para(runText(rca.companyAddress, { size: Math.max(16, baseHalf - 2) })));
-      if (rca.companyContact)  children.push(para(runText(rca.companyContact,  { size: Math.max(16, baseHalf - 2) })));
-      if (rca.companyWebsite)  children.push(para(runText('Website: ' + rca.companyWebsite, { size: Math.max(16, baseHalf - 2) })));
+      const noBorder = (() => {
+        const b = { style: D.BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+        return { top: b, bottom: b, left: b, right: b };
+      })();
+      children.push(new D.Table({
+        width: { size: 9360, type: D.WidthType.DXA },
+        columnWidths: [2400, 6960],
+        rows: [new D.TableRow({
+          children: [
+            new D.TableCell({
+              width: { size: 2400, type: D.WidthType.DXA },
+              margins: { top: 0, bottom: 0, left: 0, right: 80 },
+              borders: noBorder,
+              verticalAlign: D.VerticalAlign.CENTER,
+              children: logoCellChildren,
+            }),
+            new D.TableCell({
+              width: { size: 6960, type: D.WidthType.DXA },
+              margins: { top: 0, bottom: 0, left: 80, right: 0 },
+              borders: noBorder,
+              verticalAlign: D.VerticalAlign.CENTER,
+              children: infoLines,
+            }),
+          ],
+        })],
+      }));
 
-      // Title
+      // Title (locked)
       children.push(new D.Paragraph({
         alignment: D.AlignmentType.CENTER,
-        spacing: { before: 240, after: 200 },
-        children: [runText(rca.docTitle || 'INCIDENT REPORT', { bold: true, size: Math.max(28, baseHalf + 8) })],
+        spacing: { before: 280, after: 200 },
+        children: [runText(RCA_LETTERHEAD.docTitle, { bold: true, size: Math.max(28, baseHalf + 8) })],
       }));
 
       // Metadata table — 2 columns
@@ -6777,7 +6824,7 @@
 
       const doc = new D.Document({
         creator: 'RCA Editor',
-        title: rca.docTitle || 'INCIDENT REPORT',
+        title: RCA_LETTERHEAD.docTitle,
         styles: { default: { document: { run: { font: baseFont, size: baseHalf } } } },
         sections: [{
           properties: {
@@ -7165,22 +7212,22 @@
           width: '100%',
           boxSizing: 'border-box',
         }}>
-          {/* Letterhead */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 12 }}>
-            {rca.headerLogo && (
-              <img src={rca.headerLogo} alt="Logo" style={{ height: 70, width: 'auto', objectFit: 'contain' }} />
+          {/* Locked letterhead — values come from RCA_LETTERHEAD, not state */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
+            {RCA_LETTERHEAD.logo && (
+              <img src={RCA_LETTERHEAD.logo} alt="Logo" style={{ height: 78, width: 'auto', objectFit: 'contain', flexShrink: 0 }} />
             )}
-            <div style={{ flex: 1, fontSize: baseSize - 1, lineHeight: 1.35 }}>
-              {rca.companyName && <div style={{ fontWeight: 700, fontSize: baseSize + 1 }}>{rca.companyName}</div>}
-              {rca.companyAddress && <div>{rca.companyAddress}</div>}
-              {rca.companyContact && <div>{rca.companyContact}</div>}
-              {rca.companyWebsite && <div>Website: {rca.companyWebsite}</div>}
+            <div style={{ flex: 1, fontSize: baseSize - 1, lineHeight: 1.35, textAlign: 'right' }}>
+              <div style={{ fontWeight: 700, fontSize: baseSize + 1 }}>{RCA_LETTERHEAD.companyName}</div>
+              <div>{RCA_LETTERHEAD.companyAddress}</div>
+              <div>{RCA_LETTERHEAD.companyContact}</div>
+              <div>Website: {RCA_LETTERHEAD.companyWebsite}</div>
             </div>
           </div>
 
-          {/* Title */}
+          {/* Title (locked) */}
           <h1 style={{ textAlign: 'center', fontSize: baseSize + 9, fontWeight: 800, margin: '18px 0 14px', letterSpacing: 1 }}>
-            {rca.docTitle || 'INCIDENT REPORT'}
+            {RCA_LETTERHEAD.docTitle}
           </h1>
 
           {/* Metadata grid */}
@@ -7279,61 +7326,12 @@
         const cur = rcaNormalizeState(s.rca);
         return { ...s, rca: { ...cur, sections: { ...cur.sections, [key]: sec } } };
       });
-      const onLogoUpload = (e) => {
-        const file = e.target.files?.[0];
-        e.target.value = '';
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => update({ headerLogo: String(reader.result || '') });
-        reader.readAsDataURL(file);
-      };
-      const restoreDefaultLogo = () => update({ headerLogo: RCA_DEFAULT_LOGO_DATA_URL });
 
       return (
         <div className="space-y-4">
-          <Card className="p-4">
-            <SectionLabel hint="Letterhead text and logo">Header / letterhead</SectionLabel>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Company name</label>
-                <Input value={rca.companyName || ''} onChange={e => update({ companyName: e.target.value })} />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Document title</label>
-                <Input value={rca.docTitle || ''} onChange={e => update({ docTitle: e.target.value })} />
-              </div>
-              <div className="md:col-span-2">
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Address</label>
-                <Input value={rca.companyAddress || ''} onChange={e => update({ companyAddress: e.target.value })} />
-              </div>
-              <div className="md:col-span-2">
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Contact line</label>
-                <Input value={rca.companyContact || ''} onChange={e => update({ companyContact: e.target.value })} />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Website</label>
-                <Input value={rca.companyWebsite || ''} onChange={e => update({ companyWebsite: e.target.value })} />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Header logo</label>
-                <div className="flex items-center gap-2">
-                  {rca.headerLogo
-                    ? <img src={rca.headerLogo} alt="logo" className="h-9 max-w-[80px] object-contain rounded bg-white p-1 border border-neutral-800" />
-                    : <span className="text-[11px] text-neutral-600">no logo</span>}
-                  <label className="inline-flex items-center gap-1 cursor-pointer rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-900 hover:border-neutral-700">
-                    <IconUpload /> Upload
-                    <input type="file" accept="image/*" onChange={onLogoUpload} className="sr-only" />
-                  </label>
-                  {rca.headerLogo && rca.headerLogo !== RCA_DEFAULT_LOGO_DATA_URL && (
-                    <button onClick={restoreDefaultLogo} className="text-[11px] text-neutral-500 hover:text-neutral-200" title="Use CYN default">default</button>
-                  )}
-                  {rca.headerLogo && (
-                    <button onClick={() => update({ headerLogo: '' })} className="text-[11px] text-neutral-500 hover:text-red-300" title="Remove logo">clear</button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </Card>
+          {/* Letterhead is locked in RCA_LETTERHEAD — not editable here.
+             Logo, company name, address, contact, website, and the
+             "INCIDENT REPORT" title always render on every generated RCA. */}
 
           <Card className="p-4">
             <SectionLabel hint="Incident metadata that shows in the report header">Incident details</SectionLabel>
