@@ -6438,12 +6438,12 @@
       { value: 'a.', label: 'a. Lower alpha' },
     ];
 
-    // Locked letterhead — these always appear on every generated RCA and are
-    // intentionally NOT editable in the UI. The user asked that the logo,
-    // company info, and the "INCIDENT REPORT" title stay baked into the
-    // template so they never have to retype them per report. To change any
-    // of these (e.g. rebrand or fix an address), edit this constant and the
-    // change flows through to the preview, docx, and pdf simultaneously.
+    // Letterhead defaults — logo and the "INCIDENT REPORT" title stay baked
+    // in. The company text fields (name/address/contact/website) are the
+    // initial values used when the user has not customized them yet; the
+    // live values live in state.rcaCompany so they can be edited and
+    // persisted without being touched by any reset-to-default action that
+    // wipes the regular RCA editor state.
     const RCA_LETTERHEAD = Object.freeze({
       logo: RCA_DEFAULT_LOGO_DATA_URL,
       companyName: 'CLOUD YOUR NETWORK SOLUTIONS, INC.',
@@ -6452,6 +6452,32 @@
       companyWebsite: 'www.cynsolutions.ph',
       docTitle: 'INCIDENT REPORT',
     });
+
+    const DEFAULT_RCA_COMPANY = Object.freeze({
+      companyName: RCA_LETTERHEAD.companyName,
+      companyAddress: RCA_LETTERHEAD.companyAddress,
+      companyContact: RCA_LETTERHEAD.companyContact,
+      companyWebsite: RCA_LETTERHEAD.companyWebsite,
+    });
+
+    function rcaNormalizeCompany(raw) {
+      const src = (raw && typeof raw === 'object') ? raw : {};
+      const pick = (key) => {
+        const v = src[key];
+        return (typeof v === 'string') ? v : DEFAULT_RCA_COMPANY[key];
+      };
+      return {
+        companyName: pick('companyName'),
+        companyAddress: pick('companyAddress'),
+        companyContact: pick('companyContact'),
+        companyWebsite: pick('companyWebsite'),
+      };
+    }
+
+    function rcaCompanyLine(value, fallback) {
+      const v = typeof value === 'string' ? value.trim() : '';
+      return v ? value : fallback;
+    }
 
     // Section blueprints in render order. Each section gets its own toggle,
     // formatting state, and content textarea in the editor.
@@ -6694,6 +6720,11 @@
       const D = window.docx;
       const rca = rcaNormalizeState(state.rca);
       const signatories = rcaResolveSignatories(state, rca.signatoryIds);
+      const company = rcaNormalizeCompany(state.rcaCompany);
+      const companyName    = rcaCompanyLine(company.companyName,    DEFAULT_RCA_COMPANY.companyName);
+      const companyAddress = rcaCompanyLine(company.companyAddress, DEFAULT_RCA_COMPANY.companyAddress);
+      const companyContact = rcaCompanyLine(company.companyContact, DEFAULT_RCA_COMPANY.companyContact);
+      const companyWebsite = rcaCompanyLine(company.companyWebsite, DEFAULT_RCA_COMPANY.companyWebsite);
 
       const baseFont = rca.font || 'Calibri';
       const baseHalf = Math.max(8, Math.round((Number(rca.fontSize) || 11) * 2)); // half-points for docx
@@ -6722,10 +6753,10 @@
       const logoSource = rca.logo || RCA_LETTERHEAD.logo;
       const logo = rcaDataUrlToUint8(logoSource);
       const infoLines = [
-        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyName, { bold: true, size: Math.max(18, baseHalf) })] }),
-        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyAddress, { size: Math.max(16, baseHalf - 2) })] }),
-        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyContact,  { size: Math.max(16, baseHalf - 2) })] }),
-        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText('Website: ' + RCA_LETTERHEAD.companyWebsite, { size: Math.max(16, baseHalf - 2) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(companyName, { bold: true, size: Math.max(18, baseHalf) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(companyAddress, { size: Math.max(16, baseHalf - 2) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(companyContact,  { size: Math.max(16, baseHalf - 2) })] }),
+        new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText('Website: ' + companyWebsite, { size: Math.max(16, baseHalf - 2) })] }),
       ];
       const logoCellChildren = [];
       let logoRun = null;
@@ -6738,7 +6769,7 @@
           type: rcaImageType(logo.mime),
           data: logo.bytes,
           transformation: { width: targetW, height: targetH },
-          altText: { title: 'Logo', description: RCA_LETTERHEAD.companyName, name: 'logo' },
+          altText: { title: 'Logo', description: companyName, name: 'logo' },
         });
       }
       if (logoRun) {
@@ -7368,6 +7399,11 @@
     function RcaPreview({ state }) {
       const rca = rcaNormalizeState(state.rca);
       const signatories = rcaResolveSignatories(state, rca.signatoryIds);
+      const company = rcaNormalizeCompany(state.rcaCompany);
+      const companyName    = rcaCompanyLine(company.companyName,    DEFAULT_RCA_COMPANY.companyName);
+      const companyAddress = rcaCompanyLine(company.companyAddress, DEFAULT_RCA_COMPANY.companyAddress);
+      const companyContact = rcaCompanyLine(company.companyContact, DEFAULT_RCA_COMPANY.companyContact);
+      const companyWebsite = rcaCompanyLine(company.companyWebsite, DEFAULT_RCA_COMPANY.companyWebsite);
       const baseFont = rca.font || 'Calibri';
       const baseSize = Number(rca.fontSize) || 11;
       return (
@@ -7390,10 +7426,10 @@
               <img src={rca.logo || RCA_LETTERHEAD.logo} alt="Logo" style={{ height: 78, width: 'auto', objectFit: 'contain', flexShrink: 0 }} />
             )}
             <div style={{ flex: 1, fontSize: baseSize - 1, lineHeight: 1.35, textAlign: 'right' }}>
-              <div style={{ fontWeight: 700, fontSize: baseSize + 1 }}>{RCA_LETTERHEAD.companyName}</div>
-              <div>{RCA_LETTERHEAD.companyAddress}</div>
-              <div>{RCA_LETTERHEAD.companyContact}</div>
-              <div>Website: {RCA_LETTERHEAD.companyWebsite}</div>
+              <div style={{ fontWeight: 700, fontSize: baseSize + 1 }}>{companyName}</div>
+              <div>{companyAddress}</div>
+              <div>{companyContact}</div>
+              <div>Website: {companyWebsite}</div>
             </div>
           </div>
 
@@ -7509,6 +7545,22 @@
         return { ...s, rca: { ...cur, sections: { ...cur.sections, [key]: sec } } };
       });
 
+      // Company info lives in state.rcaCompany — separate from state.rca so
+      // it stays untouched by the per-report "Reset to default" actions
+      // (e.g. logo reset). Edits persist via the same localStorage +
+      // Firestore sync pipeline as signatories.
+      const company = rcaNormalizeCompany(state.rcaCompany);
+      const updateCompany = (patch) => setState(s => ({
+        ...s,
+        rcaCompany: { ...rcaNormalizeCompany(s.rcaCompany), ...patch },
+      }));
+      const resetCompany = () => setState(s => ({ ...s, rcaCompany: { ...DEFAULT_RCA_COMPANY } }));
+      const companyIsDefault =
+        company.companyName    === DEFAULT_RCA_COMPANY.companyName &&
+        company.companyAddress === DEFAULT_RCA_COMPANY.companyAddress &&
+        company.companyContact === DEFAULT_RCA_COMPANY.companyContact &&
+        company.companyWebsite === DEFAULT_RCA_COMPANY.companyWebsite;
+
       const onLogoUpload = (e) => {
         const file = e.target.files?.[0];
         e.target.value = '';
@@ -7541,6 +7593,43 @@
                   Reset to default
                 </button>
               )}
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <SectionLabel hint="Shown on the right side of the letterhead. Persists across resets — update here when our number or address changes.">Company info</SectionLabel>
+              <button onClick={resetCompany} disabled={companyIsDefault}
+                title="Reset company info to the built-in defaults"
+                className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 disabled:cursor-not-allowed disabled:opacity-40">
+                Reset company info
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Company name</label>
+                <Input value={company.companyName}
+                  onChange={e => updateCompany({ companyName: e.target.value })}
+                  placeholder={DEFAULT_RCA_COMPANY.companyName} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Address</label>
+                <Input value={company.companyAddress}
+                  onChange={e => updateCompany({ companyAddress: e.target.value })}
+                  placeholder={DEFAULT_RCA_COMPANY.companyAddress} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Contact (phone / email)</label>
+                <Input value={company.companyContact}
+                  onChange={e => updateCompany({ companyContact: e.target.value })}
+                  placeholder={DEFAULT_RCA_COMPANY.companyContact} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Website</label>
+                <Input value={company.companyWebsite}
+                  onChange={e => updateCompany({ companyWebsite: e.target.value })}
+                  placeholder={DEFAULT_RCA_COMPANY.companyWebsite} />
+              </div>
             </div>
           </Card>
 
@@ -7637,6 +7726,7 @@
       rca: DEFAULT_RCA_STATE,
       rcaTab: 'editor',
       rcaSignatories: DEFAULT_RCA_SIGNATORIES,
+      rcaCompany: { ...DEFAULT_RCA_COMPANY },
     };
 
     function timestampMs(value) {
@@ -7737,10 +7827,11 @@
       const rca = rcaNormalizeState(merged.rca);
       const rcaSignatories = Array.isArray(merged.rcaSignatories) && merged.rcaSignatories.length
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
+      const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
       const sheets = migrateLegacyLabels
         ? migrateSheets(merged.sheets)
         : (Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS);
-      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor, whitelistSms, rca, rcaSignatories };
+      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor, whitelistSms, rca, rcaSignatories, rcaCompany };
     }
 
     // Role-based access. Admin sees everything; semi-admin only gets the two
