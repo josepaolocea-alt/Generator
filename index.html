@@ -6785,8 +6785,8 @@
         return { top: b, bottom: b, left: b, right: b };
       })();
       children.push(new D.Table({
-        width: { size: 9360, type: D.WidthType.DXA },
-        columnWidths: [2400, 6960],
+        width: { size: 10080, type: D.WidthType.DXA },
+        columnWidths: [2400, 7680],
         rows: [new D.TableRow({
           children: [
             new D.TableCell({
@@ -6797,7 +6797,7 @@
               children: logoCellChildren,
             }),
             new D.TableCell({
-              width: { size: 6960, type: D.WidthType.DXA },
+              width: { size: 7680, type: D.WidthType.DXA },
               margins: { top: 0, bottom: 0, left: 80, right: 0 },
               borders: noBorder,
               verticalAlign: D.VerticalAlign.CENTER,
@@ -6819,13 +6819,13 @@
       const metaRow = (l1, v1, l2, v2) => new D.TableRow({
         children: [
           new D.TableCell({
-            width: { size: 4680, type: D.WidthType.DXA },
+            width: { size: 5040, type: D.WidthType.DXA },
             margins: { top: 80, bottom: 80, left: 120, right: 120 },
             borders: rcaCellBorders(),
             children: [new D.Paragraph({ children: [labelRun(l1 + ' '), runText(v1)] })],
           }),
           new D.TableCell({
-            width: { size: 4680, type: D.WidthType.DXA },
+            width: { size: 5040, type: D.WidthType.DXA },
             margins: { top: 80, bottom: 80, left: 120, right: 120 },
             borders: rcaCellBorders(),
             children: [new D.Paragraph({ children: [labelRun(l2 + ' '), runText(v2)] })],
@@ -6841,7 +6841,7 @@
       metaRows.push(new D.TableRow({
         children: [
           new D.TableCell({
-            width: { size: 9360, type: D.WidthType.DXA },
+            width: { size: 10080, type: D.WidthType.DXA },
             columnSpan: 2,
             margins: { top: 80, bottom: 80, left: 120, right: 120 },
             borders: rcaCellBorders(),
@@ -6850,8 +6850,8 @@
         ],
       }));
       children.push(new D.Table({
-        width: { size: 9360, type: D.WidthType.DXA },
-        columnWidths: [4680, 4680],
+        width: { size: 10080, type: D.WidthType.DXA },
+        columnWidths: [5040, 5040],
         rows: metaRows,
       }));
       children.push(para([runText('')]));
@@ -6911,7 +6911,7 @@
           children: [runText('Signed by:', { bold: true })],
         }));
         const sigCount = signatories.length;
-        const sigCellWidth = sigCount === 1 ? 3120 : Math.floor(9360 / sigCount);
+        const sigCellWidth = sigCount === 1 ? 3120 : Math.floor(10080 / sigCount);
         const sigCells = await Promise.all(signatories.map(async (s) => {
           const cellChildren = [];
           const img = rcaDataUrlToUint8(s.signature);
@@ -6957,7 +6957,7 @@
         const sigRowCells = [...sigCells];
         const sigColumnWidths = signatories.map(() => sigCellWidth);
         if (sigCount === 1) {
-          const fillerWidth = 9360 - sigCellWidth;
+          const fillerWidth = 10080 - sigCellWidth;
           sigRowCells.push(new D.TableCell({
             width: { size: fillerWidth, type: D.WidthType.DXA },
             margins: { top: 0, bottom: 0, left: 0, right: 0 },
@@ -6967,7 +6967,7 @@
           sigColumnWidths.push(fillerWidth);
         }
         children.push(new D.Table({
-          width: { size: 9360, type: D.WidthType.DXA },
+          width: { size: 10080, type: D.WidthType.DXA },
           columnWidths: sigColumnWidths,
           rows: [new D.TableRow({ children: sigRowCells })],
         }));
