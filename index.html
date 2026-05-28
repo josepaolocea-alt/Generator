@@ -1273,6 +1273,8 @@
     const BMR_USAGE_OFFSET  = 10;
     const BMR_TOTAL_OFFSET  = 11;
     const BMR_DECIMAL_OFFSETS = [1, 2, 5, 6, 7, 8, BMR_AMOUNT_OFFSET, BMR_USAGE_OFFSET, BMR_TOTAL_OFFSET];
+    // Always hide these per-block columns in the generated XLSX (CarrierName, Amnt Receivable, 30mins usage, Total usage remain visible).
+    const BMR_FORCE_HIDDEN_OFFSETS = [1, 2, 3, 4, 5, 6, 7, 8];
     const BMR_SLOT_COUNT = 25;
     const BMR_EXTRA_ROWS = 10;
     const BMR_SMS_BLOCK_COLS = 9;
@@ -1589,7 +1591,9 @@
       (bmr.hiddenCols || []).forEach((c) => {
         try { ws.getColumn(c).hidden = true; } catch (_) {}
       });
-      (bmr.hiddenBlockCols || []).forEach((offset) => {
+      const forcedHidden = new Set(BMR_FORCE_HIDDEN_OFFSETS);
+      (bmr.hiddenBlockCols || []).forEach((offset) => forcedHidden.add(Number(offset)));
+      forcedHidden.forEach((offset) => {
         const colOffset = Number(offset);
         if (!Number.isInteger(colOffset) || colOffset < 0 || colOffset >= BMR_BLOCK_COLS) return;
         for (let k = 0; k < slots.length; k++) {
@@ -2407,17 +2411,44 @@
 
     function PresetColorPicker({ value, onChange, title = 'Choose color', showHex = true, className = '', buttonClassName = '' }) {
       const [open, setOpen] = useState(false);
+      const [popupPos, setPopupPos] = useState(null);
       const rootRef = useRef(null);
+      const buttonRef = useRef(null);
+      const popupRef = useRef(null);
       const selected = presetColorHex(value);
+
+      const computePopupPos = useCallback(() => {
+        const btn = buttonRef.current;
+        if (!btn) return null;
+        const rect = btn.getBoundingClientRect();
+        const POPUP_W = 254;
+        const POPUP_H = 220;
+        const margin = 8;
+        const gap = 4;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+        const above = spaceBelow < POPUP_H + margin && spaceAbove > spaceBelow;
+        const top = above ? Math.max(margin, rect.top - POPUP_H - gap) : rect.bottom + gap;
+        let left = rect.left;
+        if (left + POPUP_W + margin > window.innerWidth) left = window.innerWidth - POPUP_W - margin;
+        if (left < margin) left = margin;
+        return { top, left };
+      }, []);
+
+      const togglePicker = () => {
+        setOpen(prev => {
+          const next = !prev;
+          if (next) setPopupPos(computePopupPos());
+          return next;
+        });
+      };
 
       useEffect(() => {
         if (!open) return;
-        const closeOutside = (e) => {
-          if (!rootRef.current?.contains(e.target)) setOpen(false);
-        };
-        const closeOnEscape = (e) => {
-          if (e.key === 'Escape') setOpen(false);
-        };
+        const isInside = (target) =>
+          rootRef.current?.contains(target) || popupRef.current?.contains(target);
+        const closeOutside = (e) => { if (!isInside(e.target)) setOpen(false); };
+        const closeOnEscape = (e) => { if (e.key === 'Escape') setOpen(false); };
         window.addEventListener('pointerdown', closeOutside);
         window.addEventListener('keydown', closeOnEscape);
         return () => {
@@ -2428,14 +2459,17 @@
 
       return (
         <span ref={rootRef} className={`relative inline-flex min-w-0 ${className}`}>
-          <button type="button" onClick={() => setOpen(v => !v)} title={title} aria-label={title} aria-expanded={open}
+          <button ref={buttonRef} type="button" onClick={togglePicker} title={title} aria-label={title} aria-expanded={open}
             className={`inline-flex min-w-0 items-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-900 transition-colors ${showHex ? 'w-full' : ''} ${buttonClassName}`}>
             <span className="h-5 w-5 shrink-0 rounded border border-neutral-700" style={{ background: selected }}></span>
             {showHex && <span className="min-w-0 flex-1 truncate text-left text-[11px] font-mono text-neutral-400">{selected}</span>}
             <IconDown />
           </button>
-          {open && (
-            <span className="absolute left-0 top-full z-30 mt-1 w-[254px] rounded-md border border-neutral-800 bg-[#0c0c0c] p-2 shadow-2xl">
+          {open && popupPos && ReactDOM.createPortal(
+            <span
+              ref={popupRef}
+              style={{ position: 'fixed', top: popupPos.top, left: popupPos.left, zIndex: 50 }}
+              className="w-[254px] rounded-md border border-neutral-800 bg-[#0c0c0c] p-2 shadow-2xl">
               <span className="block space-y-1">
                 {PRESET_COLOR_ROWS.map((row, rowIndex) => (
                   <span key={rowIndex} className="grid grid-cols-10 gap-1">
@@ -2448,7 +2482,8 @@
                   </span>
                 ))}
               </span>
-            </span>
+            </span>,
+            document.body
           )}
         </span>
       );
@@ -4459,7 +4494,7 @@
             Add cell borders
           </label>
           {bordersOnData && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div key="bmr-border-panel" className="anim-fade-in grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <div>
                 <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Cells</label>
                 <Select value={bmr.borderStyle || 'thin'} onChange={e => update({ borderStyle: e.target.value })}>
@@ -5217,7 +5252,7 @@
 
           <div className="p-5 border-t border-neutral-900 space-y-3">
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
-              {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR VOIP · {bmrTodayString()}</>}
+              {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR VOIP</>}
             </Btn>
             <p className="text-[10px] text-neutral-600 text-center font-mono">.xlsx · Google Sheets compatible</p>
           </div>
@@ -6440,6 +6475,8 @@
           bold: false,
           italic: false,
           underline: false,
+          justify: false,
+          indent: !def.defaultBullets,
         };
       });
       return out;
@@ -6682,7 +6719,8 @@
       // ---- Locked letterhead ----
       // Logo (left) and company info (right) sit on the same row via a
       // single 2-column table — matches the screenshot the user shared.
-      const logo = rcaDataUrlToUint8(RCA_LETTERHEAD.logo);
+      const logoSource = rca.logo || RCA_LETTERHEAD.logo;
+      const logo = rcaDataUrlToUint8(logoSource);
       const infoLines = [
         new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyName, { bold: true, size: Math.max(18, baseHalf) })] }),
         new D.Paragraph({ alignment: D.AlignmentType.RIGHT, children: [runText(RCA_LETTERHEAD.companyAddress, { size: Math.max(16, baseHalf - 2) })] }),
@@ -6692,8 +6730,8 @@
       const logoCellChildren = [];
       let logoRun = null;
       if (logo) {
-        const size = await rcaImageNaturalSize(RCA_LETTERHEAD.logo);
-        const targetH = 78;
+        const size = await rcaImageNaturalSize(logoSource);
+        const targetH = 96;
         const ratio = size ? (size.width / size.height) : 1;
         const targetW = Math.max(40, Math.round(targetH * ratio));
         logoRun = rcaSafeImageRun(D, {
@@ -6787,13 +6825,15 @@
       }));
       children.push(para([runText('')]));
 
-      // Each enabled section: heading + content lines (paragraph or bullet)
+      // Each enabled section: heading + content lines (paragraph or bullet).
+      // Heading spacing is bumped (before: 480) so each section is separated
+      // by ~2 blank lines from the previous one, per the user's spec.
       RCA_SECTION_DEFS.forEach((def) => {
         const sec = rca.sections[def.key];
         if (!sec || sec.show === false) return;
         const lines = rcaSplitLines(sec.content);
         children.push(new D.Paragraph({
-          spacing: { before: 200, after: 100 },
+          spacing: { before: 480, after: 160 },
           children: [runText(sec.title, { bold: true, size: baseHalf + 2 })],
         }));
         if (!lines.length) {
@@ -6819,8 +6859,16 @@
             }));
           });
         } else {
+          const paraAlign = sec.justify ? D.AlignmentType.JUSTIFIED : undefined;
+          // 720 twips = 0.5 inch first-line indent (Word's default tab stop).
+          const paraIndent = sec.indent ? { firstLine: 720 } : undefined;
           lines.forEach((ln) => {
-            children.push(para([runText(ln, { bold: sec.bold, italic: sec.italic, underline: sec.underline })]));
+            children.push(new D.Paragraph({
+              spacing: { after: 80 },
+              alignment: paraAlign,
+              indent: paraIndent,
+              children: [runText(ln, { bold: sec.bold, italic: sec.italic, underline: sec.underline })],
+            }));
           });
         }
       });
@@ -6831,6 +6879,8 @@
           spacing: { before: 360, after: 120 },
           children: [runText('Signed by:', { bold: true })],
         }));
+        const sigCount = signatories.length;
+        const sigCellWidth = sigCount === 1 ? 3120 : Math.floor(9360 / sigCount);
         const sigCells = await Promise.all(signatories.map(async (s) => {
           const cellChildren = [];
           const img = rcaDataUrlToUint8(s.signature);
@@ -6866,19 +6916,29 @@
             alignment: D.AlignmentType.CENTER,
             children: [runText(s.position, { italic: true, size: Math.max(14, baseHalf - 2) })],
           }));
-          const cellWidth = Math.floor(9360 / signatories.length);
           return new D.TableCell({
-            width: { size: cellWidth, type: D.WidthType.DXA },
+            width: { size: sigCellWidth, type: D.WidthType.DXA },
             margins: { top: 120, bottom: 120, left: 160, right: 160 },
             borders: rcaCellBorders('FFFFFF'),
             children: cellChildren,
           });
         }));
-        const cellWidth = Math.floor(9360 / signatories.length);
+        const sigRowCells = [...sigCells];
+        const sigColumnWidths = signatories.map(() => sigCellWidth);
+        if (sigCount === 1) {
+          const fillerWidth = 9360 - sigCellWidth;
+          sigRowCells.push(new D.TableCell({
+            width: { size: fillerWidth, type: D.WidthType.DXA },
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+            borders: rcaCellBorders('FFFFFF'),
+            children: [new D.Paragraph({ children: [runText(' ')] })],
+          }));
+          sigColumnWidths.push(fillerWidth);
+        }
         children.push(new D.Table({
           width: { size: 9360, type: D.WidthType.DXA },
-          columnWidths: signatories.map(() => cellWidth),
-          rows: [new D.TableRow({ children: sigCells })],
+          columnWidths: sigColumnWidths,
+          rows: [new D.TableRow({ children: sigRowCells })],
         }));
       }
 
@@ -6972,7 +7032,7 @@
 
     /* ---------------- RCA components ---------------- */
 
-    function RcaSidebar({ state, setState, onGenerateDocx, onGeneratePdf, busy, sync, onRetrySync }) {
+    function RcaSidebar({ state, setState, onGenerateDocx, busy, sync, onRetrySync }) {
       const theme = state.theme || 'dark';
       const rca = rcaNormalizeState(state.rca);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
@@ -6992,14 +7052,14 @@
               </button>
             </div>
             <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">RCA Editor</h1>
-            <p className="text-xs text-neutral-500 mt-1">Incident reports · DOCX / PDF</p>
+            <p className="text-xs text-neutral-500 mt-1">Incident reports · DOCX</p>
             <AccountChip sync={sync} />
           </div>
           <div className="p-5 flex-1 overflow-y-auto space-y-4">
             <div>
               <SectionLabel>Output file name</SectionLabel>
               <Input value={rca.fileName} onChange={e => update({ fileName: e.target.value })} placeholder={fileStem} />
-              <p className="mt-1 text-[10px] text-neutral-600 font-mono break-all">{fileStem}.docx / .pdf</p>
+              <p className="mt-1 text-[10px] text-neutral-600 font-mono break-all">{fileStem}.docx</p>
             </div>
             <div>
               <SectionLabel>Status</SectionLabel>
@@ -7017,10 +7077,7 @@
             <Btn variant="primary" size="lg" onClick={onGenerateDocx} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Export .docx</>}
             </Btn>
-            <Btn variant="ghost" size="md" onClick={onGeneratePdf} disabled={busy} className="w-full">
-              <IconDownload /> Export .pdf
-            </Btn>
-            <p className="text-[10px] text-neutral-600 text-center font-mono">Word + PDF outputs</p>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">Word output</p>
           </div>
         </aside>
       );
@@ -7089,6 +7146,16 @@
               <label className={`inline-flex h-7 items-center gap-1 rounded-md border border-neutral-800 px-2 cursor-pointer ${section.underline ? 'bg-neutral-900 text-neutral-100' : ''}`}>
                 <input type="checkbox" checked={!!section.underline} onChange={e => update({ underline: e.target.checked })} className="sr-only" />
                 <span className="underline">U</span>
+              </label>
+              <label className={`inline-flex h-7 items-center gap-1 rounded-md border border-neutral-800 px-2 cursor-pointer ${section.justify ? 'bg-neutral-900 text-neutral-100' : ''} ${section.bullets ? 'opacity-40 pointer-events-none' : ''}`}
+                title="Justify paragraph">
+                <input type="checkbox" checked={!!section.justify} onChange={e => update({ justify: e.target.checked })} className="sr-only" disabled={!!section.bullets} />
+                <span className="font-semibold tracking-tight">≡</span>
+              </label>
+              <label className={`inline-flex h-7 items-center gap-1 rounded-md border border-neutral-800 px-2 cursor-pointer ${section.indent ? 'bg-neutral-900 text-neutral-100' : ''} ${section.bullets ? 'opacity-40 pointer-events-none' : ''}`}
+                title="Indent first line">
+                <input type="checkbox" checked={!!section.indent} onChange={e => update({ indent: e.target.checked })} className="sr-only" disabled={!!section.bullets} />
+                <span className="font-mono text-[11px]">→¶</span>
               </label>
             </div>
           </div>
@@ -7317,10 +7384,10 @@
           width: '100%',
           boxSizing: 'border-box',
         }}>
-          {/* Locked letterhead — values come from RCA_LETTERHEAD, not state */}
+          {/* Letterhead — company text locked, logo overridable via rca.logo */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
-            {RCA_LETTERHEAD.logo && (
-              <img src={RCA_LETTERHEAD.logo} alt="Logo" style={{ height: 78, width: 'auto', objectFit: 'contain', flexShrink: 0 }} />
+            {(rca.logo || RCA_LETTERHEAD.logo) && (
+              <img src={rca.logo || RCA_LETTERHEAD.logo} alt="Logo" style={{ height: 78, width: 'auto', objectFit: 'contain', flexShrink: 0 }} />
             )}
             <div style={{ flex: 1, fontSize: baseSize - 1, lineHeight: 1.35, textAlign: 'right' }}>
               <div style={{ fontWeight: 700, fontSize: baseSize + 1 }}>{RCA_LETTERHEAD.companyName}</div>
@@ -7363,14 +7430,19 @@
               textDecoration: sec.underline ? 'underline' : 'inherit',
             };
             return (
-              <div key={def.key} style={{ marginBottom: 14, breakInside: 'avoid' }}>
-                <h2 style={{ fontSize: baseSize + 1, fontWeight: 700, margin: '14px 0 6px' }}>{sec.title}</h2>
+              <div key={def.key} style={{ marginBottom: 32, breakInside: 'avoid' }}>
+                <h2 style={{ fontSize: baseSize + 1, fontWeight: 700, margin: '32px 0 8px' }}>{sec.title}</h2>
                 {lines.length === 0
                   ? <div style={{ color: '#aaa', fontStyle: 'italic' }}>—</div>
                   : sec.bullets
                     ? <RcaBulletList lines={lines} style={segStyle} bulletStyle={rca.bulletStyle} />
                     : lines.map((ln, i) => (
-                        <p key={i} style={{ margin: '4px 0', ...segStyle }}>{ln}</p>
+                        <p key={i} style={{
+                          margin: '4px 0',
+                          textAlign: sec.justify ? 'justify' : 'left',
+                          textIndent: sec.indent ? '0.5in' : 0,
+                          ...segStyle,
+                        }}>{ln}</p>
                       ))
                 }
               </div>
@@ -7381,7 +7453,12 @@
           {signatories.length > 0 && (
             <div style={{ marginTop: 36, breakInside: 'avoid' }}>
               <div style={{ fontWeight: 700, marginBottom: 12 }}>Signed by:</div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${signatories.length}, 1fr)`, gap: 18 }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: signatories.length === 1 ? '260px' : `repeat(${signatories.length}, 1fr)`,
+                gap: 18,
+                justifyContent: 'start',
+              }}>
                 {signatories.map(s => (
                   <div key={s.id} style={{ textAlign: 'center' }}>
                     <div style={{ minHeight: 56, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 4 }}>
@@ -7432,11 +7509,40 @@
         return { ...s, rca: { ...cur, sections: { ...cur.sections, [key]: sec } } };
       });
 
+      const onLogoUpload = (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => update({ logo: String(reader.result || '') });
+        reader.readAsDataURL(file);
+      };
+      const activeLogo = rca.logo || RCA_LETTERHEAD.logo;
+
       return (
         <div className="space-y-4">
-          {/* Letterhead is locked in RCA_LETTERHEAD — not editable here.
-             Logo, company name, address, contact, website, and the
-             "INCIDENT REPORT" title always render on every generated RCA. */}
+          {/* Company info and the "INCIDENT REPORT" title stay locked in
+             RCA_LETTERHEAD. Logo is overridable here so a clean PNG/JPG can
+             replace the embedded fallback when needed. */}
+
+          <Card className="p-4">
+            <SectionLabel hint="PNG or JPG. Falls back to the embedded CYN logo when empty.">Header logo</SectionLabel>
+            <div className="flex flex-wrap items-center gap-3">
+              {activeLogo
+                ? <img src={activeLogo} alt="logo" className="h-14 max-w-[140px] object-contain rounded bg-white p-1 border border-neutral-800" />
+                : <span className="text-[11px] text-neutral-600">no logo</span>}
+              <label className="inline-flex items-center gap-1 cursor-pointer rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-200 hover:bg-neutral-900 hover:border-neutral-700">
+                <input type="file" accept="image/*" className="sr-only" onChange={onLogoUpload} />
+                Upload
+              </label>
+              {rca.logo && (
+                <button onClick={() => update({ logo: '' })}
+                  className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-400 hover:text-red-400 hover:border-red-500/40">
+                  Reset to default
+                </button>
+              )}
+            </div>
+          </Card>
 
           <Card className="p-4">
             <SectionLabel hint="Incident metadata that shows in the report header">Incident details</SectionLabel>
@@ -8427,20 +8533,6 @@ match /shared/whitelistSmsTestNumbers {
         }
       };
 
-      const onGenerateRcaPdf = async () => {
-        setBusy(true);
-        try {
-          const fn = await generateRcaPdf(state);
-          setToast({ type: 'ok', msg: `Generated ${fn}` });
-        } catch (e) {
-          console.error(e);
-          setToast({ type: 'err', msg: 'PDF failed: ' + (e.message || e) });
-        } finally {
-          setBusy(false);
-          setTimeout(() => setToast(null), 4000);
-        }
-      };
-
       const activeCount = state.sheets.filter(s => s.active).length;
       const days = daysInMonth(state.year, state.month);
       const activeRules = state.rules.filter(r => r.enabled).length;
@@ -8906,12 +8998,12 @@ match /shared/whitelistSmsTestNumbers {
         const signatories = rcaResolveSignatories(state, rca.signatoryIds);
         return (
           <div className="flex min-h-screen text-neutral-100">
-            <RcaSidebar state={state} setState={setState} onGenerateDocx={onGenerate} onGeneratePdf={onGenerateRcaPdf} busy={busy} sync={sync} onRetrySync={retrySync} />
+            <RcaSidebar state={state} setState={setState} onGenerateDocx={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
-                <div className="app-title-block min-w-0">
+                <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
-                  <h2 className="truncate text-[22px] font-bold tracking-tight">RCA · {rca.customerCid || 'New Incident Report'}</h2>
+                  <h2 className="text-[22px] font-bold tracking-tight">RCA · {rca.customerCid || 'New Incident Report'}</h2>
                 </div>
                 <div className="app-pill-row hidden xl:flex items-center gap-2">
                   <Pill>{enabledSections} sections</Pill>
