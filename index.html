@@ -7571,11 +7571,56 @@
       };
       const activeLogo = rca.logo || RCA_LETTERHEAD.logo;
 
+      // Wipe the per-report fields (incident metadata + all section bodies +
+      // file name) while keeping logo, company info, signatories, saved
+      // templates, and document styling intact. Section titles and the
+      // show/bullet/bold flags stay too — only the typed content is cleared.
+      const clearReport = async () => {
+        const ok = await confirmDialog({
+          title: 'Clear report?',
+          message: 'This clears the incident details and the body of every section (Summary, Details, Resolved, Findings, Action Taken, Action Plan). Your company info, logo, signatories, saved templates, and document styling are kept.',
+          confirmText: 'Clear report',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setState(s => {
+          const cur = rcaNormalizeState(s.rca);
+          const clearedSections = {};
+          Object.keys(cur.sections).forEach((key) => {
+            clearedSections[key] = { ...cur.sections[key], content: '' };
+          });
+          return {
+            ...s,
+            rca: {
+              ...cur,
+              fileName: '',
+              date: rcaTodayIso(),
+              customerCid: '',
+              incidentStart: '',
+              incidentEnd: '',
+              reportedBy: '',
+              sections: clearedSections,
+            },
+          };
+        });
+      };
+
       return (
         <div className="space-y-4">
           {/* Company info and the "INCIDENT REPORT" title stay locked in
              RCA_LETTERHEAD. Logo is overridable here so a clean PNG/JPG can
              replace the embedded fallback when needed. */}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-900 bg-neutral-950/40 px-3 py-2">
+            <div className="text-[11px] text-neutral-500">
+              Start a new incident — clears report fields only, keeps your saved setup.
+            </div>
+            <button onClick={clearReport}
+              title="Clear incident details and all section bodies"
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-300 hover:text-red-300 hover:border-red-500/40">
+              Clear report
+            </button>
+          </div>
 
           <Card className="p-4">
             <SectionLabel hint="PNG or JPG. Falls back to the embedded CYN logo when empty.">Header logo</SectionLabel>
