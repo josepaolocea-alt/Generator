@@ -7611,16 +7611,16 @@
              RCA_LETTERHEAD. Logo is overridable here so a clean PNG/JPG can
              replace the embedded fallback when needed. */}
 
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-900 bg-neutral-950/40 px-3 py-2">
+          <Card className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
             <div className="text-[11px] text-neutral-500">
               Start a new incident — clears report fields only, keeps your saved setup.
             </div>
             <button onClick={clearReport}
               title="Clear incident details and all section bodies"
-              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-transparent px-2.5 py-1 text-xs text-neutral-300 hover:text-red-300 hover:border-red-500/40">
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2.5 py-1 text-xs text-neutral-300 hover:text-red-300 hover:border-red-500/40">
               Clear report
             </button>
-          </div>
+          </Card>
 
           <Card className="p-4">
             <SectionLabel hint="PNG or JPG. Falls back to the embedded CYN logo when empty.">Header logo</SectionLabel>
