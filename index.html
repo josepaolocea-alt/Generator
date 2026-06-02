@@ -2162,8 +2162,91 @@
       selectedNumberIds: ['tn_smart_1', 'tn_globe_1'],
       sheetName: 'Sheet1',
       separatorMode: 'auto',
+      linkBuilderRaw: '',
       notes: '',
     };
+
+    const WL_SMS_LINK_BUILDER_SAMPLE = `Your account ({{phone-10}}) received 200PHP reward, send out within 24 hours. Tap link:
+
+https://bit.ly/4dVLLXR
+https://bit.ly/4fqbmed
+https://bit.ly/434ofmN
+https://bit.ly/4dSm7mV
+https://bit.ly/4fl8bUV
+https://bit.ly/4voKT5n
+https://bit.ly/4dWCWxg
+https://bit.ly/43bhG1L
+https://bit.ly/434WOJx
+https://bit.ly/4vou9Lv
+https://bit.ly/4ahjc6b
+https://bit.ly/4fgsOSc
+https://bit.ly/4vrcu64`;
+
+    function wlSmsCleanUrl(value) {
+      return String(value || '').trim().replace(/[)\],.;]+$/g, '');
+    }
+
+    function wlSmsExtractUrls(text) {
+      return (String(text || '').match(/https?:\/\/[^\s<>"']+/gi) || [])
+        .map(wlSmsCleanUrl)
+        .filter(Boolean);
+    }
+
+    function wlSmsLinkTemplate(text) {
+      return String(text || '')
+        .replace(/https?:\/\/[^\s<>"']+/gi, ' ')
+        .split(/\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function wlSmsBuildLinkMessages(text) {
+      const urls = wlSmsExtractUrls(text);
+      const template = wlSmsLinkTemplate(text);
+      const messages = urls.map(url => {
+        if (!template) return url;
+        if (/\{\{\s*(link|url)\s*\}\}/i.test(template)) {
+          return template.replace(/\{\{\s*(link|url)\s*\}\}/gi, url).trim();
+        }
+        return `${template}${/\s$/.test(template) ? '' : ' '}${url}`.trim();
+      });
+      return {
+        urls,
+        template,
+        messages,
+        output: messages.join('\n\n'),
+      };
+    }
+
+    async function copyTextToClipboard(text) {
+      if (!text) return false;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (e) {
+        console.warn('clipboard api failed', e);
+      }
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.left = '-9999px';
+      document.body.appendChild(area);
+      area.select();
+      try {
+        return document.execCommand('copy');
+      } catch (e) {
+        console.warn('clipboard fallback failed', e);
+        return false;
+      } finally {
+        document.body.removeChild(area);
+      }
+    }
 
     function stripWlSmsLeadingNumber(block) {
       return block.replace(/^\s*\d+[.\)]\s+/, '');
@@ -2228,6 +2311,7 @@
         rawPaste: String(merged.rawPaste || ''),
         senderId: String(merged.senderId || ''),
         sheetName: String(merged.sheetName || 'Sheet1'),
+        linkBuilderRaw: String(merged.linkBuilderRaw || ''),
         notes: String(merged.notes || ''),
         separatorMode: merged.separatorMode === 'lines' ? 'lines' : 'auto',
         contents,
@@ -6186,9 +6270,70 @@
       );
     }
 
+    function WlSmsLinkBuilder({ wl, onChange }) {
+      const raw = wl.linkBuilderRaw || '';
+      const built = wlSmsBuildLinkMessages(raw);
+      const [copyStatus, setCopyStatus] = useState('');
+      const setRaw = (value) => onChange({ ...wl, linkBuilderRaw: value });
+      const copyOutput = async () => {
+        if (!built.output) return;
+        const ok = await copyTextToClipboard(built.output);
+        setCopyStatus(ok ? 'Copied' : 'Copy failed');
+        setTimeout(() => setCopyStatus(''), 1600);
+      };
+      const useAsContents = () => {
+        if (!built.messages.length) return;
+        onChange({
+          ...wl,
+          linkBuilderRaw: raw,
+          rawPaste: built.output,
+          contents: built.messages,
+          separatorMode: 'auto',
+        });
+      };
+      return (
+        <Card className="p-4">
+          <SectionLabel hint={`${built.urls.length} link${built.urls.length === 1 ? '' : 's'} detected`}>Link message builder</SectionLabel>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Paste template + links</label>
+              <Textarea rows={10} value={raw}
+                onChange={e => setRaw(e.target.value)}
+                placeholder={`Paste one message template followed by the links.\n\nTip: use {{link}} or {{url}} inside the template if the link should appear in the middle.`} />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Btn variant="ghost" size="md" onClick={() => setRaw(WL_SMS_LINK_BUILDER_SAMPLE)}>Load sample</Btn>
+                <Btn variant="ghost" size="md" onClick={() => setRaw('')} disabled={!raw}>Clear</Btn>
+                {raw && !built.urls.length && <span className="text-[11px] text-amber-400">No links detected yet.</span>}
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Generated messages</label>
+              <Textarea rows={10} readOnly value={built.output}
+                className="font-mono text-xs"
+                placeholder="Each detected link will become one complete SMS message here." />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Btn variant="accent" size="md" onClick={useAsContents} disabled={!built.messages.length}>Use as contents</Btn>
+                <Btn variant="ghost" size="md" onClick={copyOutput} disabled={!built.output}>Copy output</Btn>
+                <span className="text-[11px] text-neutral-500">{copyStatus || `${built.messages.length} message${built.messages.length === 1 ? '' : 's'}`}</span>
+              </div>
+              {built.template && (
+                <div className="mt-3 rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Template detected</div>
+                  <div className="text-[12px] text-neutral-300 break-words">{built.template}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
     function WlSmsContentPanel({ wl, onChange }) {
       const [pasteText, setPasteText] = useState(wl.rawPaste || '');
       const mode = wl.separatorMode === 'lines' ? 'lines' : 'auto';
+      useEffect(() => {
+        setPasteText(wl.rawPaste || '');
+      }, [wl.rawPaste]);
       const loadText = (text, useMode = mode) => {
         const blocks = parseWlSmsBlasts(text, useMode);
         onChange({ ...wl, rawPaste: text, contents: blocks, separatorMode: useMode });
@@ -6221,6 +6366,8 @@
         : 'Splits on ———— / === lines, or blank lines if no dashes';
       return (
         <div className="space-y-4">
+          <WlSmsLinkBuilder wl={wl} onChange={onChange} />
+
           <Card className="p-4">
             <SectionLabel hint={modeHint}>Paste content</SectionLabel>
             <div className="mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5 w-fit">
