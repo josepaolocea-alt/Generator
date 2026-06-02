@@ -6330,6 +6330,7 @@ https://bit.ly/4vrcu64`;
 
     function WlSmsContentPanel({ wl, onChange }) {
       const [pasteText, setPasteText] = useState(wl.rawPaste || '');
+      const [copiedIndex, setCopiedIndex] = useState(null);
       const mode = wl.separatorMode === 'lines' ? 'lines' : 'auto';
       useEffect(() => {
         setPasteText(wl.rawPaste || '');
@@ -6358,6 +6359,13 @@ https://bit.ly/4vrcu64`;
       const deleteBlock = (index) => {
         const next = (wl.contents || []).filter((_, i) => i !== index);
         onChange({ ...wl, contents: next });
+      };
+      const copyBlock = async (block, index) => {
+        if (!String(block || '').trim()) return;
+        const ok = await copyTextToClipboard(block);
+        if (!ok) return;
+        setCopiedIndex(index);
+        setTimeout(() => setCopiedIndex(null), 1400);
       };
       const addBlock = () => onChange({ ...wl, contents: [...(wl.contents || []), ''] });
       const clearAll = () => { setPasteText(''); onChange({ ...wl, rawPaste: '', contents: [] }); };
@@ -6403,7 +6411,14 @@ https://bit.ly/4vrcu64`;
                 <div key={i} className="rounded-md border border-neutral-900 bg-neutral-950 p-2">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] uppercase tracking-wide text-neutral-500">Content {i + 1}</span>
-                    <button onClick={() => deleteBlock(i)} className="text-[10px] text-neutral-500 hover:text-red-300">Remove</button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => copyBlock(block, i)}
+                        className="text-[10px] text-neutral-500 hover:text-blue-300 disabled:opacity-40"
+                        disabled={!String(block || '').trim()}>
+                        {copiedIndex === i ? 'Copied' : 'Copy'}
+                      </button>
+                      <button onClick={() => deleteBlock(i)} className="text-[10px] text-neutral-500 hover:text-red-300">Remove</button>
+                    </div>
                   </div>
                   <Textarea rows={3} value={block} onChange={e => updateBlock(i, e.target.value)} />
                 </div>
