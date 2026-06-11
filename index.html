@@ -1459,6 +1459,15 @@
                 style, priority,
               }],
             });
+          } else if (r.type === 'maxInCol') {
+            ws.addConditionalFormatting({
+              ref: dataRange,
+              rules: [{
+                type: 'expression',
+                formulae: [`AND(ISNUMBER(${firstCol}${dataStartRow}),${firstCol}${dataStartRow}=MAX(${firstCol}$${dataStartRow}:${firstCol}$${dataEndRow}))`],
+                style, priority,
+              }],
+            });
           } else if (r.type === 'above') {
             const t = Number(r.threshold) || 0;
             ws.addConditionalFormatting({
@@ -3892,6 +3901,7 @@ https://bit.ly/4vrcu64`;
        ============================================================ */
     const RULE_TYPES = [
       { value: 'maxInRow',   label: 'Highlight max value in row',   desc: 'Per-row maximum across hour columns (Hourly Block only)' },
+      { value: 'maxInCol',   label: 'Highlight max value in column', desc: 'Per-column maximum down each hour column (Hourly Block only)' },
       { value: 'above',      label: 'Highlight above threshold',    needsThreshold: true },
       { value: 'below',      label: 'Highlight below threshold',    needsThreshold: true },
       { value: 'blank',      label: 'Highlight blank cells',        desc: 'Flag missing data' },
@@ -3950,7 +3960,7 @@ https://bit.ly/4vrcu64`;
               <Btn variant="ghost" size="md" onClick={() => add()}><IconPlus /> Add rule</Btn>
             </div>
             <p className="w-full text-[11px] text-neutral-500">
-              Rules can be global, layout-wide, row-separator-specific, or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.
+              Rules can be global, layout-wide, row-separator-specific, or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, max-in-column, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.
             </p>
           </div>
           {rules.length === 0 && (
