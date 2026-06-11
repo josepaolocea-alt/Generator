@@ -666,6 +666,47 @@
       hide: 'hidden',
     };
 
+    const BMR_RULE_IMPORT_HEADER_KEYS = {
+      rulename: 'name',
+      rule: 'name',
+      name: 'name',
+      clientname: 'clientName',
+      client: 'clientName',
+      carriername: 'clientName',
+      carrier: 'clientName',
+      condition: 'kind',
+      operator: 'kind',
+      kind: 'kind',
+      comparison: 'kind',
+      value: 'value',
+      min: 'min',
+      minimum: 'min',
+      max: 'max',
+      maximum: 'max',
+      fill: 'color',
+      fillcolor: 'color',
+      background: 'color',
+      backgroundcolor: 'color',
+      color: 'color',
+      font: 'fontColor',
+      fontcolor: 'fontColor',
+      textcolor: 'fontColor',
+      bold: 'bold',
+      italic: 'italic',
+      underline: 'underline',
+      enabled: 'enabled',
+      active: 'enabled',
+    };
+
+    const BMR_RULE_KIND_LABELS = {
+      gte: 'greater than or equal to',
+      gt: 'greater than',
+      lte: 'less than or equal to',
+      lt: 'less than',
+      eq: 'equal to',
+      between: 'between',
+    };
+
     function bmrImportKey(value) {
       return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
     }
@@ -684,6 +725,63 @@
       return undefined;
     }
 
+    function bmrImportBoolean(value) {
+      const raw = bmrImportKey(value);
+      if (['1', 'true', 'yes', 'y', 'enabled', 'active', 'on', 'bold', 'italic', 'underline'].includes(raw)) return true;
+      if (['0', 'false', 'no', 'n', 'disabled', 'inactive', 'off', 'none'].includes(raw)) return false;
+      return undefined;
+    }
+
+    function bmrImportNumber(value) {
+      const raw = String(value ?? '').replace(/\u00a0/g, ' ').trim().replace(/,/g, '');
+      if (!raw) return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    }
+
+    function bmrImportRuleKind(value) {
+      const raw = bmrImportKey(value);
+      const map = {
+        gte: 'gte',
+        ge: 'gte',
+        greaterthanorequalto: 'gte',
+        greaterthanorequals: 'gte',
+        greaterorequal: 'gte',
+        greaterorequalto: 'gte',
+        atleastequal: 'gte',
+        atleast: 'gte',
+        gt: 'gt',
+        greaterthan: 'gt',
+        greater: 'gt',
+        lte: 'lte',
+        le: 'lte',
+        lessthanorequalto: 'lte',
+        lessthanorequals: 'lte',
+        lessorequal: 'lte',
+        lessorequalto: 'lte',
+        atmost: 'lte',
+        lt: 'lt',
+        lessthan: 'lt',
+        less: 'lt',
+        eq: 'eq',
+        equal: 'eq',
+        equalto: 'eq',
+        equals: 'eq',
+        between: 'between',
+      };
+      const symbol = String(value || '').trim();
+      if (symbol === '>=' || symbol === '≥') return 'gte';
+      if (symbol === '>') return 'gt';
+      if (symbol === '<=' || symbol === '≤') return 'lte';
+      if (symbol === '<') return 'lt';
+      if (symbol === '=') return 'eq';
+      return map[raw] || '';
+    }
+
+    function bmrRuleKindLabel(kind) {
+      return BMR_RULE_KIND_LABELS[kind] || kind || '';
+    }
+
     function detectBmrClientHeader(ws) {
       const rowCount = Math.min(ws.rowCount || 10, 10);
       const colCount = Math.min(Math.max(ws.columnCount || 12, 12), 80);
@@ -698,12 +796,85 @@
       return null;
     }
 
-    async function parseBmrClientsXlsx(file) {
+    function detectBmrRuleHeader(ws, requireClient = false) {
+      const rowCount = Math.min(ws.rowCount || 10, 10);
+      const colCount = Math.min(Math.max(ws.columnCount || 12, 12), 80);
+      for (let r = 1; r <= rowCount; r++) {
+        const cols = {};
+        for (let c = 1; c <= colCount; c++) {
+          const field = BMR_RULE_IMPORT_HEADER_KEYS[bmrImportKey(cellText(ws.getRow(r).getCell(c)))];
+          if (field && !cols[field]) cols[field] = c;
+        }
+        if (cols.kind && (!requireClient || cols.clientName)) return { row: r, cols };
+      }
+      return null;
+    }
+
+    function parseBmrRuleRows(ws, header, type) {
+      const rows = [];
+      const lastRow = Math.min(ws.rowCount || header.row, header.row + 5000);
+      for (let r = header.row + 1; r <= lastRow; r++) {
+        const read = (field) => header.cols[field] ? cellText(ws.getRow(r).getCell(header.cols[field])) : undefined;
+        const name = read('name');
+        const kind = header.cols.kind ? bmrImportRuleKind(read('kind')) : '';
+        const clientName = read('clientName');
+        const hasAny = ['name','clientName','kind','value','min','max','color','fontColor','bold','italic','underline','enabled']
+          .some(field => header.cols[field] && String(read(field) ?? '').trim());
+        if (!hasAny) continue;
+        if (!kind) continue;
+        if (type === 'target' && !String(clientName || '').trim()) continue;
+        const imported = { type, kind };
+        if (String(name || '').trim()) imported.name = String(name).trim();
+        if (type === 'target') imported.clientName = String(clientName || '').trim();
+        if (header.cols.value) {
+          const value = bmrImportNumber(read('value'));
+          if (value !== undefined) imported.value = value;
+        }
+        if (header.cols.min) {
+          const min = bmrImportNumber(read('min'));
+          if (min !== undefined) imported.min = min;
+        }
+        if (header.cols.max) {
+          const max = bmrImportNumber(read('max'));
+          if (max !== undefined) imported.max = max;
+        }
+        if (header.cols.color) {
+          const color = bmrImportColor(read('color'));
+          if (color) imported.color = color;
+        }
+        if (header.cols.fontColor) {
+          const fontColor = bmrImportColor(read('fontColor'));
+          if (fontColor) imported.fontColor = fontColor;
+        }
+        ['bold', 'italic', 'underline', 'enabled'].forEach((field) => {
+          if (!header.cols[field]) return;
+          const value = bmrImportBoolean(read(field));
+          if (value !== undefined) imported[field] = value;
+        });
+        rows.push(imported);
+      }
+      return rows;
+    }
+
+    async function parseBmrImportXlsx(file) {
       const buf = await file.arrayBuffer();
       const wb = new ExcelJS.Workbook();
       await wb.xlsx.load(buf);
       const rows = [];
+      const targetRules = [];
+      const usageRules = [];
       wb.eachSheet((ws) => {
+        const targetHeader = detectBmrRuleHeader(ws, true);
+        if (targetHeader) {
+          targetRules.push(...parseBmrRuleRows(ws, targetHeader, 'target'));
+          return;
+        }
+        const sheetKey = bmrImportKey(ws.name);
+        const usageHeader = detectBmrRuleHeader(ws, false);
+        if (usageHeader && (sheetKey.includes('usage') || sheetKey.includes('30min') || !usageHeader.cols.clientName)) {
+          usageRules.push(...parseBmrRuleRows(ws, usageHeader, 'usage'));
+          return;
+        }
         const header = detectBmrClientHeader(ws);
         if (!header) return;
         const lastRow = Math.min(ws.rowCount || header.row, header.row + 5000);
@@ -729,7 +900,12 @@
           rows.push(imported);
         }
       });
-      return rows;
+      return { clients: rows, targetRules, usageRules };
+    }
+
+    async function parseBmrClientsXlsx(file) {
+      const parsed = await parseBmrImportXlsx(file);
+      return parsed.clients;
     }
 
     function mergeBmrImportedClients(bmr, importedRows) {
@@ -798,6 +974,111 @@
       };
     }
 
+    function bmrImportedRulePatch(row) {
+      const patch = {};
+      if (row.kind) patch.kind = row.kind;
+      ['value', 'min', 'max'].forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(row, field)) patch[field] = row[field];
+      });
+      ['color', 'fontColor'].forEach((field) => {
+        if (row[field]) patch[field] = row[field];
+      });
+      ['bold', 'italic', 'underline', 'enabled'].forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(row, field)) patch[field] = row[field];
+      });
+      return patch;
+    }
+
+    function mergeBmrImportedRules(bmr, importedTargetRules = [], importedUsageRules = []) {
+      const normalizeName = (value) => String(value || '').trim().toLowerCase();
+      const clients = bmr.clients || [];
+      const clientByName = new Map(clients.map(client => [normalizeName(client.name), client]));
+      const clientNameById = new Map(clients.map(client => [client.id, client.name || '']));
+      const targetRules = [...(bmr.targetRules || [])];
+      const usageRules = [...(bmr.usageRules || [])];
+      const targetKey = (clientName) => normalizeName(clientName);
+      const usageKey = (name) => normalizeName(name);
+      const targetIndex = new Map();
+      targetRules.forEach((rule, index) => {
+        const key = targetKey(clientNameById.get(rule.clientId) || '');
+        if (key && !targetIndex.has(key)) targetIndex.set(key, index);
+      });
+      const usageIndex = new Map(usageRules.map((rule, index) => [usageKey(rule.name), index]));
+      const stats = { targetAdded: 0, targetUpdated: 0, targetSkipped: 0, usageAdded: 0, usageUpdated: 0 };
+
+      importedTargetRules.forEach((row, index) => {
+        const client = clientByName.get(normalizeName(row.clientName));
+        if (!client) {
+          stats.targetSkipped += 1;
+          return;
+        }
+        const importedName = row.name || '';
+        const name = importedName || `Client rule ${index + 1}`;
+        const patch = bmrImportedRulePatch(row);
+        const key = targetKey(client.name);
+        if (targetIndex.has(key)) {
+          const existingIndex = targetIndex.get(key);
+          targetRules[existingIndex] = {
+            ...targetRules[existingIndex],
+            ...patch,
+            ...(importedName ? { name: importedName } : {}),
+            clientId: client.id,
+          };
+          stats.targetUpdated += 1;
+        } else {
+          targetRules.push({
+            id: bmrId('tr'),
+            name,
+            clientId: client.id,
+            kind: 'gte',
+            value: 5,
+            color: '#EF4444',
+            fontColor: '#FFFFFF',
+            bold: false,
+            italic: false,
+            underline: false,
+            enabled: true,
+            ...patch,
+          });
+          targetIndex.set(key, targetRules.length - 1);
+          stats.targetAdded += 1;
+        }
+      });
+
+      importedUsageRules.forEach((row, index) => {
+        const name = row.name || `Usage rule ${index + 1}`;
+        const patch = bmrImportedRulePatch(row);
+        const key = usageKey(name);
+        if (usageIndex.has(key)) {
+          const existingIndex = usageIndex.get(key);
+          usageRules[existingIndex] = { ...usageRules[existingIndex], ...patch, name };
+          stats.usageUpdated += 1;
+        } else {
+          usageRules.push({
+            id: bmrId('ur'),
+            name,
+            kind: 'between',
+            min: -49,
+            max: -0.001,
+            color: '#F59E0B',
+            fontColor: '#1F2937',
+            bold: false,
+            italic: false,
+            underline: false,
+            enabled: true,
+            ...patch,
+          });
+          usageIndex.set(key, usageRules.length - 1);
+          stats.usageAdded += 1;
+        }
+      });
+
+      return {
+        bmr: { ...bmr, targetRules, usageRules },
+        stats,
+      };
+    }
+
     const BMR_CLIENT_IMPORT_COLUMNS = [
       { header: 'Client Name', key: 'name', width: 24 },
       { header: 'Allow Bal label', key: 'allowBalanceLabel', width: 32 },
@@ -807,17 +1088,52 @@
       { header: 'Hidden', key: 'hidden', width: 12 },
     ];
 
-    async function downloadBmrClientImportWorkbook(sheetName, rows, filename) {
+    const BMR_TARGET_RULE_IMPORT_COLUMNS = [
+      { header: 'Rule Name', key: 'name', width: 30 },
+      { header: 'Client Name', key: 'clientName', width: 28 },
+      { header: 'Condition', key: 'kind', width: 26 },
+      { header: 'Value', key: 'value', width: 14 },
+      { header: 'Min', key: 'min', width: 14 },
+      { header: 'Max', key: 'max', width: 14 },
+      { header: 'Fill color', key: 'color', width: 16 },
+      { header: 'Font color', key: 'fontColor', width: 16 },
+      { header: 'Bold', key: 'bold', width: 10 },
+      { header: 'Italic', key: 'italic', width: 10 },
+      { header: 'Underline', key: 'underline', width: 12 },
+      { header: 'Enabled', key: 'enabled', width: 12 },
+    ];
+
+    const BMR_USAGE_RULE_IMPORT_COLUMNS = BMR_TARGET_RULE_IMPORT_COLUMNS.filter(col => col.key !== 'clientName');
+
+    function styleBmrImportSheet(ws) {
+      ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+      ws.getRow(1).alignment = { vertical: 'middle' };
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
+    }
+
+    async function downloadBmrClientImportWorkbook(sheetName, rows, filename, options = {}) {
       const wb = new ExcelJS.Workbook();
       wb.creator = 'BMR Generator';
       wb.created = new Date();
       const ws = wb.addWorksheet(sheetName);
       ws.columns = BMR_CLIENT_IMPORT_COLUMNS;
       ws.addRows(rows);
-      ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
-      ws.getRow(1).alignment = { vertical: 'middle' };
-      ws.views = [{ state: 'frozen', ySplit: 1 }];
+      styleBmrImportSheet(ws);
+      const targetRules = options.targetRules || [];
+      const usageRules = options.usageRules || [];
+      if (targetRules.length || options.includeRuleSheets) {
+        const targetWs = wb.addWorksheet('Target Rules');
+        targetWs.columns = BMR_TARGET_RULE_IMPORT_COLUMNS;
+        targetWs.addRows(targetRules);
+        styleBmrImportSheet(targetWs);
+      }
+      if (usageRules.length || options.includeRuleSheets) {
+        const usageWs = wb.addWorksheet('30-min Usage Rules');
+        usageWs.columns = BMR_USAGE_RULE_IMPORT_COLUMNS;
+        usageWs.addRows(usageRules);
+        styleBmrImportSheet(usageWs);
+      }
       const buf = await wb.xlsx.writeBuffer();
       saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);
     }
@@ -826,11 +1142,20 @@
       await downloadBmrClientImportWorkbook('Client Import Sample', [
         { name: 'SAMPLE CLIENT A', allowBalanceLabel: 'Block once debit', accountManagerName: 'Jason Cruz', color: '', accountManagerColor: '#60A5FA', hidden: 'No' },
         { name: 'SAMPLE CLIENT B', allowBalanceLabel: '$5 debit poc', accountManagerName: 'Jason Cruz', color: '#FACC15', accountManagerColor: '#60A5FA', hidden: 'No' },
-      ], 'BMR_Client_Import_Sample.xlsx');
+      ], 'BMR_Client_Import_Sample.xlsx', {
+        includeRuleSheets: true,
+        targetRules: [
+          { name: 'Reached allowable balance', clientName: 'SAMPLE CLIENT B', kind: 'greater than or equal to', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: 'Yes', italic: 'No', underline: 'No', enabled: 'Yes' },
+        ],
+        usageRules: [
+          { name: 'Light usage (-49 to -0.001)', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: 'Yes', italic: 'No', underline: 'No', enabled: 'Yes' },
+        ],
+      });
     }
 
     async function downloadBmrClientData(bmr) {
       const accountManagersById = bmrAccountManagersById(bmr);
+      const clientsById = new Map((bmr.clients || []).map(client => [client.id, client]));
       const rows = (bmr.clients || []).map((client) => {
         const manager = accountManagersById.get(client.accountManagerId);
         return {
@@ -842,7 +1167,38 @@
           hidden: client.hidden ? 'Yes' : 'No',
         };
       });
-      await downloadBmrClientImportWorkbook('Current Client Data', rows, `BMR_Client_Data_${bmrTodayString()}.xlsx`);
+      const targetRules = (bmr.targetRules || []).map(rule => ({
+        name: rule.name || '',
+        clientName: clientsById.get(rule.clientId)?.name || '',
+        kind: bmrRuleKindLabel(rule.kind),
+        value: rule.kind === 'between' ? '' : rule.value,
+        min: rule.kind === 'between' ? rule.min : '',
+        max: rule.kind === 'between' ? rule.max : '',
+        color: rule.color || '',
+        fontColor: rule.fontColor || '',
+        bold: rule.bold ? 'Yes' : 'No',
+        italic: rule.italic ? 'Yes' : 'No',
+        underline: rule.underline ? 'Yes' : 'No',
+        enabled: rule.enabled !== false ? 'Yes' : 'No',
+      }));
+      const usageRules = (bmr.usageRules || []).map(rule => ({
+        name: rule.name || '',
+        kind: bmrRuleKindLabel(rule.kind),
+        value: rule.kind === 'between' ? '' : rule.value,
+        min: rule.kind === 'between' ? rule.min : '',
+        max: rule.kind === 'between' ? rule.max : '',
+        color: rule.color || '',
+        fontColor: rule.fontColor || '',
+        bold: rule.bold ? 'Yes' : 'No',
+        italic: rule.italic ? 'Yes' : 'No',
+        underline: rule.underline ? 'Yes' : 'No',
+        enabled: rule.enabled !== false ? 'Yes' : 'No',
+      }));
+      await downloadBmrClientImportWorkbook('Current Client Data', rows, `BMR_Client_Data_${bmrTodayString()}.xlsx`, {
+        includeRuleSheets: true,
+        targetRules,
+        usageRules,
+      });
     }
 
     /* ============================================================
@@ -4445,23 +4801,33 @@ https://bit.ly/4vrcu64`;
         setBusy(true);
         setNotice('');
         try {
-          const rows = await parseBmrClientsXlsx(file);
-          if (!rows.length) {
+          const parsed = await parseBmrImportXlsx(file);
+          if (!parsed.clients.length && !parsed.targetRules.length && !parsed.usageRules.length) {
             await alertDialog({
-              title: 'No client rows found',
-              message: 'Upload an .xlsx sheet with a Client Name or CarrierName header.',
+              title: 'No import rows found',
+              message: 'Upload an .xlsx workbook with a Client Name / CarrierName sheet, Target Rules sheet, or 30-min Usage Rules sheet.',
               confirmText: 'OK',
             });
             return;
           }
-          const merged = mergeBmrImportedClients(bmr, rows);
-          onChange(merged.bmr);
-          setNotice(`${merged.stats.added} added, ${merged.stats.updated} updated`);
+          const mergedClients = mergeBmrImportedClients(bmr, parsed.clients);
+          const mergedRules = mergeBmrImportedRules(mergedClients.bmr, parsed.targetRules, parsed.usageRules);
+          onChange(mergedRules.bmr);
+          const parts = [
+            `${mergedClients.stats.added} clients added`,
+            `${mergedClients.stats.updated} clients updated`,
+            `${mergedRules.stats.targetAdded} target rules added`,
+            `${mergedRules.stats.targetUpdated} target rules updated`,
+            `${mergedRules.stats.usageAdded} usage rules added`,
+            `${mergedRules.stats.usageUpdated} usage rules updated`,
+          ];
+          if (mergedRules.stats.targetSkipped) parts.push(`${mergedRules.stats.targetSkipped} target rules skipped (missing client)`);
+          setNotice(parts.join(' · '));
         } catch (err) {
           console.warn('BMR client import failed', err);
           await alertDialog({
-            title: "Couldn't import clients",
-            message: "That file couldn't be read as a client-information .xlsx workbook.",
+            title: "Couldn't import BMR data",
+            message: "That file couldn't be read as a BMR client/rules .xlsx workbook.",
             confirmText: 'OK',
             tone: 'danger',
           });
@@ -4507,10 +4873,10 @@ https://bit.ly/4vrcu64`;
           <SectionLabel hint=".xlsx">Client information</SectionLabel>
           <div className="flex items-center gap-2 flex-wrap">
             <label
-              title="Required header: Client Name or CarrierName. Optional: Allow Bal label, Account Manager, Client color, Account Manager color, Hidden."
+              title="Client sheet: Client Name or CarrierName. Rule sheets: Target Rules and 30-min Usage Rules."
               className={`inline-flex items-center justify-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-sm font-medium text-neutral-300 transition-colors ${busy ? 'opacity-40 cursor-wait' : 'cursor-pointer hover:border-neutral-700 hover:bg-neutral-900 hover:text-neutral-100'}`}>
               {busy ? <span className="loader"></span> : <IconUpload />}
-              {busy ? 'Importing' : 'Import clients'}
+              {busy ? 'Importing' : 'Import clients/rules'}
               <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={importClients} disabled={busy} className="hidden" />
             </label>
@@ -7922,6 +8288,8 @@ https://bit.ly/4vrcu64`;
       theme: 'dark',
       imported: [],
       module: 'sip_fcs',
+      stateOwnerUid: '',
+      stateOwnerEmail: '',
       bmr: DEFAULT_BMR_STATE,
       bmrTab: 'clients',
       bmrSms: DEFAULT_BMR_SMS_STATE,
@@ -7952,6 +8320,18 @@ https://bit.ly/4vrcu64`;
 
     function stateEditedAt(data) {
       return Math.max(timestampMs(data?.localUpdatedAt), timestampMs(data?.updatedAt));
+    }
+
+    function stateOwnerUid(data) {
+      return String(data?.stateOwnerUid || '').trim();
+    }
+
+    function withStateOwner(data, user) {
+      return normalizeAppState({
+        ...(data || {}),
+        stateOwnerUid: user?.uid || '',
+        stateOwnerEmail: user?.email || '',
+      });
     }
 
     // Firestore does not allow arrays directly inside arrays. Wrap any nested
@@ -8038,7 +8418,20 @@ https://bit.ly/4vrcu64`;
       const sheets = migrateLegacyLabels
         ? migrateSheets(merged.sheets)
         : (Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS);
-      return { ...merged, schemaVersion: APP_STATE_SCHEMA_VERSION, sheets, bmr, bmrSms, editor, whitelistSms, rca, rcaSignatories, rcaCompany };
+      return {
+        ...merged,
+        schemaVersion: APP_STATE_SCHEMA_VERSION,
+        sheets,
+        stateOwnerUid: String(merged.stateOwnerUid || ''),
+        stateOwnerEmail: String(merged.stateOwnerEmail || ''),
+        bmr,
+        bmrSms,
+        editor,
+        whitelistSms,
+        rca,
+        rcaSignatories,
+        rcaCompany,
+      };
     }
 
     // Role-based access. Admin sees everything; semi-admin only gets the two
@@ -8496,15 +8889,30 @@ match /shared/whitelistSmsTestNumbers {
           ]);
           if (isStale()) return false;
           if (snap.exists()) {
-            const remote = normalizeAppState(mergeLocalSheetActiveFlags(firestoreDesanitize(snap.data())), { migrateLegacyLabels: true });
+            const remote = withStateOwner(
+              normalizeAppState(mergeLocalSheetActiveFlags(firestoreDesanitize(snap.data())), { migrateLegacyLabels: true }),
+              user
+            );
             if (remote && Array.isArray(remote.sheets)) {
               setStateRaw(local => {
                 const current = normalizeAppState(local);
-                const keepLocal = stateEditedAt(current) > stateEditedAt(remote);
+                const ownerUid = stateOwnerUid(current);
+                const keepLocal = ownerUid === user.uid && stateEditedAt(current) > stateEditedAt(remote);
                 if (keepLocal) userEditRef.current = true;
-                return { ...(keepLocal ? current : remote), tab: current.tab };
+                else userEditRef.current = false;
+                return withStateOwner({ ...(keepLocal ? current : remote), tab: current.tab }, user);
               });
             }
+          } else {
+            setStateRaw(local => {
+              const current = normalizeAppState(local);
+              const ownerUid = stateOwnerUid(current);
+              const next = ownerUid && ownerUid !== user.uid
+                ? { ...DEFAULT_STATE, theme: current.theme || DEFAULT_STATE.theme, tab: current.tab || DEFAULT_STATE.tab }
+                : current;
+              userEditRef.current = true;
+              return withStateOwner({ ...next, localUpdatedAt: Date.now() }, user);
+            });
           }
           hydratedRef.current = true;
           setSync({ status: 'synced', uid: user.uid, email: user.email, role, message: null });
@@ -8750,7 +9158,14 @@ match /shared/whitelistSmsTestNumbers {
       useEffect(() => {
         if (!window.__fb || !window.__fbm || !hydratedRef.current || !sync.uid) return;
         if (!userEditRef.current) return;
-        const { tab, ...persist } = state;
+        const ownerUid = stateOwnerUid(state);
+        if (ownerUid && ownerUid !== sync.uid) {
+          console.warn('Skipped cloud save because local state belongs to a different user.', { ownerUid, syncUid: sync.uid });
+          userEditRef.current = false;
+          return;
+        }
+        const { tab, ...rest } = state;
+        const persist = { ...rest, stateOwnerUid: sync.uid, stateOwnerEmail: sync.email || '' };
         const snapshotJson = JSON.stringify(persist);
         if (snapshotJson === lastSavedJsonRef.current) return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
