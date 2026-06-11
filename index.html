@@ -5403,6 +5403,12 @@ https://bit.ly/4vrcu64`;
       const [bulkRuleMax, setBulkRuleMax] = useState('-0.001');
       const [bulkFillColor, setBulkFillColor] = useState('#EF4444');
       const [bulkFontColor, setBulkFontColor] = useState('#FFFFFF');
+      const [generalStyleScope, setGeneralStyleScope] = useState('target');
+      const [generalFillColor, setGeneralFillColor] = useState('#EF4444');
+      const [generalFontColor, setGeneralFontColor] = useState('#FFFFFF');
+      const [generalBold, setGeneralBold] = useState(true);
+      const [generalItalic, setGeneralItalic] = useState(false);
+      const [generalUnderline, setGeneralUnderline] = useState(false);
       const targetClients = bmr.clients || [];
       const targetClientsById = useMemo(() => new Map(targetClients.map(client => [client.id, client])), [targetClients]);
       const defaultTargetClient = targetClients.find(c => !c.hidden) || targetClients[0];
@@ -5435,6 +5441,8 @@ https://bit.ly/4vrcu64`;
       }, [targetRules, usageRules]);
       const filteredTargetRules = targetRules.filter(rule => ruleMatches(rule, targetClientsById.get(rule.clientId)?.name || ''));
       const filteredUsageRules = usageRules.filter(rule => ruleMatches(rule));
+      const filteredTargetRuleIds = new Set(filteredTargetRules.map(rule => rule.id));
+      const filteredUsageRuleIds = new Set(filteredUsageRules.map(rule => rule.id));
       const selectedRuleKeySet = new Set(selectedRuleKeys);
       const shownRuleKeys = [
         ...filteredTargetRules.map(rule => `target:${rule.id}`),
@@ -5458,6 +5466,32 @@ https://bit.ly/4vrcu64`;
           usageRules: usageRules.map(rule => selectedRuleKeySet.has(`usage:${rule.id}`) ? { ...rule, ...patch } : rule),
         });
       };
+      const generalStyleCount =
+        (generalStyleScope === 'target' || generalStyleScope === 'all' ? filteredTargetRules.length : 0)
+        + (generalStyleScope === 'usage' || generalStyleScope === 'all' ? filteredUsageRules.length : 0);
+      const updateGeneralStyleRules = (patch) => {
+        if (!generalStyleCount) return;
+        onChange({
+          ...bmr,
+          targetRules: targetRules.map(rule =>
+            (generalStyleScope === 'target' || generalStyleScope === 'all') && filteredTargetRuleIds.has(rule.id)
+              ? { ...rule, ...patch }
+              : rule
+          ),
+          usageRules: usageRules.map(rule =>
+            (generalStyleScope === 'usage' || generalStyleScope === 'all') && filteredUsageRuleIds.has(rule.id)
+              ? { ...rule, ...patch }
+              : rule
+          ),
+        });
+      };
+      const applyGeneralStyle = () => updateGeneralStyleRules({
+        color: generalFillColor,
+        fontColor: generalFontColor,
+        bold: generalBold,
+        italic: generalItalic,
+        underline: generalUnderline,
+      });
       const applyBulkCondition = () => {
         const patch = { kind: bulkRuleKind };
         if (bulkRuleKind === 'between') {
@@ -5487,6 +5521,45 @@ https://bit.ly/4vrcu64`;
               </label>
               <span className="text-[11px] text-neutral-500">{filteredTargetRules.length}/{targetRules.length} client rules / {filteredUsageRules.length}/{usageRules.length} usage rules</span>
             </div>
+          </div>
+          <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3 space-y-3">
+            <SectionLabel hint={`${generalStyleCount} shown rule${generalStyleCount === 1 ? '' : 's'}`}>General style edit</SectionLabel>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="w-full max-w-[240px]">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Apply to</label>
+                <Select value={generalStyleScope} onChange={e => setGeneralStyleScope(e.target.value)}>
+                  <option value="target">Target/client rules shown</option>
+                  <option value="usage">30-min usage rules shown</option>
+                  <option value="all">All shown rules</option>
+                </Select>
+              </div>
+              <span className="inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2">
+                <span className="text-[10px] uppercase tracking-wide text-neutral-500">Fill</span>
+                <BmrColorSwatch value={generalFillColor} onChange={setGeneralFillColor} allowClear={false} />
+              </span>
+              <span className="inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2">
+                <span className="text-[10px] uppercase tracking-wide text-neutral-500">Font</span>
+                <BmrColorSwatch value={generalFontColor} onChange={setGeneralFontColor} allowClear={false} />
+              </span>
+              <label className={`inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalBold ? 'text-neutral-100' : 'text-neutral-500'}`}>
+                <input type="checkbox" checked={generalBold} onChange={e => setGeneralBold(e.target.checked)} className="h-3.5 w-3.5" />
+                <span className="font-bold">B</span>
+              </label>
+              <label className={`inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalItalic ? 'text-neutral-100' : 'text-neutral-500'}`}>
+                <input type="checkbox" checked={generalItalic} onChange={e => setGeneralItalic(e.target.checked)} className="h-3.5 w-3.5" />
+                <span className="italic">I</span>
+              </label>
+              <label className={`inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalUnderline ? 'text-neutral-100' : 'text-neutral-500'}`}>
+                <input type="checkbox" checked={generalUnderline} onChange={e => setGeneralUnderline(e.target.checked)} className="h-3.5 w-3.5" />
+                <span className="underline">U</span>
+              </label>
+              <Btn variant="accent" size="md" onClick={applyGeneralStyle} disabled={!generalStyleCount}>Apply style</Btn>
+              <Btn variant="ghost" size="md" onClick={() => updateGeneralStyleRules({ color: '' })} disabled={!generalStyleCount}>Clear fill</Btn>
+              <Btn variant="ghost" size="md" onClick={() => updateGeneralStyleRules({ fontColor: '' })} disabled={!generalStyleCount}>Clear font</Btn>
+            </div>
+            <p className="text-[10px] text-neutral-600 leading-relaxed">
+              Uses the current search filter. Clear search first if you want to update every rule in the selected group.
+            </p>
           </div>
           {selectedRuleKeys.length > 0 && (
             <div className="rounded-md border border-blue-500/40 bg-blue-500/10 p-3 space-y-3">
