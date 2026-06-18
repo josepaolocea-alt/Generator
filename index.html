@@ -35,6 +35,11 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    Babel.registerPreset('classic-react', {
+      plugins: [[Babel.availablePlugins['transform-react-jsx'], { runtime: 'classic' }]],
+    });
+  </script>
 
   <!-- Firebase: fully modular SDK via jsdelivr +esm bundles. The previous
        compat-build approach couldn't switch Firestore off WebChannel for
@@ -56,76 +61,67 @@
       appId: "1:583041630798:web:cec475e2be78f31222391f",
       measurementId: "G-FLCL187CN4"
     };
-    // Init is async because the modular Firestore SDK loads via dynamic
-    // import. The compat firestore wrapper is no longer loaded (see the
-    // <script src> block above) — every Firestore call below uses the
-    // modular API via window.__fbm helpers exposed here.
-    //
-    // We initialize Firestore with experimentalForceLongPolling: true
-    // because some users' networks break Firestore's default WebChannel
-    // transport (visible as "INTERNAL ASSERTION FAILED: Unexpected state"
-    // in their console). Long polling uses plain HTTPS instead and works
-    // everywhere proxies allow regular requests through.
-    window.__firebaseInitPromise = (async () => {
-      try {
-        // All Firebase modules must share the SAME internal firebase/app
-        // module instance, otherwise firestore registers its component on a
-        // different app than the one we initialize and you get
-        // "Component firestore has not been registered yet".
-        //
-        // jsdelivr's +esm modifier bundles each subpackage separately — each
-        // bundle ships its own copy of firebase/app, so they don't share.
-        // gstatic's modular URLs (without -compat) use relative imports
-        // internally; the browser dedupes those by URL, so all three modules
-        // resolve to the SAME firebase-app.js instance.
-        const [appMod, authMod, fsMod] = await Promise.all([
-          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js'),
-          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js'),
-          import('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js'),
-        ]);
-        const app = appMod.initializeApp(FIREBASE_CONFIG);
-        // Force long polling — this is the whole reason for going modular,
-        // because compat's settings() couldn't actually switch transport.
-        const db = fsMod.initializeFirestore(app, {
-          experimentalForceLongPolling: true,
-        });
-        const auth = authMod.getAuth(app);
-        // Expose modular helpers used throughout the app. App code does:
-        //   const { doc, getDoc, signInWithEmailAndPassword } = window.__fbm;
-        window.__fbm = {
-          // Firestore
-          doc: fsMod.doc,
-          collection: fsMod.collection,
-          getDoc: fsMod.getDoc,
-          getDocs: fsMod.getDocs,
-          setDoc: fsMod.setDoc,
-          serverTimestamp: fsMod.serverTimestamp,
-          deleteField: fsMod.deleteField,
-          // Auth
-          onAuthStateChanged: authMod.onAuthStateChanged,
-          signInWithEmailAndPassword: authMod.signInWithEmailAndPassword,
-          createUserWithEmailAndPassword: authMod.createUserWithEmailAndPassword,
-          sendPasswordResetEmail: authMod.sendPasswordResetEmail,
-          signOut: authMod.signOut,
-        };
-        window.__fb = { auth, db };
-        console.info('[firestore]', {
-          longPollingApplied: true,
-          initMethod: 'modular (gstatic)',
-          origin: location.origin,
-        });
-      } catch (e) {
-        console.error('Firebase modular init failed:', e);
+    // The app waits for this promise before mounting React. A module script
+    // below resolves it after Firebase loads; the timeout keeps the app from
+    // black-screening if a CDN/module import is blocked by the network.
+    window.__firebaseInitPromise = new Promise((resolve) => {
+      let done = false;
+      window.__finishFirebaseInit = (ok) => {
+        if (done) return;
+        done = true;
+        resolve(!!ok);
+      };
+      setTimeout(() => {
+        if (done) return;
+        console.warn('Firebase modular init timed out; continuing offline.');
         window.__fb = null;
         window.__fbm = null;
-      }
-    })();
+        window.__finishFirebaseInit(false);
+      }, 12000);
+    });
 
     // Bootstrap admins — emails in this list are always treated as admin
     // regardless of the role stored in Firestore. Used to seed the first
     // admin so they can promote others from the in-app Users panel.
     const SUPER_ADMINS = ['jpgc06.2023@gmail.com'];
 </script>
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+    import { initializeFirestore, doc, collection, getDoc, getDocs, setDoc, serverTimestamp, deleteField } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+
+    try {
+      const app = initializeApp(FIREBASE_CONFIG);
+      const db = initializeFirestore(app, { experimentalForceLongPolling: true });
+      const auth = getAuth(app);
+      window.__fbm = {
+        doc,
+        collection,
+        getDoc,
+        getDocs,
+        setDoc,
+        serverTimestamp,
+        deleteField,
+        onAuthStateChanged,
+        signInWithEmailAndPassword,
+        createUserWithEmailAndPassword,
+        sendPasswordResetEmail,
+        signOut,
+      };
+      window.__fb = { auth, db };
+      console.info('[firestore]', {
+        longPollingApplied: true,
+        initMethod: 'modular (gstatic module)',
+        origin: location.origin,
+      });
+      window.__finishFirebaseInit?.(true);
+    } catch (e) {
+      console.error('Firebase modular init failed:', e);
+      window.__fb = null;
+      window.__fbm = null;
+      window.__finishFirebaseInit?.(false);
+    }
+  </script>
 
   <style>
     html, body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
@@ -379,7 +375,7 @@
 <body>
   <div id="root"></div>
 
-  <script type="text/babel" data-presets="react">
+  <script type="text/babel" data-presets="classic-react">
     const { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } = React;
 
     /* ============================================================
