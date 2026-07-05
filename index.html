@@ -2260,6 +2260,11 @@
       let accessToken = null;
       let tokenExpiry = 0;      // epoch ms; token considered valid until this
       let grantedEmail = '';    // best-effort account label for the sync panel
+      let grantedScopes = '';   // space-delimited scopes actually granted
+
+      // Did the granted token include the Drive permission we need? Without it,
+      // Drive calls fail with 403 "insufficient authentication scopes".
+      const hasDriveScope = () => /https:\/\/www\.googleapis\.com\/auth\/drive(\.file)?/.test(grantedScopes);
       // Effective Client ID. Defaults to the hard-coded constant but can be set
       // at runtime from the in-app field (stored in state.googleSheets.clientId),
       // so users configure sync without editing source.
@@ -2307,8 +2312,19 @@
           client.callback = (resp) => {
             if (resp && resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
             accessToken = resp.access_token;
+            grantedScopes = resp.scope || '';
             const ttlMs = (Number(resp.expires_in) || 3600) * 1000;
             tokenExpiry = Date.now() + ttlMs - 60000; // refresh a minute early
+            // A token can come back without the Drive permission if the user
+            // left its checkbox unticked (or a prior grant lacked it). Treat
+            // that as a distinct failure so getToken() can force re-consent.
+            if (!hasDriveScope()) {
+              accessToken = null; tokenExpiry = 0;
+              const err = new Error('DRIVE_SCOPE_NOT_GRANTED');
+              err.code = 'DRIVE_SCOPE_NOT_GRANTED';
+              reject(err);
+              return;
+            }
             resolve(accessToken);
           };
           try {
@@ -2317,15 +2333,20 @@
         });
       }
 
+      const SCOPE_HELP = 'Drive access wasn\'t granted. Click Connect again, and in the Google window keep the checkbox for "See, edit, create and delete only the specific Google Drive files you use with this app" ticked before continuing.';
+
       async function getToken({ interactive = false } = {}) {
-        if (accessToken && Date.now() < tokenExpiry) return accessToken;
+        if (accessToken && Date.now() < tokenExpiry && hasDriveScope()) return accessToken;
         try {
           return await requestToken(interactive);
         } catch (e) {
-          // A silent refresh can fail with no prior grant / no session; fall
-          // back to an interactive prompt so the user can grant access.
-          if (!interactive) return await requestToken(true);
-          throw e;
+          // Missing Drive scope (or a failed silent refresh) → escalate to an
+          // interactive consent prompt once so the user can grant Drive access.
+          if (!interactive) {
+            try { return await requestToken(true); }
+            catch (e2) { throw (e2.code === 'DRIVE_SCOPE_NOT_GRANTED' ? new Error(SCOPE_HELP) : e2); }
+          }
+          throw (e.code === 'DRIVE_SCOPE_NOT_GRANTED' ? new Error(SCOPE_HELP) : e);
         }
       }
 
@@ -2350,10 +2371,10 @@
         if (accessToken && gisReady()) {
           try { window.google.accounts.oauth2.revoke(accessToken, () => {}); } catch {}
         }
-        accessToken = null; tokenExpiry = 0; grantedEmail = '';
+        accessToken = null; tokenExpiry = 0; grantedEmail = ''; grantedScopes = '';
       }
 
-      const isConnected = () => !!accessToken && Date.now() < tokenExpiry;
+      const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasDriveScope();
       const email = () => grantedEmail;
       const sheetUrl = (fileId) => 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(fileId) + '/edit';
 
