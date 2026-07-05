@@ -3477,7 +3477,7 @@ https://bit.ly/4vrcu64`;
             <p className="text-[11px] text-neutral-500 -mt-1">Sheets parsed from an uploaded .xlsx. Add the ones you want into the main sidebar.</p>
           </div>
 
-          <div className="p-5 flex-1 overflow-y-auto">
+          <div className="p-5 flex-1 overflow-y-auto min-h-0">
             {imported.length === 0 ? (
               <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center">
                 <p className="text-[12px] text-neutral-400">No uploaded sheets yet</p>
@@ -3588,7 +3588,7 @@ https://bit.ly/4vrcu64`;
           </div>
 
           {/* Sheet list */}
-          <div className="p-5 flex-1 overflow-y-auto">
+          <div className="p-5 flex-1 overflow-y-auto min-h-0">
             <SectionLabel hint={`${sheets.filter(s => s.active).length}/${sheets.length} active`}>Sheets</SectionLabel>
             <div className="space-y-0.5">
               {sheets.map((s, i) => {
@@ -6027,7 +6027,7 @@ https://bit.ly/4vrcu64`;
             <BmrHiddenColInput bmr={bmr} setBmr={setBmr} />
           </div>
 
-          <div className="p-5 flex-1 overflow-y-auto">
+          <div className="p-5 flex-1 overflow-y-auto min-h-0">
             <SectionLabel hint={`${(bmr.clients || []).filter(c => !c.hidden).length}/${(bmr.clients || []).length} visible`}>Clients quick view</SectionLabel>
             <div className="space-y-0.5 max-h-[40vh] overflow-y-auto">
               {(bmr.clients || []).map((c, i) => (
@@ -6358,7 +6358,7 @@ https://bit.ly/4vrcu64`;
             </label>
           </div>
 
-          <div className="p-5 flex-1 overflow-y-auto">
+          <div className="p-5 flex-1 overflow-y-auto min-h-0">
             <SectionLabel hint={`${visibleRetail} RES / ${visibleWholesale} WHS visible`}>Clients quick view</SectionLabel>
             <div className="space-y-0.5 max-h-[44vh] overflow-y-auto">
               {quickClients.map((client, index) => {
@@ -6944,7 +6944,7 @@ https://bit.ly/4vrcu64`;
             })}
           </div>
 
-          <div className="p-5 flex-1 overflow-y-auto">
+          <div className="p-5 flex-1 overflow-y-auto min-h-0">
             <SectionLabel hint={`${numbers.length} ready`}>Will generate</SectionLabel>
             <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
               <div className="flex flex-wrap gap-1.5">
