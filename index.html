@@ -2260,21 +2260,35 @@
       let accessToken = null;
       let tokenExpiry = 0;      // epoch ms; token considered valid until this
       let grantedEmail = '';    // best-effort account label for the sync panel
+      // Effective Client ID. Defaults to the hard-coded constant but can be set
+      // at runtime from the in-app field (stored in state.googleSheets.clientId),
+      // so users configure sync without editing source.
+      let clientId = GOOGLE_OAUTH_CLIENT_ID || '';
 
       // We also request openid+email (non-sensitive) so the panel can show
       // which Google account is connected. drive.file is the only sensitive
       // scope and keeps the app limited to sheets it creates.
       const REQUEST_SCOPE = 'openid email ' + GOOGLE_DRIVE_SCOPE;
 
-      const isConfigured = () => !!GOOGLE_OAUTH_CLIENT_ID;
+      const isConfigured = () => !!clientId;
       const gisReady = () => !!(window.google && window.google.accounts && window.google.accounts.oauth2);
 
+      // Point the sync at a Client ID. Rebuilds the token client on change so
+      // the next request uses the new ID.
+      function setClientId(id) {
+        const v = String(id || '').trim();
+        if (v === clientId) return false;
+        clientId = v;
+        tokenClient = null;
+        return true;
+      }
+
       function ensureTokenClient() {
-        if (!isConfigured()) throw new Error('Google OAuth Client ID is not set. Add GOOGLE_OAUTH_CLIENT_ID in the config near the top of index.html.');
+        if (!isConfigured()) throw new Error('Google OAuth Client ID is not set. Paste it into the Google Sheets sync field in the sidebar.');
         if (!gisReady()) throw new Error('Google sign-in library has not loaded yet. Check your connection and try again.');
         if (!tokenClient) {
           tokenClient = window.google.accounts.oauth2.initTokenClient({
-            client_id: GOOGLE_OAUTH_CLIENT_ID,
+            client_id: clientId,
             scope: REQUEST_SCOPE,
             callback: () => {}, // replaced per-request in requestToken()
           });
@@ -2382,7 +2396,7 @@
         return fileId;
       }
 
-      return { isConfigured, gisReady, getToken, connect, disconnect, isConnected, email, createSheet, updateSheet, sheetUrl };
+      return { isConfigured, setClientId, gisReady, getToken, connect, disconnect, isConnected, email, createSheet, updateSheet, sheetUrl };
     })();
 
     // Modules that support Google Sheets sync → the in-memory workbook builder
@@ -2995,23 +3009,36 @@ https://bit.ly/4vrcu64`;
     // SIP/FCS, BMR VOIP and BMR SMS sidebars. Connect once, then Generate (or
     // "Sync now") pushes the generated workbook into that module's Google Sheet.
     function GoogleSheetSync({ gsheets, moduleId, sheetId }) {
+      const [draftId, setDraftId] = useState('');
+      const [editing, setEditing] = useState(false);
       if (!gsheets) return null;
-      const { conn, connect, disconnect, sync, sheetUrl } = gsheets;
+      const { conn, connect, disconnect, sync, sheetUrl, configured, clientId, onSetClientId } = gsheets;
       const busy = conn.busyModule === moduleId;
       const connecting = conn.busyModule === '__connect__';
       const last = conn.lastSync?.[moduleId];
       const url = sheetId ? sheetUrl(sheetId) : null;
 
-      if (!conn.configured) {
+      const saveId = () => { if (draftId.trim()) { onSetClientId(draftId); setEditing(false); } };
+
+      // Client ID entry form — shown when no ID is set, or when changing it.
+      if (!configured || editing) {
         return (
-          <div className="rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2.5">
+          <div className="rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2.5 space-y-2">
             <div className="flex items-center gap-2 text-[11px]">
               <IconSheet />
               <span className="font-medium text-neutral-300">Google Sheets sync</span>
             </div>
-            <p className="text-[10px] text-neutral-600 mt-1 leading-relaxed">
-              Add your <span className="font-mono text-neutral-500">GOOGLE_OAUTH_CLIENT_ID</span> in the config to enable one-click sync.
+            <p className="text-[10px] text-neutral-600 leading-relaxed">
+              Paste your Google OAuth <span className="text-neutral-400">Client ID</span> (Web application) to enable one-click sync to Google Sheets.
             </p>
+            <Input value={draftId} onChange={e => setDraftId(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveId(); } }}
+              placeholder="xxxx.apps.googleusercontent.com"
+              className="text-[11px] py-1.5 font-mono" />
+            <div className="flex items-center gap-1.5">
+              <Btn variant="ghost" size="sm" onClick={saveId} disabled={!draftId.trim()} className="flex-1">Save Client ID</Btn>
+              {configured && <Btn variant="ghost" size="sm" onClick={() => { setEditing(false); setDraftId(''); }}>Cancel</Btn>}
+            </div>
           </div>
         );
       }
@@ -3050,6 +3077,9 @@ https://bit.ly/4vrcu64`;
               )}
             </div>
           )}
+
+          <button onClick={() => { setDraftId(clientId || ''); setEditing(true); }}
+            className="text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors">Change Client ID</button>
         </div>
       );
     }
@@ -8643,10 +8673,11 @@ https://bit.ly/4vrcu64`;
       rcaTab: 'editor',
       rcaSignatories: DEFAULT_RCA_SIGNATORIES,
       rcaCompany: { ...DEFAULT_RCA_COMPANY },
-      // Google Sheets sync: durable file IDs of the app-owned sheets (one per
-      // module). No tokens here — only non-secret IDs, so they ride the normal
-      // localStorage + Firestore sync. Empty until the first sync creates them.
-      googleSheets: { sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '' } },
+      // Google Sheets sync: the OAuth Client ID (set in-app, non-secret) plus
+      // durable file IDs of the app-owned sheets (one per module). No tokens
+      // here — all non-secret, so it rides the normal localStorage + Firestore
+      // sync. sheetIds are empty until the first sync creates them.
+      googleSheets: { clientId: '', sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '' } },
     };
 
     function timestampMs(value) {
@@ -8761,6 +8792,9 @@ https://bit.ly/4vrcu64`;
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
       const googleSheets = {
+        clientId: (merged.googleSheets && typeof merged.googleSheets.clientId === 'string')
+          ? merged.googleSheets.clientId
+          : (DEFAULT_STATE.googleSheets.clientId || ''),
         sheetIds: {
           ...DEFAULT_STATE.googleSheets.sheetIds,
           ...((merged.googleSheets && merged.googleSheets.sheetIds) || {}),
@@ -9143,7 +9177,6 @@ match /shared/whitelistSmsTestNumbers {
       // the OAuth token lives in memory inside googleSheetsSync). Durable sheet
       // IDs live in state.googleSheets.sheetIds.
       const [googleConn, setGoogleConn] = useState(() => ({
-        configured: googleSheetsSync.isConfigured(),
         connected: false,
         email: '',
         busyModule: null,   // moduleId (or '__connect__') currently working
@@ -9578,6 +9611,23 @@ match /shared/whitelistSmsTestNumbers {
         setState(s => ({ ...s, sheets: [...s.sheets, copy], selectedSheetId: copy.id }));
       };
 
+      // Push the stored Client ID into the sync helper on load and whenever it
+      // changes (e.g. after Firestore hydrate or an in-app edit). Falls back to
+      // the hard-coded constant when the field is empty.
+      useEffect(() => {
+        googleSheetsSync.setClientId(state.googleSheets?.clientId || GOOGLE_OAUTH_CLIENT_ID);
+      }, [state.googleSheets?.clientId]);
+
+      // Save a Client ID entered in the sidebar field. Resets any live
+      // connection since a new ID means a different OAuth app.
+      const setGoogleClientId = useCallback((id) => {
+        const v = String(id || '').trim();
+        googleSheetsSync.setClientId(v || GOOGLE_OAUTH_CLIENT_ID);
+        googleSheetsSync.disconnect();
+        setGoogleConn(c => ({ ...c, connected: false, email: '', busyModule: null, error: null }));
+        setState(s => ({ ...s, googleSheets: { ...(s.googleSheets || {}), clientId: v } }));
+      }, []);
+
       // Connect Google Drive (interactive account/consent popup).
       const connectGoogle = useCallback(async () => {
         if (!googleSheetsSync.isConfigured()) {
@@ -9706,8 +9756,15 @@ match /shared/whitelistSmsTestNumbers {
       const activeRules = state.rules.filter(r => r.enabled).length;
 
       // Bundle passed to the SIP/FCS, BMR VOIP and BMR SMS sidebars so their
-      // GoogleSheetSync panel can connect and sync.
-      const googleSyncProps = { conn: googleConn, connect: connectGoogle, disconnect: disconnectGoogle, sync: syncModuleToSheets, sheetUrl: googleSheetsSync.sheetUrl };
+      // GoogleSheetSync panel can set the Client ID, connect and sync.
+      const googleClientId = String(state.googleSheets?.clientId || '');
+      const googleConfigured = !!(googleClientId.trim() || GOOGLE_OAUTH_CLIENT_ID);
+      const googleSyncProps = {
+        conn: googleConn, configured: googleConfigured, clientId: googleClientId,
+        onSetClientId: setGoogleClientId,
+        connect: connectGoogle, disconnect: disconnectGoogle, sync: syncModuleToSheets,
+        sheetUrl: googleSheetsSync.sheetUrl,
+      };
 
       const TABS = [
         { id: 'config',  label: 'Config' },
