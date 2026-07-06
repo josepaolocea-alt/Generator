@@ -1764,6 +1764,81 @@
       return `AND(${bmrBuildConditionFormula(rule, cellRef)},EXACT($A${rowNum},"${safeName}"))`;
     }
 
+    /* ------------------------------------------------------------
+       Red-cell counters — one big number per time slot showing how
+       many Amnt Receivable / BALANCE cells that slot's rules highlight.
+       Conditional formatting is dynamic, so we replicate the exact same
+       conditions in a SUMPRODUCT that counts matches over the whole
+       column. AND() collapses an array to a single scalar, so these
+       versions rebuild the logic with multiplication over ranges. Kept
+       byte-for-byte in sync with bmrBuildConditionFormula so the count
+       always matches what the eye sees.
+       ------------------------------------------------------------ */
+    function bmrArrayNumericExpr(rangeRef) {
+      const cleanText = `TRIM(SUBSTITUTE(${rangeRef}&"",CHAR(160),""))`;
+      return `IFERROR(VALUE(SUBSTITUTE(${cleanText},",","")),${rangeRef})`;
+    }
+    function bmrArrayHasValue(rangeRef) {
+      return `(LEN(TRIM(SUBSTITUTE(${rangeRef}&"",CHAR(160),"")))>0)`;
+    }
+    function bmrArrayCompare(rule, numExpr) {
+      const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
+      switch (rule.kind) {
+        case 'between': return `(${numExpr}>=${v(rule.min)})*(${numExpr}<=${v(rule.max)})`;
+        case 'gte':     return `(${numExpr}>=${v(rule.value)})`;
+        case 'lte':     return `(${numExpr}<=${v(rule.value)})`;
+        case 'gt':      return `(${numExpr}>${v(rule.value)})`;
+        case 'lt':      return `(${numExpr}<${v(rule.value)})`;
+        case 'eq':      return `(${numExpr}=${v(rule.value)})`;
+        default:        return '0';
+      }
+    }
+    // 0/1-per-row expression: which cells in rangeRef a set of client-scoped
+    // rules (each rule targets one client, matched by exact name in aRangeRef)
+    // would highlight. Returns null when there are no usable rules.
+    function bmrClientRulesArrayExpr(ruleEntries, rangeRef, aRangeRef) {
+      const valid = (ruleEntries || []).filter(e => e.client?.name);
+      if (!valid.length) return null;
+      const num = bmrArrayNumericExpr(rangeRef);
+      const inner = valid.map(({ rule, client }) => {
+        const safe = String(client.name).replace(/"/g, '""');
+        return `(${bmrArrayCompare(rule, num)})*EXACT(${aRangeRef},"${safe}")`;
+      }).join('+');
+      return `${bmrArrayHasValue(rangeRef)}*ISNUMBER(${num})*--((${inner})>0)`;
+    }
+    // 0/1-per-row expression mirroring bmrSmsOverdraftConditionFormula.
+    function bmrSmsOverdraftArrayExpr(balRange, odRange) {
+      const balNum = bmrArrayNumericExpr(balRange);
+      const odNum = bmrArrayNumericExpr(odRange);
+      return `${bmrArrayHasValue(balRange)}*${bmrArrayHasValue(odRange)}*ISNUMBER(${balNum})*ISNUMBER(${odNum})*(${odNum}>0)*(${balNum}<=-ABS(${odNum}))`;
+    }
+    // Combine the per-row 0/1 expressions into a single count. A cell is red
+    // if any expression flags it, so we sum then test >0 to avoid double
+    // counting a cell matched by more than one rule.
+    function bmrRedCountFormula(rowExprs) {
+      const parts = (rowExprs || []).filter(Boolean);
+      if (!parts.length) return null;
+      return `SUMPRODUCT(--((${parts.join('+')})>0))`;
+    }
+
+    const BMR_RED_COUNT_FILL = 'FFFEE2E2';
+    const BMR_RED_COUNT_INK  = 'FF991B1B';
+    function applyBmrRedCountStyle(cell) {
+      // 2x the default 11pt font so the tally reads at a glance, on a red wash.
+      cell.font = { bold: true, size: 22, color: { argb: BMR_RED_COUNT_INK } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BMR_RED_COUNT_FILL } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.numFmt = '0';
+      const edge = { style: 'medium', color: { argb: BMR_RED_COUNT_INK } };
+      cell.border = { top: edge, left: edge, bottom: edge, right: edge };
+    }
+    function applyBmrRedCountLabel(cell, text) {
+      cell.value = text;
+      cell.font = { bold: true, size: 12, color: { argb: BMR_RED_COUNT_INK } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BMR_RED_COUNT_FILL } };
+      cell.alignment = { horizontal: 'left', vertical: 'middle' };
+    }
+
     function bmrStyleFromRule(rule) {
       const style = {};
       if (rule.color)     style.fill = { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(rule.color) } };
@@ -1980,6 +2055,29 @@
           }],
         });
       });
+
+      // Totals row: per-slot count of Amnt Receivable cells the target rules
+      // paint red, printed 2x size so it is readable at a glance.
+      const redCountRow = dataEndRow + 2;
+      const enabledTargetRules = (bmr.targetRules || [])
+        .filter(r => r.enabled)
+        .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
+        .filter(entry => entry.client?.name);
+      if (enabledTargetRules.length) {
+        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), 'Red Amnt Receivable count');
+        const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
+        for (let k = 0; k < slots.length; k++) {
+          const amntCol = colLetter(3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
+          const rangeRef = `${amntCol}${dataStartRow}:${amntCol}${dataEndRow}`;
+          const formula = bmrRedCountFormula([
+            bmrClientRulesArrayExpr(enabledTargetRules, rangeRef, aRange),
+          ]);
+          const cell = ws.getCell(redCountRow, 3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
+          cell.value = formula ? { formula } : 0;
+          applyBmrRedCountStyle(cell);
+        }
+        ws.getRow(redCountRow).height = 34;
+      }
 
       // Hidden columns
       (bmr.hiddenCols || []).forEach((c) => {
@@ -2212,6 +2310,34 @@
           }],
         });
       });
+
+      // Totals row: per-slot count of BALANCE cells the overdraft + target
+      // rules paint red, printed 2x size so it is readable at a glance.
+      const redCountRow = dataEndRow + 2;
+      const overdraftEnabled = (sms.overdraftRules || []).some(r => r.enabled);
+      const enabledTargetRules = (sms.targetRules || [])
+        .filter(r => r.enabled)
+        .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
+        .filter(entry => entry.client?.name);
+      if (overdraftEnabled || enabledTargetRules.length) {
+        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), `Red ${market.label} balance count`);
+        const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
+        for (let k = 0; k < slots.length; k++) {
+          const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+          const balanceCol = colLetter(baseCol + market.balanceOffset);
+          const overdraftCol = colLetter(baseCol + market.overdraftOffset);
+          const balRange = `${balanceCol}${dataStartRow}:${balanceCol}${dataEndRow}`;
+          const odRange = `${overdraftCol}${dataStartRow}:${overdraftCol}${dataEndRow}`;
+          const formula = bmrRedCountFormula([
+            overdraftEnabled ? bmrSmsOverdraftArrayExpr(balRange, odRange) : null,
+            bmrClientRulesArrayExpr(enabledTargetRules, balRange, aRange),
+          ]);
+          const cell = ws.getCell(redCountRow, baseCol + market.balanceOffset);
+          cell.value = formula ? { formula } : 0;
+          applyBmrRedCountStyle(cell);
+        }
+        ws.getRow(redCountRow).height = 34;
+      }
 
       ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
     }
