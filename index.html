@@ -2127,6 +2127,16 @@
       return Math.max(16, Math.min(42, longest + 2));
     }
 
+    // Drop trailing blank-name clients so a market tab ends right after its last
+    // real client instead of trailing hundreds of empty rows (which is what makes
+    // a synced Google Sheet balloon to its 1000-row default). Only strips empties
+    // from the end — any named client is always kept.
+    function bmrTrimTrailingBlankClients(clients) {
+      const arr = (clients || []).slice();
+      while (arr.length && String(arr[arr.length - 1]?.name || '').trim() === '') arr.pop();
+      return arr;
+    }
+
     function bmrSmsTargetColLetters(market) {
       return Array.from({ length: BMR_SLOT_COUNT }, (_, k) =>
         colLetter(3 + k * BMR_SMS_BLOCK_COLS + market.targetOffset)
@@ -2157,7 +2167,7 @@
     function buildBmrSmsSheet(ws, sms, marketKey, shift) {
       const market = BMR_SMS_MARKETS[marketKey];
       const slots = bmrSlotsForShift(shift);
-      const clients = (sms[market.clientsKey] || []).filter(c => !c.hidden);
+      const clients = bmrTrimTrailingBlankClients((sms[market.clientsKey] || []).filter(c => !c.hidden));
       const accountManagersById = bmrAccountManagersById(sms);
       const totalCols = 2 + slots.length * BMR_SMS_BLOCK_COLS;
       const dataStartRow = 3;
