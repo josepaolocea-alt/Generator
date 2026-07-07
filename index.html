@@ -1227,6 +1227,19 @@
        ============================================================ */
     // Builds the SIP/FCS workbook in memory. Returns { blob, filename } so both
     // the download button and the Google Sheets sync can reuse one build.
+    // Snapshot each finished worksheet's used extent (last row / column that
+    // actually holds a value) so the Google Sheets sync can shrink the converted
+    // sheet's grid back to exactly this range. Drive's xlsx→Sheets conversion
+    // pads every tab out to its 1000-row default, leaving empty rows below the
+    // totals row; this lets us trim them off so the last row is the totals row.
+    function collectSheetGridDims(wb) {
+      return wb.worksheets.map(ws => ({
+        title: ws.name,
+        rows: ws.rowCount || 0,
+        cols: ws.columnCount || 0,
+      }));
+    }
+
     async function buildSipFcsBlob(state) {
       const wb = new ExcelJS.Workbook();
       wb.creator = 'Monthly Report Generator';
@@ -1276,7 +1289,7 @@
 
       const buf = await wb.xlsx.writeBuffer();
       const filename = `${MONTHS[month]}_${year}_SIP_FCS_Hourly_Record.xlsx`;
-      return { blob: new Blob([buf], { type: XLSX_MIME }), filename };
+      return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
     }
 
     async function generateWorkbook(state) {
@@ -2113,7 +2126,7 @@
       }
       const buf = await wb.xlsx.writeBuffer();
       const filename = `BMR_VOIP_${bmrTodayString()}.xlsx`;
-      return { blob: new Blob([buf], { type: XLSX_MIME }), filename };
+      return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
     }
 
     async function generateBmrWorkbook(state) {
@@ -2372,7 +2385,7 @@
 
       const buf = await wb.xlsx.writeBuffer();
       const filename = `BMR_SMS_${bmrTodayString()}.xlsx`;
-      return { blob: new Blob([buf], { type: XLSX_MIME }), filename };
+      return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
     }
 
     async function generateBmrSmsWorkbook(state) {
@@ -2553,7 +2566,54 @@
         return fileId;
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, disconnect, isConnected, email, createSheet, updateSheet, sheetUrl };
+      // After Drive converts an uploaded xlsx into a Google Sheet it pads every
+      // tab out to the default 1000-row grid, leaving a long tail of empty rows
+      // below the real data (so the totals row is no longer the last row). Shrink
+      // each tab's grid back to exactly the rows/columns the workbook uses. The
+      // Sheets API is reachable under the same drive.file scope for files this
+      // app created, so no extra consent is needed. `dims` is the per-sheet
+      // extent list from collectSheetGridDims (title/rows/cols).
+      async function trimSheetGrids(fileId, dims) {
+        const wanted = (dims || []).filter(d => d && d.title && d.rows > 0 && d.cols > 0);
+        if (!fileId || !wanted.length) return;
+        const token = await getToken();
+        const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId);
+        const metaResp = await fetch(base + '?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))', {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!metaResp.ok) throw await driveError(metaResp);
+        const meta = await metaResp.json();
+        const byTitle = new Map((meta.sheets || []).map(s => [s.properties && s.properties.title, s.properties]));
+        const requests = [];
+        wanted.forEach((want) => {
+          const props = byTitle.get(want.title);
+          if (!props) return;
+          const grid = props.gridProperties || {};
+          const curRows = grid.rowCount || 0;
+          const curCols = grid.columnCount || 0;
+          if (!curRows || !curCols) return;
+          // Only ever shrink toward the used range — never grow, and never clip
+          // below the data. Drive pads upward, so current >= used in practice.
+          const newRows = curRows > want.rows ? want.rows : curRows;
+          const newCols = curCols > want.cols ? want.cols : curCols;
+          if (newRows === curRows && newCols === curCols) return;
+          requests.push({
+            updateSheetProperties: {
+              properties: { sheetId: props.sheetId, gridProperties: { rowCount: newRows, columnCount: newCols } },
+              fields: 'gridProperties.rowCount,gridProperties.columnCount',
+            },
+          });
+        });
+        if (!requests.length) return;
+        const r = await fetch(base + ':batchUpdate', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requests }),
+        });
+        if (!r.ok) throw await driveError(r);
+      }
+
+      return { isConfigured, setClientId, gisReady, getToken, connect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl };
     })();
 
     // Modules that support Google Sheets sync → the in-memory workbook builder
@@ -9837,7 +9897,7 @@ match /shared/whitelistSmsTestNumbers {
         try {
           await googleSheetsSync.getToken({ interactive });
           const latest = stateRef.current || DEFAULT_STATE;
-          const { blob } = await conf.build(latest);
+          const { blob, sheets } = await conf.build(latest);
           const existingId = latest.googleSheets?.sheetIds?.[moduleId] || '';
           let fileId = existingId;
           if (existingId) {
@@ -9854,12 +9914,26 @@ match /shared/whitelistSmsTestNumbers {
           if (fileId && fileId !== existingId) {
             setState(s => ({ ...s, googleSheets: { ...s.googleSheets, sheetIds: { ...s.googleSheets.sheetIds, [moduleId]: fileId } } }));
           }
+          // Drive re-pads the converted sheet to a 1000-row grid on every upload,
+          // so trim the empty tail back to the totals row after each sync. This
+          // is best-effort: the data is already synced, so a trim failure must
+          // not fail the sync — only surface the one actionable case (the Sheets
+          // API isn't enabled for the OAuth project).
+          let trimHint = '';
+          try {
+            await googleSheetsSync.trimSheetGrids(fileId, sheets);
+          } catch (e) {
+            console.warn('Trimming synced sheet grids failed', e);
+            if (/Google Sheets API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(e.message || '')) {
+              trimHint = 'Synced, but empty rows below the totals row could not be trimmed — enable the Google Sheets API for your OAuth project, then sync again.';
+            }
+          }
           setGoogleConn(c => ({
             ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null,
             lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId } },
           }));
-          setToast({ type: 'ok', msg: 'Synced to Google Sheets' });
-          setTimeout(() => setToast(null), 4000);
+          setToast({ type: trimHint ? 'err' : 'ok', msg: trimHint || 'Synced to Google Sheets' });
+          setTimeout(() => setToast(null), trimHint ? 8000 : 4000);
           return fileId;
         } catch (e) {
           console.warn('Google Sheets sync failed', e);
