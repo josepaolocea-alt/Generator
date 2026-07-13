@@ -1771,6 +1771,16 @@
       return `AND(LEN(${balanceText})>0,LEN(${overdraftText})>0,ISNUMBER(${balanceNum}),ISNUMBER(${overdraftNum}),${overdraftNum}>0,${balanceNum}<=-ABS(${overdraftNum}))`;
     }
 
+    // True when the same-row "30mins usage" cell holds a non-zero number. Used to
+    // bold the BALANCE cell so slots with usage stand out and BALANCE is easy to
+    // pick out from the Over Draft / OD column (which sit in swapped positions on
+    // the RES vs WHS sheets).
+    function bmrSmsUsageNonZeroFormula(usageRef) {
+      const usageText = `TRIM(SUBSTITUTE(${usageRef}&"",CHAR(160),""))`;
+      const usageNum = bmrNumericExpression(usageRef);
+      return `AND(LEN(${usageText})>0,ISNUMBER(${usageNum}),${usageNum}<>0)`;
+    }
+
     function bmrBuildClientConditionFormula(rule, cellRef, clientName, rowNum) {
       const safeName = String(clientName || '').replace(/"/g, '""');
       if (!safeName) return 'FALSE';
@@ -2311,6 +2321,26 @@
           });
         });
       });
+
+      // Bold each BALANCE cell whose same-row 30mins usage is non-zero, so slots
+      // with usage stand out and BALANCE reads apart from the Over Draft / OD
+      // column. Bold-only style layers over the overdraft/target fills above.
+      if (sms.boldBalanceOnUsage !== false) {
+        for (let k = 0; k < slots.length; k++) {
+          const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
+          const balanceCol = colLetter(baseCol + market.balanceOffset);
+          const usageCol = colLetter(baseCol + BMR_SMS_USAGE_OFFSET);
+          ws.addConditionalFormatting({
+            ref: `${balanceCol}${dataStartRow}:${balanceCol}${dataEndRow}`,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrSmsUsageNonZeroFormula(`${usageCol}${dataStartRow}`)],
+              style: { font: { bold: true } },
+              priority: priorityCounter++,
+            }],
+          });
+        }
+      }
 
       clients.forEach((client) => {
         const clientColor = bmrClientColor(sms, client, accountManagersById);
@@ -5281,6 +5311,7 @@ https://bit.ly/4vrcu64`;
         { id: bmrId('smsur'), name: 'Heavy debit (-0.001 to -49)', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true },
       ],
       colorBlockCarrierNames: true,
+      boldBalanceOnUsage: true,
       bordersOnData: true,
       borderStyle: 'thin',
       timeSeparatorBorderStyle: 'thick',
@@ -6477,6 +6508,19 @@ https://bit.ly/4vrcu64`;
                   onDelete={() => deleteOverdraftRule(rule.id)} />
               ))}
               <Btn variant="ghost" size="sm" onClick={addOverdraftRule}><IconPlus /> Add overdraft rule</Btn>
+            </div>
+          </div>
+          <div>
+            <SectionLabel hint="BMR SMS only - applies to both RES and WHS sheets">Balance emphasis</SectionLabel>
+            <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+              <label className="flex cursor-pointer items-start gap-2 text-sm text-neutral-300">
+                <input type="checkbox" checked={sms.boldBalanceOnUsage !== false}
+                  onChange={e => onChange(prev => ({ ...(prev || DEFAULT_BMR_SMS_STATE), boldBalanceOnUsage: e.target.checked }))}
+                  className="mt-0.5 h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
+                <span>Bold the BALANCE cell when its 30mins usage is non-zero
+                  <span className="block text-[11px] text-neutral-500">Only balance cells whose same-row 30mins usage has a value turn bold — makes it easy to spot BALANCE apart from the Over Draft / OD column.</span>
+                </span>
+              </label>
             </div>
           </div>
           <div aria-hidden="true" className="border-t-2 border-neutral-700"></div>
