@@ -10202,12 +10202,25 @@ https://bit.ly/4vrcu64`;
     // A value token must be digit-shaped BEFORE repair (0/O, 1/I/l, 5/S), so
     // name fragments like "STD5" can never be mistaken for a reading.
     function recorderNumFromToken(text, maxDigits) {
-      const t = String(text || '');
+      // Leading/trailing pipes are table borders that merged into the word,
+      // never digits (fixes "|19" → 119 and stray "|" → phantom 1).
+      const t = String(text || '').replace(/^\|+/, '').replace(/\|+$/, '');
+      if (!t) return null;
       if (/[#,.:%()]/.test(t)) return null;
       if (!/^[0-9OoQqIl|Ss]{1,6}$/.test(t)) return null;
       const s = t.replace(/[OoQq]/g, '0').replace(/[Il|]/g, '1').replace(/[Ss]/g, '5');
       if (!/^\d+$/.test(s) || s.length > maxDigits) return null;
       return parseInt(s, 10);
+    }
+    // A value word that starts LEFT of the value column's text edge has very
+    // likely swallowed the cell border as a leading 1/I/l ("19" → "119").
+    // Genuine readings start at the same padding as the column header.
+    function recorderValueFromWord(w, valueX, maxDigits) {
+      if (valueX != null && w.x0 < valueX - 2 && /^[|Il1][0-9OoQqIl|Ss]{1,5}$/.test(w.text)) {
+        const stripped = recorderNumFromToken(w.text.slice(1), maxDigits);
+        if (stripped != null) return stripped;
+      }
+      return recorderNumFromToken(w.text, maxDigits);
     }
     // Gateway names never contain #, %, commas or long digit runs — prefix
     // cells always do. Used to cut the name off even when the column
@@ -10255,7 +10268,7 @@ https://bit.ly/4vrcu64`;
         let value = null, vconf = 100;
         const windowed = valueX != null ? r.words.filter(w => ((w.x0 + w.x1) / 2) >= valueX - 10) : [];
         for (let i = windowed.length - 1; i >= 0; i--) {
-          const n = recorderNumFromToken(windowed[i].text, 6);
+          const n = recorderValueFromWord(windowed[i], valueX, 6);
           if (n != null) { value = n; vconf = windowed[i].conf; break; }
         }
         if (value == null) {
@@ -10287,7 +10300,7 @@ https://bit.ly/4vrcu64`;
           if (Math.abs(yc - e.y) > medH * 0.75) continue;
           const xc = (w.x0 + w.x1) / 2;
           if (valueX != null ? xc < valueX - 10 : w.x0 <= nameStop) continue;
-          const n = recorderNumFromToken(w.text, valueX != null ? 6 : 4);
+          const n = recorderValueFromWord(w, valueX, valueX != null ? 6 : 4);
           if (n == null) continue;
           if (!best || w.x0 > best.w.x0) best = { n, w };
         }
