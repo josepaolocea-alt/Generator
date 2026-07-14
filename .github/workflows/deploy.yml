@@ -1,3 +1,11 @@
+# Publishes the app to GitHub Pages.
+# Runs on every push to main and can also be triggered manually
+# from the Actions tab via "Run workflow".
+#
+# It compiles app.jsx -> index.html (npm run build) here in CI, so you only
+# ever edit app.jsx and push — the live site is always rebuilt from source.
+# You never need to run the build on your own computer.
+
 name: Deploy to GitHub Pages
 
 on:
@@ -10,6 +18,7 @@ permissions:
   pages: write
   id-token: write
 
+# Allow only one concurrent deploy, queueing later runs.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -24,12 +33,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --- Build app.jsx -> index.html (so the live site always matches source) ---
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install build dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build (app.jsx -> index.html)
+        run: npm run build
+      # ---------------------------------------------------------------------------
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
+          # The repo root is already the site root (index.html lives here,
+          # freshly rebuilt from app.jsx by the step above).
           path: .
 
       - name: Deploy
