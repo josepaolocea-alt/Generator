@@ -9851,6 +9851,7 @@ https://bit.ly/4vrcu64`;
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
       const imageEditor = imageNormalizeState(merged.imageEditor);
+      const recorder = recorderNormalizeState(merged.recorder);
       const googleSheets = {
         clientId: (merged.googleSheets && typeof merged.googleSheets.clientId === 'string')
           ? merged.googleSheets.clientId
@@ -9877,14 +9878,1422 @@ https://bit.ly/4vrcu64`;
         rcaSignatories,
         rcaCompany,
         imageEditor,
+        recorder,
         googleSheets,
       };
     }
 
+    /* ────────────────────────────────────────────────────────────────────
+       Recorder module (admin only)
+       Paste VOS / dashboard screenshots → OCR (Tesseract.js, lazy-loaded)
+       → match configured gateway/metric names → commit numbers into a
+       per-client month grid → export the hourly record workbook.
+       Screenshots are processed in-memory only; `state.recorder` holds
+       nothing but plain numbers + config (same localStorage/Firestore
+       budget rules as the Image Editor — see PROJECT_RESUME §11b).
+       ──────────────────────────────────────────────────────────────────── */
+
+    const RECORDER_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let recorderUidCounter = 0;
+    function recorderUid() {
+      recorderUidCounter += 1;
+      return 'rc' + Date.now().toString(36) + (recorderUidCounter % 1296).toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+    function recorderRowsSeed(prefix, defs) {
+      return defs.map(([label, color, aliases], i) => ({
+        id: `${prefix}_${i + 1}`, label, color, aliases: aliases || [],
+      }));
+    }
+    // Seeded from VOS_MIRTA_Record_Aug_2026.xlsx — row order, group colors and
+    // separator colors reproduce that workbook exactly.
+    const RECORDER_DEFAULT_CLIENTS = [
+      { id: 'rc_vos', name: 'VOS', type: 'gateway', bordered: false, headerBorder: false, sepColor: '#000000',
+        rows: recorderRowsSeed('rv', [
+          ['IN_ETPI-SIP', '#FFFF00'],
+          ['IN_GLOBE-SIP', '#FFFF00'],
+          ['IN_PLDT-FCS-CYN', '#FFFF00'],
+          ['IN_PLDT-SIP', '#FFFF00'],
+          ['IN_PLDT-SIP-FEDEX', '#FFFF00'],
+          ['IN_PLDT-SIP-TOKU', '#FFFF00'],
+          ['V_ETPI-SIP', '#FFE599'],
+          ['V_ETPI-SIP RANDOM', '#FFE599'],
+          ['V_ETPI-SIP RANDOM_MOB', '#FFE599'],
+          ['V_PLDT-SIP', '#FFE599'],
+          ['V_PLDT-FCS-CYN', '#FFD966'],
+          ['V_PLDT-FCS-CYN RANDOM', '#FFD966'],
+          ['V_PLDT-FCS-CYN RANDOM_MNL', '#FFD966'],
+          ['V_PLDT-FCS-CYN RANDOM_MOB', '#FFD966'],
+        ]) },
+      { id: 'rc_twilio', name: 'VOS TWILIO', type: 'gateway', bordered: false, headerBorder: true, sepColor: '#000000',
+        rows: recorderRowsSeed('rt', [
+          ['C_CYN_TWILIO  STD', '#FFFF00'],
+          ['C_CYN_TWILIO  STD2', '#FFFF00'],
+          ['C_CYN_TWILIO  STD3', '#FFFF00'],
+          ['C_CYN_TWILIO  STD5', '#FFFF00'],
+        ]) },
+      { id: 'rc_kingsford', name: 'KINGSFORD INOUT', type: 'cards', bordered: true, headerBorder: true, sepColor: '#000000',
+        rows: recorderRowsSeed('rk', [
+          ['Current Inbound', '#FFFF00'],
+          ['MaxInbound', '#FFFF00', ['Max Inbound']],
+          ['Current Outbound', '#FFFF00'],
+          ['Max Outbound', '#FFFF00'],
+        ]) },
+      { id: 'rc_unobank', name: 'UNOBANK IN', type: 'cards', bordered: true, headerBorder: true, sepColor: '#FFE599',
+        rows: recorderRowsSeed('ru', [
+          ['Current Inbound', '#FFFF00'],
+          ['MaxInbound', '#FFFF00', ['Max Inbound']],
+        ]) },
+      { id: 'rc_myvelox', name: 'MYVELOX INOUT', type: 'cards', bordered: true, headerBorder: true, sepColor: '#000000',
+        rows: recorderRowsSeed('rm', [
+          ['Current Inbound', '#FFFF00'],
+          ['MaxInbound', '#FFFF00', ['Max Inbound']],
+          ['Current Outbound', '#FFFF00'],
+          ['Max Outbound', '#FFFF00'],
+        ]) },
+    ];
+
+    function recorderNormalizeClient(c) {
+      if (!c || typeof c !== 'object') return null;
+      const rows = Array.isArray(c.rows) ? c.rows.map(r => {
+        if (!r || typeof r !== 'object' || !r.label) return null;
+        return {
+          id: String(r.id || recorderUid()),
+          label: String(r.label),
+          color: presetColorHex(r.color, '#FFFF00'),
+          aliases: Array.isArray(r.aliases) ? r.aliases.map(a => String(a)).filter(Boolean) : [],
+        };
+      }).filter(Boolean) : [];
+      return {
+        id: String(c.id || recorderUid()),
+        name: String(c.name || 'Client'),
+        type: c.type === 'cards' ? 'cards' : 'gateway',
+        bordered: !!c.bordered,
+        headerBorder: !!c.headerBorder,
+        sepColor: presetColorHex(c.sepColor, '#000000'),
+        rows,
+      };
+    }
+    // Rebuilt field-by-field so a stale cache can never smuggle blobs or
+    // malformed entries into the synced doc (same idea as imageNormalizeState).
+    function recorderNormalizeState(raw) {
+      const src = raw && typeof raw === 'object' ? raw : {};
+      const clients = Array.isArray(src.clients) && src.clients.length
+        ? src.clients.map(recorderNormalizeClient).filter(Boolean)
+        : RECORDER_DEFAULT_CLIENTS.map(c => ({ ...c, rows: c.rows.map(r => ({ ...r, aliases: [...r.aliases] })) }));
+      const values = {};
+      if (src.values && typeof src.values === 'object') {
+        for (const [cid, byDate] of Object.entries(src.values)) {
+          if (!byDate || typeof byDate !== 'object') continue;
+          const cOut = {};
+          for (const [d, byRow] of Object.entries(byDate)) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !byRow || typeof byRow !== 'object') continue;
+            const dOut = {};
+            for (const [rid, byHour] of Object.entries(byRow)) {
+              if (!byHour || typeof byHour !== 'object') continue;
+              const hOut = {};
+              for (const [h, v] of Object.entries(byHour)) {
+                const hi = Number(h), vi = Number(v);
+                if (Number.isInteger(hi) && hi >= 0 && hi < 24 && Number.isFinite(vi)) hOut[hi] = vi;
+              }
+              if (Object.keys(hOut).length) dOut[rid] = hOut;
+            }
+            if (Object.keys(dOut).length) cOut[d] = dOut;
+          }
+          if (Object.keys(cOut).length) values[cid] = cOut;
+        }
+      }
+      return {
+        tab: ['capture', 'data', 'config', 'rules'].includes(src.tab) ? src.tab : 'capture',
+        clients,
+        values,
+        filePattern: (typeof src.filePattern === 'string' && src.filePattern.trim()) ? src.filePattern.trim() : 'VOS_MIRTA_Record_{Month}_{Year}',
+        // Strict by default: sibling gateways can differ by just 2 characters
+        // (RANDOM_MNL / RANDOM_MOB, V_GLOBE / IN_GLOBE), which 'normal' would
+        // cross-match when the unwatched sibling appears in the screenshot.
+        match: ['strict', 'normal', 'loose'].includes(src.match) ? src.match : 'strict',
+        overwrite: src.overwrite !== false,
+        upscale: src.upscale !== false,
+        clampMax: (Number.isFinite(Number(src.clampMax)) && Number(src.clampMax) > 0) ? Math.floor(Number(src.clampMax)) : 9999,
+      };
+    }
+
+    /* ── Recorder: name matching ── */
+    const recorderNorm = s => String(s || '').toUpperCase().replace(/\u00A0/g, ' ').replace(/\|/g, 'I').replace(/\s+/g, ' ').trim();
+    const recorderSig = s => recorderNorm(s).replace(/[^A-Z0-9]/g, '');
+    function recorderLev(a, b, cap = 3) {
+      if (a === b) return 0;
+      const la = a.length, lb = b.length;
+      if (Math.abs(la - lb) > cap) return cap + 1;
+      if (!la || !lb) return Math.max(la, lb);
+      let prev = Array.from({ length: lb + 1 }, (_, i) => i);
+      for (let i = 1; i <= la; i++) {
+        const cur = [i];
+        let rowMin = i;
+        for (let j = 1; j <= lb; j++) {
+          cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+          if (cur[j] < rowMin) rowMin = cur[j];
+        }
+        if (rowMin > cap) return cap + 1;
+        prev = cur;
+      }
+      return prev[lb] > cap ? cap + 1 : prev[lb];
+    }
+    function recorderWordLike(text, target) {
+      const a = String(text || '').toLowerCase().replace(/[^a-z]/g, '');
+      if (!a) return false;
+      if (a === target) return true;
+      const cap = target.length >= 6 ? 2 : 1;
+      return recorderLev(a, target, cap) <= cap;
+    }
+    // Exact (normalized) match first, then signature match (separators removed),
+    // then unique fuzzy match. Never prefix/contains — several watched names are
+    // prefixes of each other (IN_PLDT-SIP vs IN_PLDT-SIP-TOKU, STD vs STD2 …).
+    function recorderMatchGatewayRow(name, clients, mode) {
+      const n = recorderNorm(name), g = recorderSig(name);
+      if (!g) return null;
+      const all = [];
+      for (const c of clients) {
+        if (c.type !== 'gateway') continue;
+        for (const r of c.rows) all.push({ c, r });
+      }
+      let hit = all.find(({ r }) => recorderNorm(r.label) === n || r.aliases.some(a => recorderNorm(a) === n));
+      if (!hit) hit = all.find(({ r }) => recorderSig(r.label) === g || r.aliases.some(a => recorderSig(a) === g));
+      if (hit) return { clientId: hit.c.id, rowId: hit.r.id, label: hit.r.label, exact: true };
+      const maxD = mode === 'strict' ? 1 : mode === 'loose' ? 3 : 2;
+      let best = null, bestD = maxD + 1, secondD = maxD + 1;
+      for (const { c, r } of all) {
+        let d = recorderLev(recorderSig(r.label), g, maxD);
+        for (const a of r.aliases) d = Math.min(d, recorderLev(recorderSig(a), g, maxD));
+        if (d < bestD) { secondD = bestD; bestD = d; best = { c, r }; }
+        else if (d < secondD) secondD = d;
+      }
+      if (best && bestD <= maxD && bestD < secondD) {
+        return { clientId: best.c.id, rowId: best.r.id, label: best.r.label, exact: false, dist: bestD };
+      }
+      return null;
+    }
+    function recorderMatchClientRow(name, client) {
+      const n = recorderNorm(name), g = recorderSig(name);
+      const row = client.rows.find(r =>
+        recorderNorm(r.label) === n || recorderSig(r.label) === g
+        || r.aliases.some(a => recorderNorm(a) === n || recorderSig(a) === g));
+      return row || null;
+    }
+
+    /* ── Recorder: OCR (Tesseract.js, injected on first use) ── */
+    let recorderTessScriptPromise = null;
+    function recorderLoadTesseract() {
+      if (window.Tesseract) return Promise.resolve(window.Tesseract);
+      if (!recorderTessScriptPromise) {
+        recorderTessScriptPromise = new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+          s.onload = () => window.Tesseract ? resolve(window.Tesseract) : reject(new Error('OCR engine loaded but is unavailable'));
+          s.onerror = () => { recorderTessScriptPromise = null; reject(new Error('Could not download the OCR engine — check the internet connection')); };
+          document.head.appendChild(s);
+        });
+      }
+      return recorderTessScriptPromise;
+    }
+    let recorderWorkerPromise = null;
+    function recorderEnsureWorker() {
+      if (!recorderWorkerPromise) {
+        recorderWorkerPromise = (async () => {
+          const T = await recorderLoadTesseract();
+          const worker = await T.createWorker('eng', 1, {
+            logger: m => { try { window.__recorderOcrProgress && window.__recorderOcrProgress(m); } catch {} },
+          });
+          await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+          return worker;
+        })().catch(err => { recorderWorkerPromise = null; throw err; });
+      }
+      return recorderWorkerPromise;
+    }
+    async function recorderFileToCanvas(file, upscale) {
+      let source = null, w = 0, h = 0;
+      try {
+        source = await createImageBitmap(file);
+        w = source.width; h = source.height;
+      } catch {
+        source = await new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(file);
+          const img = new Image();
+          img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+          img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image')); };
+          img.src = url;
+        });
+        w = source.naturalWidth; h = source.naturalHeight;
+      }
+      if (!w || !h) throw new Error('Could not read that image');
+      // Small UI crops OCR poorly at native size; 2-3× upscale + grayscale
+      // measurably improves Tesseract on 11px table text.
+      const scale = (upscale && w < 1600) ? Math.max(2, Math.min(3, Math.round(1600 / w))) : 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = w * scale; canvas.height = h * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      try { ctx.filter = 'grayscale(1) contrast(1.15)'; } catch {}
+      ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+    function recorderThumb(canvas) {
+      const w = Math.min(260, canvas.width);
+      const h = Math.max(1, Math.round(canvas.height * (w / canvas.width)));
+      const t = document.createElement('canvas');
+      t.width = w; t.height = h;
+      t.getContext('2d').drawImage(canvas, 0, 0, w, h);
+      return t.toDataURL('image/png');
+    }
+    function recorderWordsFromOcr(data) {
+      let words = Array.isArray(data && data.words) ? data.words : [];
+      if (!words.length && Array.isArray(data && data.blocks)) {
+        for (const b of data.blocks) {
+          for (const p of (b.paragraphs || [])) {
+            for (const l of (p.lines || [])) words.push(...(l.words || []));
+          }
+        }
+      }
+      return words
+        .filter(w => w && w.text && w.bbox)
+        .map(w => ({
+          text: String(w.text).trim(),
+          conf: Number(w.confidence != null ? w.confidence : 0),
+          x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1,
+        }))
+        .filter(w => w.text);
+    }
+    function recorderClusterRows(words) {
+      if (!words.length) return [];
+      const sorted = [...words].sort((a, b) => ((a.y0 + a.y1) / 2) - ((b.y0 + b.y1) / 2));
+      const heights = sorted.map(w => w.y1 - w.y0).sort((a, b) => a - b);
+      const medH = heights[Math.floor(heights.length / 2)] || 12;
+      const rows = [];
+      for (const w of sorted) {
+        const yc = (w.y0 + w.y1) / 2;
+        const row = rows.find(r => Math.abs(r.yc - yc) <= medH * 0.72);
+        if (row) { row.words.push(w); row.yc = row.yc + (yc - row.yc) / row.words.length; }
+        else rows.push({ yc, words: [w] });
+      }
+      rows.forEach(r => r.words.sort((a, b) => a.x0 - b.x0));
+      return { rows, medH };
+    }
+    // A value token must be digit-shaped BEFORE repair (0/O, 1/I/l, 5/S), so
+    // name fragments like "STD5" can never be mistaken for a reading.
+    function recorderNumFromToken(text, maxDigits) {
+      const t = String(text || '');
+      if (/[#,.:%()]/.test(t)) return null;
+      if (!/^[0-9OoIl|Ss]{1,6}$/.test(t)) return null;
+      const s = t.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/[Ss]/g, '5');
+      if (!/^\d+$/.test(s) || s.length > maxDigits) return null;
+      return parseInt(s, 10);
+    }
+    // Gateway names never contain #, %, commas or long digit runs — prefix
+    // cells always do. Used to cut the name off even when the column
+    // boundary could not be located from the header.
+    function recorderLooksPrefixy(text) {
+      const t = String(text || '');
+      return /[#%,;]/.test(t) || /^\d{5,}$/.test(t) || /\.{2,}/.test(t);
+    }
+    function recorderParseTable(words, imgW) {
+      const { rows, medH } = recorderClusterRows(words);
+      let headerRow = null, prefixX = null, valueX = null;
+      for (const r of rows) {
+        for (let i = 0; i < r.words.length; i++) {
+          const w = r.words[i], next = r.words[i + 1];
+          // OCR sometimes merges header cells into one token ("Gatewayname").
+          if ((recorderWordLike(w.text, 'gateway') && next && recorderWordLike(next.text, 'name')) || recorderWordLike(w.text, 'gatewayname')) { headerRow = r; break; }
+        }
+        if (headerRow) break;
+      }
+      if (headerRow) {
+        for (let i = 0; i < headerRow.words.length; i++) {
+          const w = headerRow.words[i];
+          if (prefixX == null && recorderWordLike(w.text, 'prefix')) {
+            const before = headerRow.words[i - 1];
+            prefixX = (before && recorderWordLike(before.text, 'gateway')) ? before.x0 : w.x0;
+          }
+          if (prefixX == null && recorderWordLike(w.text, 'gatewayprefix')) prefixX = w.x0;
+          if (recorderWordLike(w.text, 'number') || recorderWordLike(w.text, 'numberofcalling')) valueX = w.x0;
+          if (valueX == null && recorderWordLike(w.text, 'calling')) valueX = w.x0 - Math.round(medH * 4);
+        }
+      }
+      const entries = [];
+      const nameStop = (prefixX != null ? prefixX : (valueX != null ? valueX : imgW * 0.6)) - Math.max(6, medH * 0.4);
+      for (const r of rows) {
+        if (headerRow && r.yc <= headerRow.yc + medH * 0.8) continue;
+        const nameParts = [];
+        for (const w of r.words) {
+          if (w.x0 >= nameStop) break;
+          if (recorderLooksPrefixy(w.text)) break;
+          if (nameParts.length && recorderNumFromToken(w.text, 6) != null) break;
+          nameParts.push(w);
+        }
+        const nameText = nameParts.map(w => w.text).join(' ').trim();
+        if (!nameText || recorderSig(nameText).length < 3) continue;
+        let value = null, vconf = 100;
+        const windowed = valueX != null ? r.words.filter(w => ((w.x0 + w.x1) / 2) >= valueX - 10) : [];
+        for (let i = windowed.length - 1; i >= 0; i--) {
+          const n = recorderNumFromToken(windowed[i].text, 6);
+          if (n != null) { value = n; vconf = windowed[i].conf; break; }
+        }
+        if (value == null) {
+          // No value column located — fall back to the rightmost short number
+          // in the row (≤4 digits so prefix fragments can't qualify).
+          const lastName = nameParts.length ? nameParts[nameParts.length - 1] : null;
+          for (let i = r.words.length - 1; i >= 0; i--) {
+            const w = r.words[i];
+            if (lastName && w.x0 <= lastName.x0) break;
+            const n = recorderNumFromToken(w.text, 4);
+            if (n != null) { value = n; vconf = w.conf; break; }
+          }
+        }
+        const nameConf = nameParts.length ? Math.min(...nameParts.map(w => w.conf)) : 0;
+        entries.push({ name: nameText, value, conf: Math.round(Math.min(nameConf, vconf)), y: r.yc });
+      }
+      return entries;
+    }
+    const RECORDER_CARD_LABELS = [
+      ['current', 'inbound', 'Current Inbound'],
+      ['max', 'inbound', 'Max Inbound'],
+      ['current', 'outbound', 'Current Outbound'],
+      ['max', 'outbound', 'Max Outbound'],
+    ];
+    function recorderParseCards(words) {
+      const { rows } = recorderClusterRows(words);
+      const found = [];
+      for (const r of (rows || [])) {
+        for (let i = 0; i < r.words.length; i++) {
+          const a = r.words[i], b = r.words[i + 1];
+          for (const [w1, w2, label] of RECORDER_CARD_LABELS) {
+            if (found.some(f => f.label === label)) continue;
+            if (b && recorderWordLike(a.text, w1) && recorderWordLike(b.text, w2)) {
+              found.push({ label, x0: a.x0, x1: b.x1, y0: Math.min(a.y0, b.y0), conf: Math.min(a.conf, b.conf) });
+            } else if (recorderWordLike(a.text, w1 + w2)) {
+              found.push({ label, x0: a.x0, x1: a.x1, y0: a.y0, conf: a.conf });
+            }
+          }
+        }
+      }
+      const entries = [];
+      for (const f of found) {
+        const width = Math.max(40, f.x1 - f.x0);
+        const cands = words
+          .filter(w => w.y1 <= f.y0 + 2)
+          .filter(w => {
+            const xc = (w.x0 + w.x1) / 2;
+            return xc >= f.x0 - width * 0.8 && xc <= f.x1 + width * 0.8;
+          })
+          .sort((a, b) => (f.y0 - a.y1) - (f.y0 - b.y1));
+        let value = null, conf = f.conf;
+        for (const c of cands) {
+          const n = recorderNumFromToken(c.text, 6);
+          if (n != null) { value = n; conf = Math.min(conf, c.conf); break; }
+        }
+        entries.push({ name: f.label, value, conf: Math.round(conf), y: f.y0 });
+      }
+      entries.sort((a, b) => a.y - b.y || a.name.localeCompare(b.name));
+      return entries;
+    }
+    function recorderClassifyWords(words) {
+      let gateway = false, cardWords = 0;
+      for (const w of words) {
+        if (recorderWordLike(w.text, 'gateway') || recorderWordLike(w.text, 'gatewayname')) gateway = true;
+        if (recorderWordLike(w.text, 'inbound') || recorderWordLike(w.text, 'outbound')
+          || recorderWordLike(w.text, 'currentinbound') || recorderWordLike(w.text, 'maxinbound')
+          || recorderWordLike(w.text, 'currentoutbound') || recorderWordLike(w.text, 'maxoutbound')) cardWords++;
+      }
+      if (gateway) return 'table';
+      if (cardWords >= 1) return 'cards';
+      return 'table';
+    }
+
+    /* ── Recorder: workbook build / import ── */
+    const RECORDER_BORDER_COLOR = 'FF374151';
+    function recorderThinBorder(sides) {
+      const edge = { style: 'thin', color: { argb: RECORDER_BORDER_COLOR } };
+      const b = {};
+      for (const s of sides) b[s] = edge;
+      return b;
+    }
+    function recorderSheetName(name) {
+      const clean = String(name || 'Sheet').replace(/[\\/*?:\[\]]/g, ' ').trim().slice(0, 31);
+      return clean || 'Sheet';
+    }
+    function recorderFileName(pattern, year, monthIdx) {
+      let out = String(pattern || 'Record_{Month}_{Year}')
+        .replace(/\{Month\}/g, RECORDER_MONTHS[monthIdx] || '')
+        .replace(/\{Year\}/g, String(year));
+      if (!/\.xlsx$/i.test(out)) out += '.xlsx';
+      return out;
+    }
+    function recorderBuildWorkbook(rec, year, monthIdx) {
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Generator App — Recorder';
+      wb.created = new Date();
+      const days = new Date(year, monthIdx + 1, 0).getDate();
+      const headerFont = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      const baseFont = { name: 'Calibri', size: 11 };
+      const boldFont = { name: 'Calibri', size: 11, bold: true };
+      const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+      for (const client of rec.clients) {
+        if (!client.rows.length) continue;
+        const ws = wb.addWorksheet(recorderSheetName(client.name), {
+          views: [{ state: 'frozen', xSplit: 2, ySplit: 1, topLeftCell: 'C2', activePane: 'bottomRight' }],
+        });
+        ws.getColumn(1).width = 14;
+        ws.getColumn(2).width = 34;
+        for (let c = 3; c <= 26; c++) ws.getColumn(c).width = 8;
+        const headerBorder = client.headerBorder ? recorderThinBorder(['top', 'bottom']) : null;
+        for (let c = 1; c <= 26; c++) {
+          const cell = ws.getCell(1, c);
+          cell.value = c === 1 ? 'DATE' : c === 2 ? '' : HOURS_24[c - 3];
+          cell.font = headerFont;
+          cell.fill = headerFill;
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          if (headerBorder) cell.border = headerBorder;
+        }
+        const byDate = (rec.values[client.id]) || {};
+        let r = 2;
+        for (let day = 1; day <= days; day++) {
+          const iso = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const byRow = byDate[iso] || {};
+          const blockLen = client.rows.length;
+          client.rows.forEach((row, i) => {
+            const rr = r + i;
+            const aCell = ws.getCell(rr, 1);
+            if (i === 0) {
+              aCell.value = new Date(Date.UTC(year, monthIdx, day));
+              aCell.numFmt = 'mmm d, yyyy';
+              aCell.font = boldFont;
+              aCell.alignment = { horizontal: 'center', vertical: 'middle' };
+            }
+            if (client.bordered) {
+              const sides = ['left', 'right'];
+              if (i === 0) sides.push('top');
+              if (i === blockLen - 1) sides.push('bottom');
+              aCell.border = recorderThinBorder(sides);
+            }
+            const bCell = ws.getCell(rr, 2);
+            bCell.value = row.label;
+            bCell.font = baseFont;
+            bCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(row.color) } };
+            bCell.alignment = { horizontal: 'left', vertical: 'middle' };
+            if (client.bordered) bCell.border = recorderThinBorder(['left', 'right', 'top', 'bottom']);
+            const byHour = byRow[row.id] || {};
+            for (let h = 0; h < 24; h++) {
+              const cell = ws.getCell(rr, 3 + h);
+              const v = byHour[h];
+              if (v != null) cell.value = v;
+              cell.font = baseFont;
+              cell.alignment = { horizontal: 'center' };
+              if (client.bordered) cell.border = recorderThinBorder(['left', 'right', 'top', 'bottom']);
+            }
+          });
+          const sepRow = r + blockLen;
+          const sepFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(client.sepColor) } };
+          for (let c = 1; c <= 26; c++) ws.getCell(sepRow, c).fill = sepFill;
+          r = sepRow + 1;
+        }
+      }
+      return wb;
+    }
+    function recorderCellText(v) {
+      if (v == null) return '';
+      if (typeof v === 'object') {
+        if (typeof v.richText !== 'undefined') return (v.richText || []).map(t => t.text).join('');
+        if (typeof v.text !== 'undefined') return String(v.text);
+        if (typeof v.result !== 'undefined') return String(v.result);
+        return '';
+      }
+      return String(v);
+    }
+    function recorderCoerceDateIso(v) {
+      if (v instanceof Date && !isNaN(v)) {
+        return `${v.getUTCFullYear()}-${String(v.getUTCMonth() + 1).padStart(2, '0')}-${String(v.getUTCDate()).padStart(2, '0')}`;
+      }
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 20000 && n < 80000) {
+        const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000);
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      }
+      return null;
+    }
+    function recorderCoerceNumber(v) {
+      if (v == null || v === '') return null;
+      if (typeof v === 'object') {
+        if (typeof v.result !== 'undefined') return recorderCoerceNumber(v.result);
+        return null;
+      }
+      const n = Number(String(v).replace(/,/g, '').trim());
+      return Number.isFinite(n) ? n : null;
+    }
+    // Merge an existing record workbook (same layout) into rec.values —
+    // used to pick up a month that was partly recorded before this module.
+    async function recorderImportWorkbook(rec, arrayBuffer) {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(arrayBuffer);
+      const values = JSON.parse(JSON.stringify(rec.values || {}));
+      let count = 0, sheets = 0;
+      wb.eachSheet(ws => {
+        const client = rec.clients.find(c => recorderSig(c.name) === recorderSig(ws.name));
+        if (!client) return;
+        sheets++;
+        let curDate = null;
+        ws.eachRow(row => {
+          const iso = recorderCoerceDateIso(row.getCell(1).value);
+          if (iso) curDate = iso;
+          if (!curDate) return;
+          const label = recorderCellText(row.getCell(2).value).trim();
+          if (!label) return;
+          const target = recorderMatchClientRow(label, client);
+          if (!target) return;
+          for (let h = 0; h < 24; h++) {
+            const num = recorderCoerceNumber(row.getCell(3 + h).value);
+            if (num == null) continue;
+            const cv = values[client.id] = values[client.id] || {};
+            const dv = cv[curDate] = cv[curDate] || {};
+            const rv = dv[target.id] = dv[target.id] || {};
+            rv[h] = num;
+            count++;
+          }
+        });
+      });
+      return { values, count, sheets };
+    }
+
+    /* ── Recorder: shared UI helpers ── */
+    const recorderTodayIso = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    function recorderPrettyDate(iso) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+      if (!m) return String(iso || '');
+      return `${RECORDER_MONTHS[Number(m[2]) - 1]} ${Number(m[3])}`;
+    }
+    function recorderApplyWrites(values, writes, overwrite) {
+      let written = 0, skipped = 0;
+      const next = { ...values };
+      for (const wr of writes) {
+        const cv = next[wr.clientId] = { ...(next[wr.clientId] || {}) };
+        const dv = cv[wr.dateIso] = { ...(cv[wr.dateIso] || {}) };
+        const rv = dv[wr.rowId] = { ...(dv[wr.rowId] || {}) };
+        if (wr.value == null) {
+          if (rv[wr.hour] != null) { delete rv[wr.hour]; written++; }
+        } else if (!overwrite && rv[wr.hour] != null) {
+          skipped++;
+        } else {
+          rv[wr.hour] = wr.value; written++;
+        }
+        if (!Object.keys(rv).length) delete dv[wr.rowId];
+        if (!Object.keys(dv).length) delete cv[wr.dateIso];
+        if (!Object.keys(cv).length) delete next[wr.clientId];
+      }
+      return { next, written, skipped };
+    }
+    function recorderSlotFilled(rec, client, target) {
+      const byRow = ((rec.values[client.id] || {})[target.date]) || {};
+      return client.rows.some(r => (byRow[r.id] || {})[target.hour] != null);
+    }
+    function recorderSuggestCardsClient(rec, target, excludeIds) {
+      const cards = rec.clients.filter(c => c.type === 'cards');
+      const free = cards.find(c => !excludeIds.includes(c.id) && !recorderSlotFilled(rec, c, target));
+      return free ? free.id : (cards[0] ? cards[0].id : null);
+    }
+    function recorderRowsFromEntries(entries, kind, rec, clientId) {
+      const rows = [], ignored = [];
+      for (const e of entries) {
+        let match = null;
+        if (kind === 'cards') {
+          const client = rec.clients.find(c => c.id === clientId);
+          const row = client ? recorderMatchClientRow(e.name, client) : null;
+          if (row) match = { clientId, rowId: row.id, label: row.label, exact: true };
+        } else {
+          match = recorderMatchGatewayRow(e.name, rec.clients, rec.match);
+        }
+        if (match) {
+          rows.push({
+            key: recorderUid(), clientId: match.clientId, rowId: match.rowId, label: match.label,
+            ocrName: e.name, value: e.value == null ? '' : String(e.value), conf: e.conf, exact: !!match.exact,
+          });
+        } else {
+          ignored.push(`${e.name}${e.value != null ? ' = ' + e.value : ''}`);
+        }
+      }
+      return { rows, ignored };
+    }
+    function recorderParseIntOr(raw, fallback) {
+      const n = parseInt(String(raw), 10);
+      return Number.isFinite(n) ? n : fallback;
+    }
+
+    /* ── Recorder: components ── */
+    function RecorderDropZone({ onFiles, engine }) {
+      const fileRef = useRef(null);
+      const [over, setOver] = useState(false);
+      return (
+        <div
+          onDragOver={e => { e.preventDefault(); setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={e => {
+            e.preventDefault(); setOver(false);
+            const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter(f => String(f.type || '').startsWith('image/'));
+            if (files.length) onFiles(files);
+          }}
+          className={`rounded-lg border-2 border-dashed px-6 py-9 text-center transition-colors ${over ? 'border-blue-500/70 bg-blue-500/5' : 'border-neutral-800 bg-neutral-950/60'}`}>
+          <div className="flex items-center justify-center gap-2 text-sm text-neutral-300 font-medium">
+            <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">Ctrl</kbd>
+            <span className="text-neutral-600">+</span>
+            <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">V</kbd>
+            <span>paste a screenshot — or drop image files here</span>
+          </div>
+          <div className="mt-1.5 text-xs text-neutral-600">Gateway tables and Current/Max Inbound-Outbound cards are detected automatically. Queue as many screenshots as you need for the hour.</div>
+          <div className="mt-4 flex items-center justify-center">
+            <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
+              onChange={e => { const files = [...(e.target.files || [])]; if (files.length) onFiles(files); e.target.value = ''; }} />
+            <Btn variant="ghost" size="md" onClick={() => fileRef.current && fileRef.current.click()}><IconUpload /> Choose images</Btn>
+          </div>
+          {(engine.status === 'loading' || engine.status === 'working') && (
+            <div className="mt-3 text-[11px] text-blue-300">{engine.label || 'Working…'}</div>
+          )}
+        </div>
+      );
+    }
+
+    function RecorderCaptureCard({ cap, rec, target, onAssign, onValue, onCommit, onDiscard }) {
+      const cardsClients = rec.clients.filter(c => c.type === 'cards');
+      const existing = (clientId, rowId) => ((((rec.values[clientId] || {})[target.date]) || {})[rowId] || {})[target.hour];
+      return (
+        <div className="rounded-lg border border-neutral-900 bg-neutral-950 p-4">
+          <div className="flex flex-wrap items-start gap-4">
+            <div className="w-[180px] shrink-0">
+              {cap.thumb
+                ? <img src={cap.thumb} alt="" className="w-full rounded border border-neutral-800" />
+                : <div className="h-20 rounded border border-neutral-800 bg-neutral-900 animate-pulse" />}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {cap.status === 'ocr' && <Pill tone="accent">Reading…</Pill>}
+                {cap.status === 'ready' && <Pill tone="accent">{cap.kind === 'cards' ? 'Cards' : 'Gateway table'}</Pill>}
+                {cap.status === 'ready' && <Pill tone={cap.rows.length ? 'success' : 'muted'}>{cap.rows.length} matched</Pill>}
+                {cap.status === 'empty' && <Pill tone="muted">Nothing readable</Pill>}
+                {cap.status === 'error' && <Pill tone="muted">Failed</Pill>}
+              </div>
+            </div>
+            <div className="flex-1 min-w-[260px]">
+              {cap.status === 'error' && <p className="text-xs text-red-300">{cap.error}</p>}
+              {cap.status === 'ocr' && <p className="text-xs text-neutral-500">Running OCR…</p>}
+              {cap.status === 'empty' && <p className="text-xs text-neutral-500">No values were recognized. Try a tighter screenshot of the table, or type the numbers in the “Still missing” panel below.</p>}
+              {cap.status === 'ready' && (
+                <>
+                  {cap.kind === 'cards' && (
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wide text-neutral-500">Client</span>
+                      <Select value={cap.clientId || ''} onChange={e => onAssign(cap.id, e.target.value)} className="!w-auto min-w-[180px]">
+                        {cardsClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </Select>
+                      <span className="text-[10px] text-amber-300/80">check this — card screenshots look alike</span>
+                    </div>
+                  )}
+                  {cap.rows.length > 0 && (
+                    <div className="grid gap-1.5 sm:grid-cols-2">
+                      {cap.rows.map(row => {
+                        const prev = existing(row.clientId, row.rowId);
+                        const clientName = (rec.clients.find(c => c.id === row.clientId) || {}).name || '';
+                        const flagged = row.conf < 70 || !row.exact;
+                        return (
+                          <div key={row.key} className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 ${flagged ? 'border-amber-500/40 bg-amber-500/5' : 'border-neutral-900 bg-neutral-900/50'}`}>
+                            <div className="flex-1 min-w-0">
+                              <div className="truncate text-xs text-neutral-200" title={`${clientName} · OCR read: ${row.ocrName}`}>{row.label}</div>
+                              <div className="truncate text-[10px] text-neutral-600">
+                                {clientName}
+                                {!row.exact ? ' · fuzzy match' : ''}
+                                {row.conf < 70 ? ` · low confidence` : ''}
+                                {prev != null ? ` · overwrites ${prev}` : ''}
+                              </div>
+                            </div>
+                            <input value={row.value} onChange={e => onValue(cap.id, row.key, e.target.value.replace(/[^0-9]/g, ''))}
+                              inputMode="numeric" placeholder="—"
+                              className="w-14 shrink-0 rounded border border-neutral-800 bg-neutral-950 px-1.5 py-1 text-center text-sm text-neutral-100 outline-none focus:border-blue-500/60" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {cap.rows.length === 0 && (
+                    <p className="text-xs text-amber-300/90">Text was read but none of it matches the watchlist. Check the Config tab (names/aliases) if this screenshot should be recorded.</p>
+                  )}
+                  {cap.ignored.length > 0 && (
+                    <div className="mt-2 text-[10px] leading-relaxed text-neutral-600">
+                      Ignored (not watched): {cap.ignored.join(' · ')}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-col gap-2">
+              {cap.status === 'ready' && cap.rows.length > 0 && <Btn variant="primary" size="md" onClick={onCommit}>Save</Btn>}
+              <Btn variant="ghost" size="md" onClick={onDiscard}><IconX /> Discard</Btn>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function RecorderMissingPanel({ missing, manual, setManual, hourLabel }) {
+      if (!missing.length) {
+        return (
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-300">
+            Every watched row has a value for this slot (saved or pending).
+          </div>
+        );
+      }
+      return (
+        <div className="rounded-lg border border-neutral-900 bg-neutral-950 p-4">
+          <SectionLabel hint="type anything the screenshots did not cover">Still missing at {hourLabel}</SectionLabel>
+          <div className="space-y-3">
+            {missing.map(group => (
+              <div key={group.client.id}>
+                <div className="mb-1.5 text-[10px] uppercase tracking-wide text-neutral-500">{group.client.name}</div>
+                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.rows.map(row => {
+                    const k = group.client.id + '|' + row.id;
+                    return (
+                      <div key={row.id} className="flex items-center gap-2 rounded-md border border-neutral-900 bg-neutral-900/40 px-2.5 py-1.5">
+                        <div className="flex-1 truncate text-xs text-neutral-300" title={row.label}>{row.label}</div>
+                        <input value={manual[k] || ''} onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ''); setManual(m => ({ ...m, [k]: v })); }}
+                          inputMode="numeric" placeholder="—"
+                          className="w-14 shrink-0 rounded border border-neutral-800 bg-neutral-950 px-1.5 py-1 text-center text-sm text-neutral-100 outline-none focus:border-blue-500/60" />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function RecorderDataTab({ rec, setRec, onToast, confirmDialog, onImport }) {
+      const [clientSel, setClientSel] = useState(() => (rec.clients[0] ? rec.clients[0].id : null));
+      const [date, setDate] = useState(recorderTodayIso());
+      const importRef = useRef(null);
+      const client = rec.clients.find(c => c.id === clientSel) || rec.clients[0];
+      if (!client) return <p className="text-sm text-neutral-500">No clients configured — add one in the Config tab.</p>;
+      const monthPrefix = date.slice(0, 7);
+      const [yy, mm] = monthPrefix.split('-').map(Number);
+      const daysInMonth = new Date(yy, mm, 0).getDate();
+      const byDate = rec.values[client.id] || {};
+      const byRow = byDate[date] || {};
+      const today = recorderTodayIso();
+      const curHour = new Date().getHours();
+      const setCell = (rowId, hour, raw) => {
+        const t = String(raw).trim();
+        const v = t === '' ? null : Math.min(recorderParseIntOr(t, 0), rec.clampMax);
+        setRec(r => ({ ...r, values: recorderApplyWrites(r.values, [{ clientId: client.id, dateIso: date, rowId, hour, value: v }], true).next }));
+      };
+      const shiftDay = (delta) => {
+        const d = new Date(yy, mm - 1, Number(date.slice(8, 10)) + delta);
+        setDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      };
+      const clearScope = async (scope) => {
+        const ok = await confirmDialog({
+          title: scope === 'day' ? `Clear ${client.name} — ${recorderPrettyDate(date)}?` : `Clear ${client.name} — entire ${RECORDER_MONTHS[mm - 1]} ${yy}?`,
+          message: 'The recorded values in this range will be removed. This cannot be undone.',
+          confirmText: 'Clear', tone: 'danger',
+        });
+        if (!ok) return;
+        setRec(r => {
+          const cv = { ...(r.values[client.id] || {}) };
+          if (scope === 'day') delete cv[date];
+          else for (const k of Object.keys(cv)) if (k.startsWith(monthPrefix + '-')) delete cv[k];
+          const values = { ...r.values };
+          if (Object.keys(cv).length) values[client.id] = cv; else delete values[client.id];
+          return { ...r, values };
+        });
+        onToast('ok', scope === 'day' ? 'Day cleared' : 'Month cleared');
+      };
+      return (
+        <div className="max-w-full space-y-4 anim-fade-in">
+          <div className="flex flex-wrap items-center gap-2">
+            {rec.clients.map(c => (
+              <button key={c.id} onClick={() => setClientSel(c.id)}
+                className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${c.id === client.id ? 'bg-white text-black border-white' : 'border-neutral-800 text-neutral-400 hover:text-neutral-100 hover:border-neutral-600'}`}>
+                {c.name}
+              </button>
+            ))}
+            <div className="ml-auto flex items-center gap-2">
+              <input ref={importRef} type="file" accept=".xlsx" className="hidden"
+                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) onImport(f); e.target.value = ''; }} />
+              <Btn variant="ghost" size="md" onClick={() => importRef.current && importRef.current.click()} title="Merge an existing record workbook (same tab layout) into the saved values">
+                <IconUpload /> Import month
+              </Btn>
+              <Btn variant="ghost" size="md" onClick={() => clearScope('day')}>Clear day</Btn>
+              <Btn variant="danger" size="md" onClick={() => clearScope('month')}>Clear month</Btn>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn variant="ghost" size="md" onClick={() => shiftDay(-1)}><IconUp className="rotate-[-90deg]" />‹</Btn>
+            <Input type="date" value={date} onChange={e => e.target.value && setDate(e.target.value)} className="!w-auto" />
+            <Btn variant="ghost" size="md" onClick={() => shiftDay(1)}>›</Btn>
+            <span className="text-[11px] text-neutral-600">cells are editable — blank means not recorded</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {Array.from({ length: daysInMonth }, (_, i) => {
+              const dIso = `${monthPrefix}-${String(i + 1).padStart(2, '0')}`;
+              const dRows = byDate[dIso] || {};
+              let filled = 0;
+              for (const r of client.rows) filled += Object.keys(dRows[r.id] || {}).length;
+              const total = client.rows.length * 24;
+              const cls = filled === 0 ? 'bg-neutral-900 text-neutral-600' : filled >= total ? 'bg-emerald-500/70 text-black' : 'bg-blue-500/40 text-blue-100';
+              return (
+                <button key={dIso} onClick={() => setDate(dIso)} title={`${dIso} — ${filled}/${total} cells`}
+                  className={`h-6 w-7 rounded text-[10px] font-medium transition-transform hover:scale-105 ${cls} ${dIso === date ? 'ring-1 ring-white/70' : ''}`}>
+                  {i + 1}
+                </button>
+              );
+            })}
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-neutral-900">
+            <table className="min-w-full border-collapse text-xs">
+              <thead>
+                <tr>
+                  <th className="sticky left-0 z-10 border-b border-neutral-900 bg-neutral-950 px-3 py-2 text-left font-semibold text-neutral-400">{recorderPrettyDate(date)}</th>
+                  {HOURS_24.map((h, i) => (
+                    <th key={i} className={`border-b border-neutral-900 bg-neutral-950 px-1 py-2 text-center font-medium ${i === curHour && date === today ? 'text-blue-300' : 'text-neutral-500'}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {client.rows.map(row => (
+                  <tr key={row.id} className="odd:bg-neutral-950/50">
+                    <td className="sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1">
+                      <span className="mr-2 inline-block h-2 w-2 rounded-sm align-middle" style={{ background: row.color }} />
+                      <span className="align-middle text-neutral-200">{row.label}</span>
+                    </td>
+                    {HOURS_24.map((_, h) => {
+                      const v = (byRow[row.id] || {})[h];
+                      return (
+                        <td key={h} className="border-b border-neutral-900/60 p-0.5 text-center">
+                          <input value={v == null ? '' : String(v)} onChange={e => setCell(row.id, h, e.target.value.replace(/[^0-9]/g, ''))}
+                            inputMode="numeric"
+                            className={`w-10 rounded bg-transparent px-0.5 py-1 text-center outline-none focus:bg-neutral-800 ${v != null ? 'text-neutral-100' : 'text-neutral-600'}`} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function RecorderConfigTab({ rec, setRec, confirmDialog, onToast }) {
+      const [selId, setSelId] = useState(() => (rec.clients[0] ? rec.clients[0].id : null));
+      const client = rec.clients.find(c => c.id === selId) || rec.clients[0];
+      const patchClient = (id, patch) => setRec(r => ({ ...r, clients: r.clients.map(c => c.id === id ? { ...c, ...patch } : c) }));
+      const patchRow = (cid, rid, patch) => setRec(r => ({
+        ...r,
+        clients: r.clients.map(c => c.id !== cid ? c : { ...c, rows: c.rows.map(rw => rw.id === rid ? { ...rw, ...patch } : rw) }),
+      }));
+      const moveClient = (id, dir) => setRec(r => {
+        const i = r.clients.findIndex(c => c.id === id), j = i + dir;
+        if (i < 0 || j < 0 || j >= r.clients.length) return r;
+        const clients = [...r.clients];
+        [clients[i], clients[j]] = [clients[j], clients[i]];
+        return { ...r, clients };
+      });
+      const moveRow = (cid, rid, dir) => setRec(r => ({
+        ...r,
+        clients: r.clients.map(c => {
+          if (c.id !== cid) return c;
+          const i = c.rows.findIndex(rw => rw.id === rid), j = i + dir;
+          if (i < 0 || j < 0 || j >= c.rows.length) return c;
+          const rows = [...c.rows];
+          [rows[i], rows[j]] = [rows[j], rows[i]];
+          return { ...c, rows };
+        }),
+      }));
+      const addClient = () => {
+        const id = recorderUid();
+        setRec(r => ({ ...r, clients: [...r.clients, { id, name: 'NEW CLIENT', type: 'gateway', bordered: true, headerBorder: true, sepColor: '#000000', rows: [] }] }));
+        setSelId(id);
+      };
+      const removeClient = async (c) => {
+        const ok = await confirmDialog({
+          title: `Delete client “${c.name}”?`,
+          message: 'Its watch rows and its recorded values will be removed from the Recorder.',
+          confirmText: 'Delete', tone: 'danger',
+        });
+        if (!ok) return;
+        setRec(r => {
+          const values = { ...r.values };
+          delete values[c.id];
+          return { ...r, clients: r.clients.filter(x => x.id !== c.id), values };
+        });
+      };
+      const addRow = () => setRec(r => ({
+        ...r,
+        clients: r.clients.map(c => c.id !== client.id ? c : { ...c, rows: [...c.rows, { id: recorderUid(), label: 'NEW ROW', color: '#FFFF00', aliases: [] }] }),
+      }));
+      const removeRow = (rid) => setRec(r => ({
+        ...r,
+        clients: r.clients.map(c => c.id !== client.id ? c : { ...c, rows: c.rows.filter(rw => rw.id !== rid) }),
+      }));
+      const restoreDefaults = async () => {
+        const ok = await confirmDialog({
+          title: 'Restore the default clients & rows?',
+          message: 'The client list goes back to the built-in 5-tab setup (VOS, VOS TWILIO, KINGSFORD INOUT, UNOBANK IN, MYVELOX INOUT). Recorded values are kept.',
+          confirmText: 'Restore', tone: 'danger',
+        });
+        if (!ok) return;
+        setRec(r => ({ ...r, clients: RECORDER_DEFAULT_CLIENTS.map(c => ({ ...c, rows: c.rows.map(rw => ({ ...rw, aliases: [...rw.aliases] })) })) }));
+        onToast('ok', 'Default clients restored');
+      };
+      if (!client) {
+        return (
+          <div className="anim-fade-in">
+            <Btn variant="primary" size="md" onClick={addClient}><IconPlus /> Add client</Btn>
+          </div>
+        );
+      }
+      return (
+        <div className="grid max-w-6xl gap-6 lg:grid-cols-[280px,1fr] anim-fade-in">
+          <div>
+            <SectionLabel hint="workbook tab order">Clients</SectionLabel>
+            <div className="space-y-1.5">
+              {rec.clients.map((c, i) => (
+                <div key={c.id} className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 ${c.id === client.id ? 'border-blue-500/50 bg-blue-500/5' : 'border-neutral-900 bg-neutral-950'}`}>
+                  <button onClick={() => setSelId(c.id)} className="min-w-0 flex-1 truncate text-left text-xs text-neutral-200" title={c.name}>{c.name}</button>
+                  <Pill tone="muted">{c.type === 'cards' ? 'cards' : 'table'}</Pill>
+                  <button onClick={() => moveClient(c.id, -1)} disabled={i === 0} className="text-neutral-600 hover:text-neutral-200 disabled:opacity-30"><IconUp /></button>
+                  <button onClick={() => moveClient(c.id, 1)} disabled={i === rec.clients.length - 1} className="text-neutral-600 hover:text-neutral-200 disabled:opacity-30"><IconDown /></button>
+                  <button onClick={() => removeClient(c)} className="text-neutral-600 hover:text-red-300" title="Delete client"><IconX /></button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 space-y-2">
+              <Btn variant="ghost" size="md" className="w-full" onClick={addClient}><IconPlus /> Add client</Btn>
+              <Btn variant="ghost" size="md" className="w-full" onClick={restoreDefaults}><IconReset /> Restore defaults</Btn>
+            </div>
+          </div>
+          <div className="min-w-0 space-y-5">
+            <div>
+              <SectionLabel>Client settings</SectionLabel>
+              <div className="grid gap-3 rounded-lg border border-neutral-900 bg-neutral-950 p-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Sheet / tab name</label>
+                  <Input value={client.name} onChange={e => patchClient(client.id, { name: e.target.value })} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Screenshot type</label>
+                  <Select value={client.type} onChange={e => patchClient(client.id, { type: e.target.value })}>
+                    <option value="gateway">Gateway table (name + Number of calling)</option>
+                    <option value="cards">Metric cards (Current/Max In-Outbound)</option>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-neutral-300">
+                    <input type="checkbox" className="h-4 w-4 accent-blue-500" checked={client.bordered} onChange={e => patchClient(client.id, { bordered: e.target.checked })} />
+                    Cell borders in the export
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-neutral-300">
+                    <input type="checkbox" className="h-4 w-4 accent-blue-500" checked={client.headerBorder} onChange={e => patchClient(client.id, { headerBorder: e.target.checked })} />
+                    Header border
+                  </label>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] uppercase tracking-wide text-neutral-500">Separator row</span>
+                  <PresetColorPicker value={client.sepColor} onChange={hex => patchClient(client.id, { sepColor: hex })} title="Separator row color" />
+                </div>
+              </div>
+            </div>
+            <div>
+              <SectionLabel hint="order = row order inside each day block">Watched rows</SectionLabel>
+              <div className="space-y-1.5">
+                {client.rows.map((row, i) => (
+                  <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-900 bg-neutral-950 px-2.5 py-2">
+                    <PresetColorPicker value={row.color} onChange={hex => patchRow(client.id, row.id, { color: hex })} title="Name cell color" showHex={false} />
+                    <Input value={row.label} onChange={e => patchRow(client.id, row.id, { label: e.target.value })} className="!w-64 font-mono !text-xs" />
+                    <Input key={row.id + '_al'} defaultValue={row.aliases.join(', ')}
+                      onBlur={e => patchRow(client.id, row.id, { aliases: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                      placeholder="aliases (comma separated) — extra names OCR may read"
+                      className="!w-72 flex-1 !text-xs" />
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <button onClick={() => moveRow(client.id, row.id, -1)} disabled={i === 0} className="text-neutral-600 hover:text-neutral-200 disabled:opacity-30"><IconUp /></button>
+                      <button onClick={() => moveRow(client.id, row.id, 1)} disabled={i === client.rows.length - 1} className="text-neutral-600 hover:text-neutral-200 disabled:opacity-30"><IconDown /></button>
+                      <button onClick={() => removeRow(row.id)} className="text-neutral-600 hover:text-red-300" title="Remove row"><IconX /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2">
+                <Btn variant="ghost" size="md" onClick={addRow}><IconPlus /> Add row</Btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function RecorderRulesTab({ rec, setRec, engine, onPreload }) {
+      const patch = (p) => setRec(r => ({ ...r, ...p }));
+      const Row = ({ label, hint, children }) => (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950 px-4 py-3">
+          <div className="min-w-[240px] flex-1">
+            <div className="text-sm text-neutral-200">{label}</div>
+            {hint && <div className="mt-0.5 text-[11px] text-neutral-600">{hint}</div>}
+          </div>
+          <div className="flex items-center gap-2">{children}</div>
+        </div>
+      );
+      return (
+        <div className="max-w-3xl space-y-2.5 anim-fade-in">
+          <Row label="Name matching" hint="How OCR text is matched to watched rows. Exact matches always win; this only sets how much OCR misreading is tolerated.">
+            <Select value={rec.match} onChange={e => patch({ match: e.target.value })} className="!w-auto">
+              <option value="strict">Strict — 1 misread character (recommended)</option>
+              <option value="normal">Normal — 2 (may cross-match similar names)</option>
+              <option value="loose">Loose — 3 (risky with sibling names)</option>
+            </Select>
+          </Row>
+          <Row label="Overwrite on save" hint="When a cell already has a value for the slot, saving a capture replaces it. Off = existing values are kept.">
+            <input type="checkbox" className="h-4 w-4 accent-blue-500" checked={rec.overwrite} onChange={e => patch({ overwrite: e.target.checked })} />
+          </Row>
+          <Row label="Upscale small screenshots" hint="2–3× enlargement before OCR. Helps with small UI text; turn off only if reading gets worse.">
+            <input type="checkbox" className="h-4 w-4 accent-blue-500" checked={rec.upscale} onChange={e => patch({ upscale: e.target.checked })} />
+          </Row>
+          <Row label="Maximum value" hint="Readings above this are clamped — protects against a prefix number sneaking in as a value.">
+            <Input type="number" value={rec.clampMax} onChange={e => patch({ clampMax: Math.max(1, recorderParseIntOr(e.target.value, 9999)) })} className="!w-28" />
+          </Row>
+          <Row label="Export file name" hint="{Month} and {Year} are replaced at download time.">
+            <Input value={rec.filePattern} onChange={e => patch({ filePattern: e.target.value })} className="!w-80 font-mono !text-xs" />
+          </Row>
+          <Row label="OCR engine" hint="Tesseract.js — downloaded from CDN on first use (a few MB, then cached by the browser). Screenshots never leave this machine.">
+            <Pill tone={engine.status === 'ready' ? 'success' : engine.status === 'idle' ? 'default' : 'accent'}>
+              {engine.status === 'ready' ? 'Ready' : engine.status === 'idle' ? 'Not loaded' : (engine.label || 'Loading…')}
+            </Pill>
+            {engine.status !== 'ready' && <Btn variant="ghost" size="md" onClick={onPreload}>Load now</Btn>}
+          </Row>
+        </div>
+      );
+    }
+
+    function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setTarget, engine, slotStats, exportSel, setExportSel, onExport, busyExport }) {
+      const theme = state.theme || 'dark';
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      const exportYear = recorderParseIntOr(exportSel.year, new Date().getFullYear());
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Recorder</h1>
+            <p className="text-xs text-neutral-500 mt-1">Screenshots → hourly record workbook</p>
+            <AccountChip sync={sync} />
+          </div>
+          <div className="p-5 flex-1 overflow-y-auto min-h-0 space-y-5">
+            <div>
+              <SectionLabel hint="every capture saves here">Recording slot</SectionLabel>
+              <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
+                <Input type="date" value={target.date} onChange={e => { const v = e.target.value; if (v) setTarget(t => ({ ...t, date: v })); }} />
+                <div className="flex gap-2">
+                  <Select value={target.hour} onChange={e => setTarget(t => ({ ...t, hour: Number(e.target.value) }))}>
+                    {HOURS_24.map((h, i) => <option key={i} value={i}>{h}</option>)}
+                  </Select>
+                  <Btn variant="ghost" size="md" onClick={() => setTarget({ date: recorderTodayIso(), hour: new Date().getHours() })}>Now</Btn>
+                </div>
+              </div>
+            </div>
+            <div>
+              <SectionLabel hint="saved values at this slot">Coverage</SectionLabel>
+              <div className="space-y-1.5">
+                {slotStats.map(s => (
+                  <div key={s.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="min-w-0 truncate text-neutral-400">{s.name}</span>
+                    <Pill tone={s.filled >= s.total && s.total > 0 ? 'success' : s.filled ? 'accent' : 'default'}>{s.filled}/{s.total}</Pill>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <SectionLabel hint={engine.status === 'ready' ? 'loaded' : 'loads on first capture'}>OCR engine</SectionLabel>
+              <Pill tone={engine.status === 'ready' ? 'success' : engine.status === 'idle' ? 'default' : 'accent'}>
+                {engine.status === 'ready' ? 'Ready' : engine.status === 'idle' ? 'Not loaded' : (engine.label || 'Loading…')}
+              </Pill>
+              <p className="mt-2 text-[10px] leading-relaxed text-neutral-600">
+                Screenshots are read in this browser only — images are never stored in the app state or synced to the cloud.
+              </p>
+            </div>
+          </div>
+          <div className="p-5 border-t border-neutral-900 space-y-3">
+            <div>
+              <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Export month</label>
+              <div className="flex gap-2">
+                <Select value={exportSel.month} onChange={e => setExportSel(x => ({ ...x, month: Number(e.target.value) }))}>
+                  {RECORDER_MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                </Select>
+                <Input type="number" value={exportSel.year} onChange={e => setExportSel(x => ({ ...x, year: e.target.value }))} className="!w-24" />
+              </div>
+            </div>
+            <Btn variant="primary" size="lg" onClick={onExport} disabled={busyExport} className="w-full">
+              {busyExport ? <><span className="loader"></span> Building</> : <><IconDownload /> Download workbook</>}
+            </Btn>
+            <p className="truncate text-center font-mono text-[10px] text-neutral-600" title={recorderFileName(rec.filePattern, exportYear, exportSel.month)}>
+              {recorderFileName(rec.filePattern, exportYear, exportSel.month)}
+            </p>
+          </div>
+        </aside>
+      );
+    }
+
+    function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast, confirmDialog }) {
+      const rec = useMemo(() => recorderNormalizeState(state.recorder), [state.recorder]);
+      const setRec = useCallback((next) => setState(s => {
+        const prev = recorderNormalizeState(s.recorder);
+        return { ...s, recorder: typeof next === 'function' ? next(prev) : next };
+      }), [setState]);
+      const [captures, setCaptures] = useState([]);
+      const [manual, setManual] = useState({});
+      const [target, setTarget] = useState(() => ({ date: recorderTodayIso(), hour: new Date().getHours() }));
+      const [engine, setEngine] = useState(() => ({ status: recorderWorkerPromise ? 'ready' : 'idle', label: '' }));
+      const [busyExport, setBusyExport] = useState(false);
+      const [exportSel, setExportSel] = useState(() => ({ month: new Date().getMonth(), year: new Date().getFullYear() }));
+      const queueRef = useRef(Promise.resolve());
+      const recRef = useRef(rec); recRef.current = rec;
+      const targetRef = useRef(target); targetRef.current = target;
+
+      useEffect(() => {
+        window.__recorderOcrProgress = (m) => {
+          if (!m || !m.status) return;
+          if (m.status === 'recognizing text') {
+            setEngine({ status: 'working', label: `Reading ${Math.round((m.progress || 0) * 100)}%` });
+          } else if (/load|init/i.test(m.status)) {
+            setEngine({ status: 'loading', label: 'Loading OCR engine…' });
+          }
+        };
+        return () => { window.__recorderOcrProgress = null; };
+      }, []);
+
+      const processFile = useCallback((file) => {
+        const id = recorderUid();
+        setCaptures(list => [...list, { id, status: 'ocr', kind: null, thumb: null, entries: [], rows: [], ignored: [], clientId: null, error: null }]);
+        setRec(r => r.tab === 'capture' ? r : { ...r, tab: 'capture' });
+        queueRef.current = queueRef.current.then(async () => {
+          try {
+            const canvas = await recorderFileToCanvas(file, recRef.current.upscale);
+            const thumb = recorderThumb(canvas);
+            setCaptures(list => list.map(c => c.id === id ? { ...c, thumb } : c));
+            const worker = await recorderEnsureWorker();
+            const { data } = await worker.recognize(canvas);
+            setEngine({ status: 'ready', label: '' });
+            const words = recorderWordsFromOcr(data);
+            const kind = recorderClassifyWords(words);
+            const entries = kind === 'cards' ? recorderParseCards(words) : recorderParseTable(words, canvas.width);
+            setCaptures(list => {
+              const assigned = list.filter(c => c.id !== id && c.kind === 'cards' && c.clientId).map(c => c.clientId);
+              const r = recRef.current;
+              const clientId = kind === 'cards' ? recorderSuggestCardsClient(r, targetRef.current, assigned) : null;
+              const { rows, ignored } = recorderRowsFromEntries(entries, kind, r, clientId);
+              return list.map(c => c.id === id ? { ...c, status: entries.length ? 'ready' : 'empty', kind, entries, rows, ignored, clientId } : c);
+            });
+          } catch (err) {
+            setEngine(e => e.status === 'working' || e.status === 'loading' ? { status: 'idle', label: '' } : e);
+            setCaptures(list => list.map(c => c.id === id ? { ...c, status: 'error', error: String((err && err.message) || err) } : c));
+          }
+        });
+      }, [setRec]);
+
+      // Paste anywhere while this module is active (same pattern as Image Editor).
+      useEffect(() => {
+        const onPaste = (e) => {
+          const items = (e.clipboardData && e.clipboardData.items) || [];
+          let took = false;
+          for (const item of items) {
+            if (item.kind === 'file' && String(item.type || '').startsWith('image/')) {
+              const f = item.getAsFile();
+              if (f) { took = true; processFile(f); }
+            }
+          }
+          if (took) e.preventDefault();
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+      }, [processFile]);
+
+      const assignCardsClient = (capId, clientId) => setCaptures(list => list.map(c => {
+        if (c.id !== capId) return c;
+        const { rows, ignored } = recorderRowsFromEntries(c.entries, 'cards', recRef.current, clientId);
+        return { ...c, clientId, rows, ignored };
+      }));
+      const changeValue = (capId, rowKey, value) => setCaptures(list => list.map(c =>
+        c.id !== capId ? c : { ...c, rows: c.rows.map(rw => rw.key === rowKey ? { ...rw, value } : rw) }));
+      const discardCapture = (capId) => setCaptures(list => list.filter(c => c.id !== capId));
+
+      const buildWrites = (caps, manualMap) => {
+        const writes = [];
+        const r = recRef.current;
+        for (const cap of caps) {
+          if (cap.status !== 'ready') continue;
+          for (const row of cap.rows) {
+            const t = String(row.value).trim();
+            if (t === '' || !row.clientId) continue;
+            writes.push({ clientId: row.clientId, dateIso: targetRef.current.date, rowId: row.rowId, hour: targetRef.current.hour, value: Math.min(recorderParseIntOr(t, 0), r.clampMax) });
+          }
+        }
+        for (const [k, val] of Object.entries(manualMap)) {
+          const t = String(val).trim();
+          if (t === '') continue;
+          const sep = k.indexOf('|');
+          writes.push({ clientId: k.slice(0, sep), dateIso: targetRef.current.date, rowId: k.slice(sep + 1), hour: targetRef.current.hour, value: Math.min(recorderParseIntOr(t, 0), r.clampMax) });
+        }
+        return writes;
+      };
+      const commitWrites = (writes) => {
+        if (!writes.length) { onToast('err', 'Nothing to save yet'); return false; }
+        const preview = recorderApplyWrites(recRef.current.values, writes, recRef.current.overwrite);
+        setRec(r => ({ ...r, values: recorderApplyWrites(r.values, writes, r.overwrite).next }));
+        onToast('ok', `Saved ${preview.written} value${preview.written === 1 ? '' : 's'} → ${recorderPrettyDate(targetRef.current.date)} · ${HOURS_24[targetRef.current.hour]}${preview.skipped ? ` (${preview.skipped} kept — overwrite is off)` : ''}`);
+        return true;
+      };
+      const commitOne = (cap) => { if (commitWrites(buildWrites([cap], {}))) discardCapture(cap.id); };
+      const commitAll = () => { if (commitWrites(buildWrites(captures, manual))) { setCaptures([]); setManual({}); } };
+
+      const missing = useMemo(() => {
+        const covered = new Set();
+        for (const cap of captures) {
+          if (cap.status !== 'ready') continue;
+          for (const row of cap.rows) if (String(row.value).trim() !== '') covered.add(row.clientId + '|' + row.rowId);
+        }
+        const out = [];
+        for (const c of rec.clients) {
+          const byRow = ((rec.values[c.id] || {})[target.date]) || {};
+          const rows = c.rows.filter(r => (byRow[r.id] || {})[target.hour] == null && !covered.has(c.id + '|' + r.id));
+          if (rows.length) out.push({ client: c, rows });
+        }
+        return out;
+      }, [captures, rec, target]);
+
+      const slotStats = useMemo(() => rec.clients.map(c => {
+        const byRow = ((rec.values[c.id] || {})[target.date]) || {};
+        return { id: c.id, name: c.name, filled: c.rows.filter(r => (byRow[r.id] || {})[target.hour] != null).length, total: c.rows.length };
+      }), [rec, target]);
+
+      const preloadEngine = async () => {
+        try {
+          setEngine({ status: 'loading', label: 'Loading OCR engine…' });
+          await recorderEnsureWorker();
+          setEngine({ status: 'ready', label: '' });
+          onToast('ok', 'OCR engine ready');
+        } catch (err) {
+          setEngine({ status: 'idle', label: '' });
+          onToast('err', String((err && err.message) || err));
+        }
+      };
+      const doExport = async () => {
+        setBusyExport(true);
+        try {
+          const year = recorderParseIntOr(exportSel.year, new Date().getFullYear());
+          const wb = recorderBuildWorkbook(recRef.current, year, exportSel.month);
+          const buf = await wb.xlsx.writeBuffer();
+          const fname = recorderFileName(recRef.current.filePattern, year, exportSel.month);
+          saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fname);
+          onToast('ok', `Downloaded ${fname}`);
+        } catch (err) {
+          onToast('err', `Export failed: ${String((err && err.message) || err)}`);
+        } finally {
+          setBusyExport(false);
+        }
+      };
+      const importFile = async (file) => {
+        try {
+          const buf = await file.arrayBuffer();
+          const { values, count, sheets } = await recorderImportWorkbook(recRef.current, buf);
+          if (!count) { onToast('err', 'No matching sheets / rows found in that workbook'); return; }
+          setRec(r => ({ ...r, values }));
+          onToast('ok', `Imported ${count} values from ${sheets} sheet${sheets === 1 ? '' : 's'}`);
+        } catch (err) {
+          onToast('err', `Import failed: ${String((err && err.message) || err)}`);
+        }
+      };
+
+      const hasPending = captures.some(c => c.status === 'ready' && c.rows.some(r => String(r.value).trim() !== ''))
+        || Object.values(manual).some(v => String(v).trim() !== '');
+      const TABS = [['capture', 'Capture'], ['data', 'Data'], ['config', 'Config'], ['rules', 'Rules']];
+
+      return (
+        <>
+          <RecorderSidebar state={state} setState={setState} rec={rec} sync={sync} onRetrySync={onRetrySync}
+            target={target} setTarget={setTarget} engine={engine} slotStats={slotStats}
+            exportSel={exportSel} setExportSel={setExportSel} onExport={doExport} busyExport={busyExport} />
+          <main className="flex-1 min-w-0 flex flex-col">
+            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-20">
+              <div className="app-title-block min-w-0">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module · Admin only</div>
+                <h2 className="truncate text-[22px] font-bold tracking-tight">Recorder</h2>
+              </div>
+              <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
+                <div className="flex items-center gap-1.5">
+                  {TABS.map(([id, label]) => (
+                    <button key={id} onClick={() => setRec(r => ({ ...r, tab: id }))}
+                      className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${rec.tab === id ? 'bg-white text-black border-white' : 'border-neutral-800 text-neutral-400 hover:text-neutral-100 hover:border-neutral-600'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {moduleSwitch}
+              </div>
+            </header>
+            <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+              {rec.tab === 'capture' && (
+                <div className="max-w-6xl space-y-5 anim-fade-in">
+                  <RecorderDropZone onFiles={files => files.forEach(processFile)} engine={engine} />
+                  {captures.map(cap => (
+                    <RecorderCaptureCard key={cap.id} cap={cap} rec={rec} target={target}
+                      onAssign={assignCardsClient} onValue={changeValue}
+                      onCommit={() => commitOne(cap)} onDiscard={() => discardCapture(cap.id)} />
+                  ))}
+                  <RecorderMissingPanel missing={missing} manual={manual} setManual={setManual} hourLabel={`${recorderPrettyDate(target.date)} · ${HOURS_24[target.hour]}`} />
+                  {hasPending && (
+                    <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/40 bg-[#0b1220]/95 px-4 py-3 backdrop-blur">
+                      <div className="text-xs text-neutral-300">
+                        Saving to <span className="font-semibold text-white">{recorderPrettyDate(target.date)}</span> · <span className="font-semibold text-white">{HOURS_24[target.hour]}</span>
+                        <span className="text-neutral-500"> — wrong slot? change it in the sidebar first</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Btn variant="ghost" size="md" onClick={() => { setCaptures([]); setManual({}); }}>Discard all</Btn>
+                        <Btn variant="accent" size="md" onClick={commitAll}>Commit all</Btn>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {rec.tab === 'data' && <RecorderDataTab rec={rec} setRec={setRec} onToast={onToast} confirmDialog={confirmDialog} onImport={importFile} />}
+              {rec.tab === 'config' && <RecorderConfigTab rec={rec} setRec={setRec} confirmDialog={confirmDialog} onToast={onToast} />}
+              {rec.tab === 'rules' && <RecorderRulesTab rec={rec} setRec={setRec} engine={engine} onPreload={preloadEngine} />}
+            </div>
+            <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+              <span className="font-mono">state.recorder · numbers only, images never stored</span>
+              <span>{rec.clients.length} clients · {rec.clients.reduce((n, c) => n + c.rows.length, 0)} watched rows</span>
+            </footer>
+          </main>
+        </>
+      );
+    }
+
+
     // Role-based access. Admin sees everything; semi-admin only gets the two
     // light-touch modules. Anyone signed in defaults to semi_admin.
     const ROLE_MODULES = {
-      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'image'],
+      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'image', 'recorder'],
       semi_admin: ['whitelist_sms', 'editor', 'rca'],
     };
     const ROLE_LABELS = { admin: 'Admin', semi_admin: 'Semi-admin' };
@@ -10873,6 +12282,7 @@ match /shared/whitelistSmsTestNumbers {
         { id: 'editor',  label: 'Editor' },
         { id: 'rca',     label: 'RCA' },
         { id: 'image',   label: 'Image Editor', adminOnly: true },
+        { id: 'recorder', label: 'Recorder', adminOnly: true },
         { id: 'users',   label: 'Users', adminOnly: true },
       ];
       const role = sync.role || 'semi_admin';
@@ -10900,6 +12310,7 @@ match /shared/whitelistSmsTestNumbers {
       const isWlSms = state.module === 'whitelist_sms';
       const isRca = state.module === 'rca';
       const isImage = state.module === 'image';
+      const isRecorder = state.module === 'recorder';
       const isUsers = state.module === 'users';
       const whitelistSms = wlSmsNormalizeState(state.whitelistSms);
       const setWhitelistSms = useCallback((next) => setState(s => {
@@ -10968,6 +12379,23 @@ match /shared/whitelistSmsTestNumbers {
             <ImageEditorModule
               state={state} setState={setState} sync={sync} onRetrySync={retrySync}
               moduleSwitch={ModuleSwitch} onToast={showToast} />
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
+
+      if (isRecorder) {
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <RecorderModule
+              state={state} setState={setState} sync={sync} onRetrySync={retrySync}
+              moduleSwitch={ModuleSwitch} onToast={showToast} confirmDialog={confirmDialog} />
             {toast && (
               <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
                 {toast.msg}
