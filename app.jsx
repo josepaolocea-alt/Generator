@@ -10020,6 +10020,13 @@ https://bit.ly/4vrcu64`;
     /* ── Recorder: name matching ── */
     const recorderNorm = s => String(s || '').toUpperCase().replace(/\u00A0/g, ' ').replace(/\|/g, 'I').replace(/\s+/g, ' ').trim();
     const recorderSig = s => recorderNorm(s).replace(/[^A-Z0-9]/g, '');
+    // Signature with classic OCR look-alikes folded to one class (5\u2194S, 0\u2194O/Q,
+    // 1\u2194I/L, 2\u2194Z, 8\u2194B, 6\u2194G). Both sides fold, so "C_CYN_TWILIO STDS" (misread
+    // 5) and the watched "C_CYN_TWILIO  STD5" land on the same string while
+    // STD2 / STD3 stay distinct.
+    const recorderFoldSig = s => recorderSig(s)
+      .replace(/[OQ]/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5')
+      .replace(/Z/g, '2').replace(/B/g, '8').replace(/G/g, '6');
     function recorderLev(a, b, cap = 3) {
       if (a === b) return 0;
       const la = a.length, lb = b.length;
@@ -10059,11 +10066,16 @@ https://bit.ly/4vrcu64`;
       let hit = all.find(({ r }) => recorderNorm(r.label) === n || r.aliases.some(a => recorderNorm(a) === n));
       if (!hit) hit = all.find(({ r }) => recorderSig(r.label) === g || r.aliases.some(a => recorderSig(a) === g));
       if (hit) return { clientId: hit.c.id, rowId: hit.r.id, label: hit.r.label, exact: true };
+      // Look-alike fold (5↔S etc.) — deterministic, but only when exactly one
+      // watched row folds onto the OCR text.
+      const f = recorderFoldSig(name);
+      const foldHits = all.filter(({ r }) => recorderFoldSig(r.label) === f || r.aliases.some(a => recorderFoldSig(a) === f));
+      if (foldHits.length === 1) return { clientId: foldHits[0].c.id, rowId: foldHits[0].r.id, label: foldHits[0].r.label, exact: true };
       const maxD = mode === 'strict' ? 1 : mode === 'loose' ? 3 : 2;
       let best = null, bestD = maxD + 1, secondD = maxD + 1;
       for (const { c, r } of all) {
-        let d = recorderLev(recorderSig(r.label), g, maxD);
-        for (const a of r.aliases) d = Math.min(d, recorderLev(recorderSig(a), g, maxD));
+        let d = recorderLev(recorderFoldSig(r.label), f, maxD);
+        for (const a of r.aliases) d = Math.min(d, recorderLev(recorderFoldSig(a), f, maxD));
         if (d < bestD) { secondD = bestD; bestD = d; best = { c, r }; }
         else if (d < secondD) secondD = d;
       }
@@ -10073,11 +10085,14 @@ https://bit.ly/4vrcu64`;
       return null;
     }
     function recorderMatchClientRow(name, client) {
-      const n = recorderNorm(name), g = recorderSig(name);
+      const n = recorderNorm(name), g = recorderSig(name), f = recorderFoldSig(name);
       const row = client.rows.find(r =>
         recorderNorm(r.label) === n || recorderSig(r.label) === g
         || r.aliases.some(a => recorderNorm(a) === n || recorderSig(a) === g));
-      return row || null;
+      if (row) return row;
+      const foldHits = client.rows.filter(r =>
+        recorderFoldSig(r.label) === f || r.aliases.some(a => recorderFoldSig(a) === f));
+      return foldHits.length === 1 ? foldHits[0] : null;
     }
 
     /* ── Recorder: OCR (Tesseract.js, injected on first use) ── */
@@ -10109,6 +10124,11 @@ https://bit.ly/4vrcu64`;
       }
       return recorderWorkerPromise;
     }
+    async function recorderRecognizeWords(worker, canvas, psm) {
+      await worker.setParameters({ tessedit_pageseg_mode: String(psm) });
+      const { data } = await worker.recognize(canvas);
+      return recorderWordsFromOcr(data);
+    }
     async function recorderFileToCanvas(file, upscale) {
       let source = null, w = 0, h = 0;
       try {
@@ -10125,9 +10145,10 @@ https://bit.ly/4vrcu64`;
         w = source.naturalWidth; h = source.naturalHeight;
       }
       if (!w || !h) throw new Error('Could not read that image');
-      // Small UI crops OCR poorly at native size; 2-3× upscale + grayscale
-      // measurably improves Tesseract on 11px table text.
-      const scale = (upscale && w < 1600) ? Math.max(2, Math.min(3, Math.round(1600 / w))) : 1;
+      // Small UI crops OCR poorly at native size; upscale + grayscale
+      // measurably improves Tesseract on 11px table text (aim ≥40px x-height
+      // for tight crops like the TWILIO 4-row table).
+      const scale = (upscale && w < 1600) ? Math.max(2, Math.min(4, Math.round(1800 / w))) : 1;
       const canvas = document.createElement('canvas');
       canvas.width = w * scale; canvas.height = h * scale;
       const ctx = canvas.getContext('2d');
@@ -10183,8 +10204,8 @@ https://bit.ly/4vrcu64`;
     function recorderNumFromToken(text, maxDigits) {
       const t = String(text || '');
       if (/[#,.:%()]/.test(t)) return null;
-      if (!/^[0-9OoIl|Ss]{1,6}$/.test(t)) return null;
-      const s = t.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/[Ss]/g, '5');
+      if (!/^[0-9OoQqIl|Ss]{1,6}$/.test(t)) return null;
+      const s = t.replace(/[OoQq]/g, '0').replace(/[Il|]/g, '1').replace(/[Ss]/g, '5');
       if (!/^\d+$/.test(s) || s.length > maxDigits) return null;
       return parseInt(s, 10);
     }
@@ -10251,7 +10272,27 @@ https://bit.ly/4vrcu64`;
         const nameConf = nameParts.length ? Math.min(...nameParts.map(w => w.conf)) : 0;
         entries.push({ name: nameText, value, conf: Math.round(Math.min(nameConf, vconf)), y: r.yc });
       }
-      return entries;
+      return { entries, meta: { valueX, nameStop, medH } };
+    }
+    // Same digit-dropping workaround as the cards: block mode loses lone
+    // small digits, so rows that came back valueless get their value column
+    // re-read from a sparse-mode (PSM 11) pass.
+    function recorderFillTableValuesFromSparse(entries, meta, sparseWords) {
+      const { valueX, nameStop, medH } = meta;
+      for (const e of entries) {
+        if (e.value != null) continue;
+        let best = null;
+        for (const w of sparseWords) {
+          const yc = (w.y0 + w.y1) / 2;
+          if (Math.abs(yc - e.y) > medH * 0.75) continue;
+          const xc = (w.x0 + w.x1) / 2;
+          if (valueX != null ? xc < valueX - 10 : w.x0 <= nameStop) continue;
+          const n = recorderNumFromToken(w.text, valueX != null ? 6 : 4);
+          if (n == null) continue;
+          if (!best || w.x0 > best.w.x0) best = { n, w };
+        }
+        if (best) { e.value = best.n; e.conf = Math.round(Math.min(e.conf, best.w.conf)); }
+      }
     }
     const RECORDER_CARD_LABELS = [
       ['current', 'inbound', 'Current Inbound'],
@@ -11093,11 +11134,35 @@ https://bit.ly/4vrcu64`;
             const thumb = recorderThumb(canvas);
             setCaptures(list => list.map(c => c.id === id ? { ...c, thumb } : c));
             const worker = await recorderEnsureWorker();
-            const { data } = await worker.recognize(canvas);
-            setEngine({ status: 'ready', label: '' });
-            const words = recorderWordsFromOcr(data);
+            const words = await recorderRecognizeWords(worker, canvas, 6);
             const kind = recorderClassifyWords(words);
-            const entries = kind === 'cards' ? recorderParseCards(words) : recorderParseTable(words, canvas.width);
+            let entries, tableMeta = null;
+            if (kind === 'cards') {
+              entries = recorderParseCards(words);
+            } else {
+              const parsed = recorderParseTable(words, canvas.width);
+              entries = parsed.entries;
+              tableMeta = parsed.meta;
+            }
+            // Block mode (PSM 6) drops lone small digits (card values, "0"
+            // readings in tight tables). Anything that came back valueless
+            // gets a sparse-mode (PSM 11) second read.
+            if (kind === 'cards' && (!entries.length || entries.some(e => e.value == null))) {
+              const sparse = recorderParseCards(await recorderRecognizeWords(worker, canvas, 11));
+              if (!entries.length) {
+                entries = sparse;
+              } else {
+                entries = entries.map(e => {
+                  if (e.value != null) return e;
+                  const alt = sparse.find(x => x.name === e.name);
+                  return (alt && alt.value != null) ? { ...e, value: alt.value, conf: Math.min(e.conf, alt.conf) } : e;
+                });
+                for (const x of sparse) if (!entries.some(e => e.name === x.name)) entries.push(x);
+              }
+            } else if (kind !== 'cards' && entries.length && entries.some(e => e.value == null)) {
+              recorderFillTableValuesFromSparse(entries, tableMeta, await recorderRecognizeWords(worker, canvas, 11));
+            }
+            setEngine({ status: 'ready', label: '' });
             setCaptures(list => {
               const assigned = list.filter(c => c.id !== id && c.kind === 'cards' && c.clientId).map(c => c.clientId);
               const r = recRef.current;
