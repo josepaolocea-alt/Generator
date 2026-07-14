@@ -8536,6 +8536,1168 @@ https://bit.ly/4vrcu64`;
     }
 
     /* ============================================================
+       Image Editor module
+       ------------------------------------------------------------
+       A paint-style quick-annotation surface: paste a screenshot (or drop /
+       pick any image file), draw arrows, circle things, blur or black out the
+       private parts, then copy the result back to the clipboard or download it.
+
+       WHERE THE PIXELS LIVE — read before adding anything here.
+       The image and its annotations are held in this component's own state and
+       are deliberately NOT part of `state` (the mrg_state_v1 object). That whole
+       object is JSON-stringified into localStorage on every edit and mirrored to
+       one Firestore document. A pasted screenshot is several MB once encoded —
+       it would blow the ~5MB localStorage quota and exceed Firestore's 1MB
+       document limit, which would break saving for every other module. Only the
+       small tool preferences in DEFAULT_IMAGE_STATE get persisted.
+       ============================================================ */
+
+    const IMAGE_FONT_STACK = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    const IMAGE_BLANK_SIZE = { w: 1280, h: 720 };
+    const IMAGE_COLORS = ['#EF4444', '#F97316', '#FACC15', '#22C55E', '#3B82F6', '#A855F7', '#FFFFFF', '#000000'];
+
+    const IMAGE_TOOLS = [
+      { id: 'select',    label: 'Select',    hotkey: 'V', hint: 'Move or delete an annotation' },
+      { id: 'pen',       label: 'Pen',       hotkey: 'P', hint: 'Freehand draw' },
+      { id: 'arrow',     label: 'Arrow',     hotkey: 'A', hint: 'Point at something' },
+      { id: 'line',      label: 'Line',      hotkey: 'L', hint: 'Straight line' },
+      { id: 'rect',      label: 'Box',       hotkey: 'R', hint: 'Rectangle outline' },
+      { id: 'ellipse',   label: 'Circle',    hotkey: 'C', hint: 'Circle / ellipse outline' },
+      { id: 'highlight', label: 'Highlight', hotkey: 'H', hint: 'Translucent marker' },
+      { id: 'text',      label: 'Text',      hotkey: 'T', hint: 'Click, then type' },
+      { id: 'blur',      label: 'Blur',      hotkey: 'B', hint: 'Blur out a region' },
+      { id: 'pixelate',  label: 'Pixelate',  hotkey: 'X', hint: 'Mosaic a region' },
+      { id: 'redact',    label: 'Redact',    hotkey: 'D', hint: 'Solid block-out' },
+      { id: 'crop',      label: 'Crop',      hotkey: 'K', hint: 'Drag a region, then apply' },
+    ];
+    const IMAGE_TOOL_IDS = new Set(IMAGE_TOOLS.map(t => t.id));
+
+    // Persisted preferences ONLY — every field here is a scalar.
+    const DEFAULT_IMAGE_STATE = {
+      tool: 'arrow',
+      color: '#EF4444',
+      strokeWidth: 5,
+      fontSize: 28,
+      blurStrength: 14,
+      pixelSize: 12,
+      exportFormat: 'png',
+    };
+
+    function imageNormalizeState(raw = {}) {
+      const src = raw && typeof raw === 'object' ? raw : {};
+      const num = (value, fallback, min, max) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+      };
+      // Rebuilt field by field rather than spread, so a stale cache can never
+      // smuggle a multi-MB data URL into the synced app state.
+      return {
+        tool: IMAGE_TOOL_IDS.has(src.tool) ? src.tool : DEFAULT_IMAGE_STATE.tool,
+        color: /^#[0-9a-f]{6}$/i.test(String(src.color || '')) ? String(src.color) : DEFAULT_IMAGE_STATE.color,
+        strokeWidth: num(src.strokeWidth, DEFAULT_IMAGE_STATE.strokeWidth, 1, 40),
+        fontSize: num(src.fontSize, DEFAULT_IMAGE_STATE.fontSize, 10, 160),
+        blurStrength: num(src.blurStrength, DEFAULT_IMAGE_STATE.blurStrength, 2, 50),
+        pixelSize: num(src.pixelSize, DEFAULT_IMAGE_STATE.pixelSize, 3, 60),
+        exportFormat: src.exportFormat === 'jpeg' ? 'jpeg' : 'png',
+      };
+    }
+
+    const imageId = () => `im_${Math.random().toString(36).slice(2, 9)}`;
+    const imageClamp = (v, min, max) => Math.min(max, Math.max(min, v));
+    const imageRectFrom = (a, b) => ({
+      x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+      w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y),
+    });
+
+    // ctx.filter (used for the real gaussian blur) is missing on some older
+    // browsers. Probe once; fall back to a mosaic, which redacts just as well.
+    let __imageFilterSupport = null;
+    function imageSupportsFilter() {
+      if (__imageFilterSupport === null) {
+        try {
+          const ctx = document.createElement('canvas').getContext('2d');
+          ctx.filter = 'blur(2px)';
+          __imageFilterSupport = ctx.filter === 'blur(2px)';
+        } catch { __imageFilterSupport = false; }
+      }
+      return __imageFilterSupport;
+    }
+
+    let __imageMeasureCtx = null;
+    function imageMeasureText(text, size) {
+      if (!__imageMeasureCtx) __imageMeasureCtx = document.createElement('canvas').getContext('2d');
+      __imageMeasureCtx.font = `600 ${size}px ${IMAGE_FONT_STACK}`;
+      const lines = String(text || '').split('\n');
+      let w = 0;
+      for (const line of lines) w = Math.max(w, __imageMeasureCtx.measureText(line || ' ').width);
+      return { w, h: lines.length * size * 1.25 };
+    }
+
+    function imageDrawPixelated(ctx, source, rect, size) {
+      const w = Math.round(rect.w), h = Math.round(rect.h);
+      if (w < 1 || h < 1) return;
+      const block = Math.max(2, Math.round(size) || 8);
+      const tw = Math.max(1, Math.round(w / block));
+      const th = Math.max(1, Math.round(h / block));
+      const tmp = document.createElement('canvas');
+      tmp.width = tw; tmp.height = th;
+      // Shrink the region down to one pixel per block, then blow it back up with
+      // smoothing off — that's the mosaic.
+      tmp.getContext('2d').drawImage(source, Math.round(rect.x), Math.round(rect.y), w, h, 0, 0, tw, th);
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tmp, 0, 0, tw, th, Math.round(rect.x), Math.round(rect.y), w, h);
+      ctx.restore();
+    }
+
+    function imageDrawBlurred(ctx, source, rect, strength) {
+      if (rect.w < 1 || rect.h < 1) return;
+      const radius = Math.max(1, Math.round(strength) || 10);
+      if (!imageSupportsFilter()) {
+        imageDrawPixelated(ctx, source, rect, Math.max(6, radius));
+        return;
+      }
+      // Sample a padded region so the blur kernel has real neighbouring pixels
+      // to average. Without the padding the edges of the region fade toward
+      // transparent instead of blending into the surrounding image.
+      const pad = radius * 2;
+      const sx = Math.max(0, Math.floor(rect.x - pad));
+      const sy = Math.max(0, Math.floor(rect.y - pad));
+      const sw = Math.min(source.width, Math.ceil(rect.x + rect.w + pad)) - sx;
+      const sh = Math.min(source.height, Math.ceil(rect.y + rect.h + pad)) - sy;
+      if (sw < 1 || sh < 1) return;
+      const tmp = document.createElement('canvas');
+      tmp.width = sw; tmp.height = sh;
+      tmp.getContext('2d').drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.w, rect.h);
+      ctx.clip();
+      ctx.filter = `blur(${radius}px)`;
+      ctx.drawImage(tmp, sx, sy);
+      ctx.restore();
+    }
+
+    function imageDrawShape(ctx, shape, canvas) {
+      const width = Math.max(1, Number(shape.width) || 1);
+      const color = shape.color || '#EF4444';
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = width;
+      switch (shape.type) {
+        case 'pen': {
+          const pts = shape.points || [];
+          if (!pts.length) break;
+          if (pts.length === 1) {
+            ctx.beginPath();
+            ctx.arc(pts[0][0], pts[0][1], width / 2, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+          }
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+          ctx.stroke();
+          break;
+        }
+        case 'line':
+          ctx.beginPath();
+          ctx.moveTo(shape.x1, shape.y1);
+          ctx.lineTo(shape.x2, shape.y2);
+          ctx.stroke();
+          break;
+        case 'arrow': {
+          const angle = Math.atan2(shape.y2 - shape.y1, shape.x2 - shape.x1);
+          const head = Math.max(12, width * 3.4);
+          const len = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1);
+          // Stop the shaft short of the head so the tip stays sharp.
+          const back = Math.min(head * 0.8, len);
+          ctx.beginPath();
+          ctx.moveTo(shape.x1, shape.y1);
+          ctx.lineTo(shape.x2 - back * Math.cos(angle), shape.y2 - back * Math.sin(angle));
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(shape.x2, shape.y2);
+          ctx.lineTo(shape.x2 - head * Math.cos(angle - Math.PI / 7), shape.y2 - head * Math.sin(angle - Math.PI / 7));
+          ctx.lineTo(shape.x2 - head * Math.cos(angle + Math.PI / 7), shape.y2 - head * Math.sin(angle + Math.PI / 7));
+          ctx.closePath();
+          ctx.fill();
+          break;
+        }
+        case 'rect':
+          ctx.strokeRect(shape.x, shape.y, shape.w, shape.h);
+          break;
+        case 'ellipse':
+          ctx.beginPath();
+          ctx.ellipse(shape.x + shape.w / 2, shape.y + shape.h / 2, Math.max(1, shape.w / 2), Math.max(1, shape.h / 2), 0, 0, Math.PI * 2);
+          ctx.stroke();
+          break;
+        case 'highlight':
+          ctx.globalAlpha = 0.35;
+          ctx.fillRect(shape.x, shape.y, shape.w, shape.h);
+          break;
+        case 'redact':
+          ctx.fillRect(shape.x, shape.y, shape.w, shape.h);
+          break;
+        case 'text': {
+          const size = Math.max(10, Number(shape.size) || 24);
+          ctx.font = `600 ${size}px ${IMAGE_FONT_STACK}`;
+          ctx.textBaseline = 'top';
+          // Dark halo so light-coloured text stays readable on a light screenshot.
+          ctx.lineWidth = Math.max(2, size / 7);
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          String(shape.text || '').split('\n').forEach((line, i) => {
+            const y = shape.y + i * size * 1.25;
+            ctx.strokeText(line, shape.x, y);
+            ctx.fillText(line, shape.x, y);
+          });
+          break;
+        }
+        case 'blur':
+          imageDrawBlurred(ctx, canvas, shape, shape.strength);
+          break;
+        case 'pixelate':
+          imageDrawPixelated(ctx, canvas, shape, shape.size);
+          break;
+        default:
+          break;
+      }
+      ctx.restore();
+    }
+
+    // Blur/pixelate sample the canvas itself, so shapes must be painted in order:
+    // whatever sits under a blur region at draw time is what gets blurred.
+    function imageRenderScene(canvas, scene, extraShape) {
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (scene.img) ctx.drawImage(scene.img, 0, 0, canvas.width, canvas.height);
+      for (const shape of scene.shapes) imageDrawShape(ctx, shape, canvas);
+      if (extraShape) imageDrawShape(ctx, extraShape, canvas);
+    }
+
+    function imageShapeBounds(shape) {
+      switch (shape.type) {
+        case 'pen': {
+          const pts = shape.points || [];
+          if (!pts.length) return null;
+          let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+          for (const [px, py] of pts) {
+            x1 = Math.min(x1, px); y1 = Math.min(y1, py);
+            x2 = Math.max(x2, px); y2 = Math.max(y2, py);
+          }
+          return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+        }
+        case 'line':
+        case 'arrow':
+          return imageRectFrom({ x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 });
+        case 'text': {
+          const size = Math.max(10, Number(shape.size) || 24);
+          const m = imageMeasureText(shape.text, size);
+          return { x: shape.x, y: shape.y, w: m.w, h: m.h };
+        }
+        default:
+          return { x: shape.x, y: shape.y, w: shape.w, h: shape.h };
+      }
+    }
+
+    function imageHitTest(shapes, pt) {
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        const b = imageShapeBounds(shapes[i]);
+        if (!b) continue;
+        const pad = Math.max(6, (Number(shapes[i].width) || 0) / 2 + 4);
+        if (pt.x >= b.x - pad && pt.x <= b.x + b.w + pad
+          && pt.y >= b.y - pad && pt.y <= b.y + b.h + pad) return shapes[i].id;
+      }
+      return null;
+    }
+
+    function imageMoveShape(shape, dx, dy) {
+      if (shape.type === 'pen') {
+        return { ...shape, points: (shape.points || []).map(([px, py]) => [px + dx, py + dy]) };
+      }
+      if (shape.type === 'line' || shape.type === 'arrow') {
+        return { ...shape, x1: shape.x1 + dx, y1: shape.y1 + dy, x2: shape.x2 + dx, y2: shape.y2 + dy };
+      }
+      return { ...shape, x: shape.x + dx, y: shape.y + dy };
+    }
+
+    // Drop the degenerate shapes a stray click produces (a zero-size box, a
+    // zero-length arrow) instead of littering the scene with invisible entries.
+    function imageShapeIsUsable(shape) {
+      if (!shape) return false;
+      if (shape.type === 'pen') return (shape.points || []).length > 1;
+      if (shape.type === 'line' || shape.type === 'arrow') {
+        return Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1) > 4;
+      }
+      if (shape.type === 'text') return String(shape.text || '').trim().length > 0;
+      return Math.abs(shape.w) > 4 && Math.abs(shape.h) > 4;
+    }
+
+    const IMAGE_STROKE_TOOLS = new Set(['pen', 'line', 'arrow', 'rect', 'ellipse']);
+
+    // Which slider the toolbar shows, and which field on the shape it writes.
+    function imageSizeControlFor(type) {
+      if (IMAGE_STROKE_TOOLS.has(type)) return { key: 'strokeWidth', shapeKey: 'width', label: 'Stroke', min: 1, max: 40 };
+      if (type === 'text') return { key: 'fontSize', shapeKey: 'size', label: 'Text size', min: 10, max: 160 };
+      if (type === 'blur') return { key: 'blurStrength', shapeKey: 'strength', label: 'Blur', min: 2, max: 50 };
+      if (type === 'pixelate') return { key: 'pixelSize', shapeKey: 'size', label: 'Pixel size', min: 3, max: 60 };
+      return null;
+    }
+
+    function IconTool({ id }) {
+      const p = { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' };
+      switch (id) {
+        case 'select':    return <svg {...p}><path d="M4 3l7.5 17 2.3-6.9 6.9-2.3z" /></svg>;
+        case 'pen':       return <svg {...p}><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>;
+        case 'arrow':     return <svg {...p}><line x1="5" y1="19" x2="19" y2="5" /><polyline points="10 5 19 5 19 14" /></svg>;
+        case 'line':      return <svg {...p}><line x1="5" y1="19" x2="19" y2="5" /></svg>;
+        case 'rect':      return <svg {...p}><rect x="3.5" y="5.5" width="17" height="13" rx="1.5" /></svg>;
+        case 'ellipse':   return <svg {...p}><circle cx="12" cy="12" r="8.5" /></svg>;
+        case 'highlight': return <svg {...p}><path d="M4 15l5-5 5 5-5 5H4z" /><path d="M11 8l5-5 5 5-5 5" /></svg>;
+        case 'text':      return <svg {...p}><polyline points="5 6 5 4 19 4 19 6" /><line x1="12" y1="4" x2="12" y2="20" /><line x1="9" y1="20" x2="15" y2="20" /></svg>;
+        case 'blur':      return <svg {...p}><path d="M12 3s6 6.2 6 10a6 6 0 0 1-12 0c0-3.8 6-10 6-10z" /><path d="M9.5 14a2.5 2.5 0 0 0 2.5 2.5" /></svg>;
+        case 'pixelate':  return <svg {...p}><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></svg>;
+        case 'redact':    return <svg {...p} fill="currentColor" stroke="none"><rect x="3.5" y="7" width="17" height="10" rx="1.5" /></svg>;
+        case 'crop':      return <svg {...p}><path d="M6.5 2v15.5H22" /><path d="M2 6.5h15.5V22" /></svg>;
+        default:          return null;
+      }
+    }
+    function IconCopy() { return <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>; }
+    function IconRedo() { return <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="m15 14 5-5-5-5" /><path d="M20 9H10a6 6 0 0 0 0 12h1" /></svg>; }
+    function IconImage() { return <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.6" /><path d="m21 15-5-5L5 21" /></svg>; }
+
+    function ImageSidebar({ state, setState, sync, onRetrySync, scene, onPickFile, onBlank, onCopy, onDownload, busy }) {
+      const theme = state.theme || 'dark';
+      const prefs = imageNormalizeState(state.imageEditor);
+      const fileRef = useRef(null);
+      const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
+      const hasImage = !!scene.img;
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
+              <button onClick={toggleTheme}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100 hover:border-neutral-700 transition-colors">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />}
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Image Editor</h1>
+            <p className="text-xs text-neutral-500 mt-1">Paste a screenshot, mark it up, copy it back</p>
+            <AccountChip sync={sync} />
+          </div>
+
+          <div className="p-5 flex-1 overflow-y-auto min-h-0 space-y-5">
+            <div>
+              <SectionLabel hint="Any image type">Source</SectionLabel>
+              <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
+                <div className="flex items-center gap-2 text-xs text-neutral-400">
+                  <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">Ctrl</kbd>
+                  <span className="text-neutral-600">+</span>
+                  <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">V</kbd>
+                  <span>anywhere to paste</span>
+                </div>
+                <input ref={fileRef} type="file" accept="image/*" className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) onPickFile(f); e.target.value = ''; }} />
+                <Btn variant="ghost" size="md" className="w-full" onClick={() => fileRef.current?.click()}>
+                  <IconUpload /> Upload image
+                </Btn>
+                <Btn variant="ghost" size="md" className="w-full" onClick={onBlank}>
+                  <IconImage /> Blank canvas
+                </Btn>
+              </div>
+            </div>
+
+            {hasImage && (
+              <div>
+                <SectionLabel>Image</SectionLabel>
+                <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2">
+                  <div className="truncate text-sm font-medium text-neutral-100" title={scene.name}>{scene.name || 'Untitled'}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Pill>{scene.width} × {scene.height}</Pill>
+                    <Pill tone={scene.shapes.length ? 'accent' : 'default'}>{scene.shapes.length} edit{scene.shapes.length === 1 ? '' : 's'}</Pill>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <SectionLabel hint="Not saved to the cloud">Scratch space</SectionLabel>
+              <p className="text-[11px] leading-relaxed text-neutral-600">
+                Images stay in this browser tab only — they are never uploaded or synced.
+                Copy or download before you leave the module.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-5 border-t border-neutral-900 space-y-3">
+            <div>
+              <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Format</label>
+              <Select value={prefs.exportFormat}
+                onChange={e => setState(s => ({ ...s, imageEditor: imageNormalizeState({ ...imageNormalizeState(s.imageEditor), exportFormat: e.target.value }) }))}>
+                <option value="png">PNG · keeps transparency</option>
+                <option value="jpeg">JPG · smaller file</option>
+              </Select>
+            </div>
+            <Btn variant="ghost" size="lg" onClick={onCopy} disabled={!hasImage || busy} className="w-full">
+              <IconCopy /> Copy image
+            </Btn>
+            <Btn variant="primary" size="lg" onClick={onDownload} disabled={!hasImage || busy} className="w-full">
+              {busy ? <><span className="loader"></span> Saving</> : <><IconDownload /> Download</>}
+            </Btn>
+            <p className="text-[10px] text-neutral-600 text-center font-mono">
+              {hasImage ? `image_${bmrTodayString()}.${prefs.exportFormat === 'jpeg' ? 'jpg' : 'png'}` : 'no image loaded'}
+            </p>
+          </div>
+        </aside>
+      );
+    }
+
+    function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast }) {
+      const prefs = imageNormalizeState(state.imageEditor);
+      const setPrefs = useCallback((patch) => setState(s => ({
+        ...s,
+        imageEditor: imageNormalizeState({ ...imageNormalizeState(s.imageEditor), ...patch }),
+      })), [setState]);
+
+      // Session-only — see the module note above. `img` is any CanvasImageSource
+      // (an <img> for a pasted/loaded file, a <canvas> after a crop or a blank
+      // start), so drawImage handles both without a branch.
+      const [scene, setSceneState] = useState({ img: null, name: '', width: 0, height: 0, shapes: [] });
+      const sceneRef = useRef(scene);
+      const setScene = useCallback((next) => {
+        const value = typeof next === 'function' ? next(sceneRef.current) : next;
+        sceneRef.current = value;
+        setSceneState(value);
+      }, []);
+
+      // Undo/redo stacks live in refs, not state. If they were state, undo() would
+      // read whichever `history` its render closure captured — so two undos that
+      // React batches into one render would both pop the same entry and the second
+      // would silently do nothing. Refs are always current, so the stacks stay
+      // correct no matter how the updates get batched. The lengths are mirrored
+      // into state purely to drive the buttons' disabled state.
+      const historyRef = useRef([]);
+      const futureRef = useRef([]);
+      const [historyLen, setHistoryLen] = useState(0);
+      const [futureLen, setFutureLen] = useState(0);
+      const syncStackLengths = useCallback(() => {
+        setHistoryLen(historyRef.current.length);
+        setFutureLen(futureRef.current.length);
+      }, []);
+
+      const [draft, setDraftState] = useState(null);
+      const draftRef = useRef(null);
+      const setDraft = useCallback((value) => { draftRef.current = value; setDraftState(value); }, []);
+      const [textDraft, setTextDraftState] = useState(null);
+      const textDraftRef = useRef(null);
+      const setTextDraft = useCallback((value) => { textDraftRef.current = value; setTextDraftState(value); }, []);
+      const [selectedId, setSelectedId] = useState(null);
+      const [cropRect, setCropRect] = useState(null);
+      const [zoom, setZoom] = useState('fit');
+      const [dragOver, setDragOver] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [stageWidth, setStageWidth] = useState(0);
+
+      const canvasRef = useRef(null);
+      const stageRef = useRef(null);
+      const dragRef = useRef(null);
+      const objectUrlRef = useRef(null);
+      const textInputRef = useRef(null);
+      const editSessionRef = useRef(null);
+
+      const hasImage = !!scene.img;
+      const selected = scene.shapes.find(s => s.id === selectedId) || null;
+
+      const pushHistory = useCallback((snapshot) => {
+        historyRef.current = [...historyRef.current.slice(-49), snapshot];
+        futureRef.current = [];
+        syncStackLengths();
+      }, [syncStackLengths]);
+
+      const commit = useCallback((next) => {
+        const prev = sceneRef.current;
+        const value = typeof next === 'function' ? next(prev) : next;
+        if (value === prev) return;
+        pushHistory(prev);
+        setScene(value);
+      }, [pushHistory, setScene]);
+
+      /* ---------- loading ---------- */
+
+      const resetEditingState = useCallback(() => {
+        historyRef.current = [];
+        futureRef.current = [];
+        syncStackLengths();
+        setDraft(null); setTextDraft(null);
+        setSelectedId(null); setCropRect(null);
+        setZoom('fit');
+        dragRef.current = null;
+        editSessionRef.current = null;
+      }, [setDraft, setTextDraft, syncStackLengths]);
+
+      const loadFile = useCallback((file) => {
+        if (!file) return;
+        if (!String(file.type || '').startsWith('image/')) {
+          onToast('err', 'That file is not an image');
+          return;
+        }
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+          objectUrlRef.current = url;
+          resetEditingState();
+          setScene({
+            img,
+            name: file.name || 'pasted-image',
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            shapes: [],
+          });
+          onToast('ok', `Loaded ${img.naturalWidth} × ${img.naturalHeight} image`);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          onToast('err', 'Could not read that image');
+        };
+        img.src = url;
+      }, [onToast, resetEditingState, setScene]);
+
+      const loadBlank = useCallback(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = IMAGE_BLANK_SIZE.w;
+        canvas.height = IMAGE_BLANK_SIZE.h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        resetEditingState();
+        setScene({ img: canvas, name: 'blank-canvas', width: canvas.width, height: canvas.height, shapes: [] });
+      }, [resetEditingState, setScene]);
+
+      useEffect(() => () => {
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      }, []);
+
+      // Paste anywhere in the module. Only mounted while the Image Editor is the
+      // active module, so it can't steal pastes from the other modules' inputs.
+      useEffect(() => {
+        const onPaste = (e) => {
+          const items = e.clipboardData?.items || [];
+          for (const item of items) {
+            if (item.kind === 'file' && String(item.type || '').startsWith('image/')) {
+              const file = item.getAsFile();
+              if (file) { e.preventDefault(); loadFile(file); return; }
+            }
+          }
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+      }, [loadFile]);
+
+      /* ---------- render ---------- */
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas || !scene.img) return;
+        if (canvas.width !== scene.width) canvas.width = scene.width;
+        if (canvas.height !== scene.height) canvas.height = scene.height;
+        imageRenderScene(canvas, scene, draft);
+      }, [scene, draft]);
+
+      useEffect(() => {
+        const stage = stageRef.current;
+        if (!stage || typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(entries => {
+          for (const entry of entries) setStageWidth(entry.contentRect.width);
+        });
+        ro.observe(stage);
+        setStageWidth(stage.clientWidth);
+        return () => ro.disconnect();
+      }, [hasImage]);
+
+      const fitScale = (scene.width && stageWidth)
+        ? Math.min(1, (stageWidth - 8) / scene.width)
+        : 1;
+      const scale = zoom === 'fit' ? fitScale : zoom;
+      const displayW = Math.max(1, Math.round(scene.width * scale));
+      const displayH = Math.max(1, Math.round(scene.height * scale));
+
+      /* ---------- pointer ---------- */
+
+      const toImagePoint = useCallback((e) => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const sx = rect.width ? scene.width / rect.width : 1;
+        const sy = rect.height ? scene.height / rect.height : 1;
+        return {
+          x: imageClamp((e.clientX - rect.left) * sx, 0, scene.width),
+          y: imageClamp((e.clientY - rect.top) * sy, 0, scene.height),
+        };
+      }, [scene.width, scene.height]);
+
+      const makeShape = useCallback((tool, a, b) => {
+        const base = { id: imageId(), type: tool, color: prefs.color, width: prefs.strokeWidth };
+        switch (tool) {
+          case 'pen':      return { ...base, points: [[a.x, a.y]] };
+          case 'line':
+          case 'arrow':    return { ...base, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+          case 'blur':     return { ...base, ...imageRectFrom(a, b), strength: prefs.blurStrength };
+          case 'pixelate': return { ...base, ...imageRectFrom(a, b), size: prefs.pixelSize };
+          default:         return { ...base, ...imageRectFrom(a, b) };
+        }
+      }, [prefs.color, prefs.strokeWidth, prefs.blurStrength, prefs.pixelSize]);
+
+      const commitText = useCallback(() => {
+        const t = textDraftRef.current;
+        if (!t) return;
+        setTextDraft(null);
+        if (!String(t.value || '').trim()) return;
+        commit(prev => ({
+          ...prev,
+          shapes: [...prev.shapes, {
+            id: imageId(), type: 'text', x: t.x, y: t.y,
+            text: t.value, color: prefs.color, size: prefs.fontSize,
+          }],
+        }));
+      }, [commit, prefs.color, prefs.fontSize, setTextDraft]);
+
+      // Keeps the drag alive when the pointer leaves the canvas mid-stroke.
+      // It can throw if the pointer is already gone — never let that abort the
+      // rest of the handler, or the drag silently never starts.
+      const capturePointer = (e) => {
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+      };
+
+      const onPointerDown = (e) => {
+        if (!hasImage || e.button !== 0) return;
+        if (textDraftRef.current) { commitText(); return; }
+        const pt = toImagePoint(e);
+        const tool = prefs.tool;
+
+        if (tool === 'select') {
+          const id = imageHitTest(scene.shapes, pt);
+          setSelectedId(id);
+          if (id) {
+            capturePointer(e);
+            dragRef.current = { mode: 'move', id, last: pt, before: sceneRef.current, moved: false };
+          }
+          return;
+        }
+
+        setSelectedId(null);
+        capturePointer(e);
+
+        if (tool === 'text') {
+          setTextDraft({ x: pt.x, y: pt.y, value: '' });
+          return;
+        }
+        if (tool === 'crop') {
+          dragRef.current = { mode: 'crop', start: pt };
+          setCropRect({ x: pt.x, y: pt.y, w: 0, h: 0 });
+          return;
+        }
+        dragRef.current = { mode: 'draw', tool, start: pt };
+        setDraft(makeShape(tool, pt, pt));
+      };
+
+      const onPointerMove = (e) => {
+        const drag = dragRef.current;
+        if (!drag || !hasImage) return;
+        const pt = toImagePoint(e);
+
+        if (drag.mode === 'move') {
+          const dx = pt.x - drag.last.x;
+          const dy = pt.y - drag.last.y;
+          if (!dx && !dy) return;
+          drag.last = pt;
+          drag.moved = true;
+          // Live-move without touching history — one undo entry is pushed for
+          // the whole drag when the pointer comes up.
+          setScene(prev => ({
+            ...prev,
+            shapes: prev.shapes.map(s => s.id === drag.id ? imageMoveShape(s, dx, dy) : s),
+          }));
+          return;
+        }
+        if (drag.mode === 'crop') {
+          setCropRect(imageRectFrom(drag.start, pt));
+          return;
+        }
+        if (drag.mode === 'draw') {
+          const current = draftRef.current;
+          if (!current) return;
+          if (drag.tool === 'pen') {
+            setDraft({ ...current, points: [...current.points, [pt.x, pt.y]] });
+          } else if (drag.tool === 'line' || drag.tool === 'arrow') {
+            setDraft({ ...current, x2: pt.x, y2: pt.y });
+          } else {
+            setDraft({ ...current, ...imageRectFrom(drag.start, pt) });
+          }
+        }
+      };
+
+      const onPointerUp = () => {
+        const drag = dragRef.current;
+        dragRef.current = null;
+        if (!drag) return;
+
+        if (drag.mode === 'move') {
+          if (drag.moved && drag.before) pushHistory(drag.before);
+          return;
+        }
+        if (drag.mode === 'crop') return; // the rect stays pending until Apply
+        if (drag.mode === 'draw') {
+          const shape = draftRef.current;
+          setDraft(null);
+          if (!imageShapeIsUsable(shape)) return;
+          commit(prev => ({ ...prev, shapes: [...prev.shapes, shape] }));
+        }
+      };
+
+      /* ---------- actions ---------- */
+
+      const undo = useCallback(() => {
+        const stack = historyRef.current;
+        if (!stack.length) return;
+        historyRef.current = stack.slice(0, -1);
+        futureRef.current = [sceneRef.current, ...futureRef.current].slice(0, 50);
+        syncStackLengths();
+        setScene(stack[stack.length - 1]);
+        setSelectedId(null); setDraft(null); setTextDraft(null); setCropRect(null);
+      }, [setScene, setDraft, setTextDraft, syncStackLengths]);
+
+      const redo = useCallback(() => {
+        const stack = futureRef.current;
+        if (!stack.length) return;
+        futureRef.current = stack.slice(1);
+        historyRef.current = [...historyRef.current.slice(-49), sceneRef.current];
+        syncStackLengths();
+        setScene(stack[0]);
+        setSelectedId(null); setDraft(null); setTextDraft(null); setCropRect(null);
+      }, [setScene, setDraft, setTextDraft, syncStackLengths]);
+
+      const deleteSelected = useCallback(() => {
+        if (!selectedId) return;
+        commit(prev => ({ ...prev, shapes: prev.shapes.filter(s => s.id !== selectedId) }));
+        setSelectedId(null);
+      }, [commit, selectedId]);
+
+      const clearShapes = useCallback(() => {
+        if (!sceneRef.current.shapes.length) return;
+        commit(prev => ({ ...prev, shapes: [] }));
+        setSelectedId(null);
+      }, [commit]);
+
+      const closeImage = useCallback(async () => {
+        const ok = await confirmDialog({
+          title: 'Close this image?',
+          message: 'The image and every annotation on it will be discarded. Copy or download first if you still need it.',
+          confirmText: 'Close image',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = null; }
+        resetEditingState();
+        setScene({ img: null, name: '', width: 0, height: 0, shapes: [] });
+      }, [resetEditingState, setScene]);
+
+      const applyCrop = useCallback(() => {
+        const r = cropRect;
+        if (!r) return;
+        const x = Math.round(imageClamp(r.x, 0, scene.width));
+        const y = Math.round(imageClamp(r.y, 0, scene.height));
+        const w = Math.round(Math.min(r.w, scene.width - x));
+        const h = Math.round(Math.min(r.h, scene.height - y));
+        if (w < 8 || h < 8) { onToast('err', 'That crop is too small'); return; }
+        // Crop the base image only and shift the annotations to match, so every
+        // arrow and blur stays a separate, still-editable object.
+        const out = document.createElement('canvas');
+        out.width = w; out.height = h;
+        out.getContext('2d').drawImage(scene.img, x, y, w, h, 0, 0, w, h);
+        commit(prev => ({
+          ...prev,
+          img: out, width: w, height: h,
+          shapes: prev.shapes.map(s => imageMoveShape(s, -x, -y)),
+        }));
+        setCropRect(null);
+        setPrefs({ tool: 'select' });
+      }, [commit, cropRect, onToast, scene.img, scene.width, scene.height, setPrefs]);
+
+      const toBlob = useCallback((format) => new Promise((resolve, reject) => {
+        const canvas = canvasRef.current;
+        if (!canvas || !sceneRef.current.img) { reject(new Error('There is no image to export')); return; }
+        const done = (blob) => blob ? resolve(blob) : reject(new Error('The browser could not encode the image'));
+        if (format === 'jpeg') {
+          // JPEG has no alpha — flatten onto white so transparent PNGs don't
+          // come out with black backgrounds.
+          const flat = document.createElement('canvas');
+          flat.width = canvas.width; flat.height = canvas.height;
+          const ctx = flat.getContext('2d');
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, flat.width, flat.height);
+          ctx.drawImage(canvas, 0, 0);
+          flat.toBlob(done, 'image/jpeg', 0.92);
+          return;
+        }
+        canvas.toBlob(done, 'image/png');
+      }), []);
+
+      const copyImage = useCallback(async () => {
+        if (!sceneRef.current.img) return;
+        setBusy(true);
+        try {
+          if (!navigator.clipboard || typeof window.ClipboardItem === 'undefined') {
+            throw new Error('this browser cannot put images on the clipboard');
+          }
+          const blob = await toBlob('png');
+          await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })]);
+          onToast('ok', 'Copied — paste it anywhere');
+        } catch (e) {
+          onToast('err', 'Copy failed: ' + (e.message || e) + '. Use Download instead.');
+        } finally {
+          setBusy(false);
+        }
+      }, [onToast, toBlob]);
+
+      const downloadImage = useCallback(async () => {
+        if (!sceneRef.current.img) return;
+        setBusy(true);
+        try {
+          const format = prefs.exportFormat;
+          const blob = await toBlob(format);
+          const ext = format === 'jpeg' ? 'jpg' : 'png';
+          saveAs(blob, `image_${bmrTodayString()}_${Date.now().toString().slice(-5)}.${ext}`);
+          onToast('ok', `Downloaded .${ext}`);
+        } catch (e) {
+          onToast('err', 'Download failed: ' + (e.message || e));
+        } finally {
+          setBusy(false);
+        }
+      }, [onToast, prefs.exportFormat, toBlob]);
+
+      /* ---------- toolbar bindings ---------- */
+
+      // Changing colour or size with a shape selected retargets that shape too,
+      // so a wrong-coloured arrow is a two-click fix instead of undo-and-redraw.
+      //
+      // A slider drag or a colour-picker drag fires dozens of change events. They
+      // apply live but share ONE undo entry: the scene is snapshotted when the
+      // interaction starts and pushed to history when it ends, rather than each
+      // tick pushing its own entry and flushing the rest of the stack out.
+      const beginPropEdit = useCallback(() => {
+        if (selectedId && !editSessionRef.current) editSessionRef.current = sceneRef.current;
+      }, [selectedId]);
+
+      const endPropEdit = useCallback(() => {
+        const before = editSessionRef.current;
+        editSessionRef.current = null;
+        if (before && before !== sceneRef.current) pushHistory(before);
+      }, [pushHistory]);
+
+      const patchSelected = useCallback((patch) => {
+        if (!selectedId) return;
+        beginPropEdit();
+        setScene(prev => ({
+          ...prev,
+          shapes: prev.shapes.map(s => s.id === selectedId ? { ...s, ...patch } : s),
+        }));
+      }, [beginPropEdit, selectedId, setScene]);
+
+      const setColor = useCallback((color, { live = false } = {}) => {
+        setPrefs({ color });
+        patchSelected({ color });
+        if (!live) endPropEdit(); // swatch clicks are a single discrete edit
+      }, [endPropEdit, patchSelected, setPrefs]);
+
+      const sizeControl = imageSizeControlFor(selected ? selected.type : prefs.tool);
+      const sizeValue = sizeControl
+        ? (selected ? (Number(selected[sizeControl.shapeKey]) || prefs[sizeControl.key]) : prefs[sizeControl.key])
+        : 0;
+
+      const setSize = useCallback((value) => {
+        if (!sizeControl) return;
+        const n = imageClamp(Number(value) || sizeControl.min, sizeControl.min, sizeControl.max);
+        setPrefs({ [sizeControl.key]: n });
+        patchSelected({ [sizeControl.shapeKey]: n });
+      }, [patchSelected, setPrefs, sizeControl]);
+
+      /* ---------- keyboard ---------- */
+
+      useEffect(() => {
+        const onKeyDown = (e) => {
+          const el = e.target;
+          const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+          const mod = e.ctrlKey || e.metaKey;
+
+          if (mod && !typing) {
+            const key = e.key.toLowerCase();
+            if (key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+            if (key === 'y') { e.preventDefault(); redo(); return; }
+            if (key === 'c') { e.preventDefault(); copyImage(); return; }
+            if (key === 's') { e.preventDefault(); downloadImage(); return; }
+            return;
+          }
+          if (typing || mod || e.altKey) return;
+
+          if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (selectedId) { e.preventDefault(); deleteSelected(); }
+            return;
+          }
+          if (e.key === 'Escape') {
+            setSelectedId(null); setCropRect(null); setTextDraft(null);
+            return;
+          }
+          const tool = IMAGE_TOOLS.find(t => t.hotkey.toLowerCase() === e.key.toLowerCase());
+          if (tool) { e.preventDefault(); setPrefs({ tool: tool.id }); }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+      }, [copyImage, deleteSelected, downloadImage, redo, selectedId, setPrefs, setTextDraft, undo]);
+
+      useEffect(() => {
+        if (textDraft && textInputRef.current) textInputRef.current.focus();
+      }, [textDraft?.x, textDraft?.y]);
+
+      /* ---------- view ---------- */
+
+      const selectionBox = selected ? imageShapeBounds(selected) : null;
+      const cursor = prefs.tool === 'select' ? 'default' : (prefs.tool === 'text' ? 'text' : 'crosshair');
+
+      return (
+        <>
+          <ImageSidebar
+            state={state} setState={setState} sync={sync} onRetrySync={onRetrySync}
+            scene={scene} onPickFile={loadFile} onBlank={loadBlank}
+            onCopy={copyImage} onDownload={downloadImage} busy={busy} />
+
+          <main className="flex-1 min-w-0 flex flex-col">
+            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <div className="app-title-block min-w-0">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
+                <h2 className="truncate text-[22px] font-bold tracking-tight">
+                  Image Editor{hasImage ? ` · ${scene.width} × ${scene.height}` : ''}
+                </h2>
+              </div>
+              <div className="app-pill-row hidden xl:flex items-center gap-2">
+                <Pill tone={scene.shapes.length ? 'accent' : 'muted'}>{scene.shapes.length} edits</Pill>
+                <Pill>{Math.round(scale * 100)}%</Pill>
+              </div>
+              <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
+                {moduleSwitch}
+                <Btn variant="ghost" size="sm" onClick={undo} disabled={!historyLen} title="Undo (Ctrl+Z)"><IconUndo /> Undo</Btn>
+                <Btn variant="ghost" size="sm" onClick={redo} disabled={!futureLen} title="Redo (Ctrl+Y)"><IconRedo /> Redo</Btn>
+                {hasImage && <Btn variant="ghost" size="sm" onClick={closeImage}>Close</Btn>}
+              </div>
+            </header>
+
+            <div className="p-4 sm:p-6 lg:p-8 w-full max-w-[1700px] space-y-4">
+              {hasImage && (
+                <Card className="p-3">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                    {/* Tools */}
+                    <div className="flex flex-wrap items-center gap-1 rounded-md border border-neutral-900 bg-[#080808] p-1">
+                      {IMAGE_TOOLS.map(tool => (
+                        <button key={tool.id} type="button"
+                          onClick={() => setPrefs({ tool: tool.id })}
+                          title={`${tool.hint} (${tool.hotkey})`}
+                          className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${prefs.tool === tool.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
+                          <IconTool id={tool.id} />
+                          <span className="hidden lg:inline">{tool.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Colour */}
+                    <div className="flex items-center gap-1.5">
+                      {IMAGE_COLORS.map(c => (
+                        <button key={c} type="button" onClick={() => setColor(c)} title={c}
+                          className={`h-6 w-6 rounded-full border transition-transform hover:scale-110 ${(selected ? selected.color : prefs.color).toLowerCase() === c.toLowerCase() ? 'border-blue-400 ring-2 ring-blue-500/40' : 'border-neutral-700'}`}
+                          style={{ background: c }} />
+                      ))}
+                      <input type="color" value={selected ? (selected.color || prefs.color) : prefs.color}
+                        onChange={e => setColor(e.target.value, { live: true })}
+                        onPointerUp={endPropEdit} onBlur={endPropEdit}
+                        title="Custom colour"
+                        className="h-6 w-8 cursor-pointer rounded border border-neutral-700 bg-transparent p-0" />
+                    </div>
+
+                    {/* Contextual size */}
+                    {sizeControl && (
+                      <div className="flex items-center gap-2 min-w-[190px]">
+                        <span className="text-[10px] uppercase tracking-wide text-neutral-500 shrink-0">{sizeControl.label}</span>
+                        <input type="range" min={sizeControl.min} max={sizeControl.max} value={sizeValue}
+                          onChange={e => setSize(e.target.value)}
+                          onPointerUp={endPropEdit} onKeyUp={endPropEdit} onBlur={endPropEdit}
+                          className="flex-1 accent-blue-500" />
+                        <span className="w-7 text-right font-mono text-[11px] text-neutral-400">{Math.round(sizeValue)}</span>
+                      </div>
+                    )}
+
+                    <div className="ml-auto flex items-center gap-2">
+                      {selected && (
+                        <Btn variant="danger" size="sm" onClick={deleteSelected} title="Delete the selected annotation (Del)">
+                          <IconX /> Delete
+                        </Btn>
+                      )}
+                      <Btn variant="ghost" size="sm" onClick={clearShapes} disabled={!scene.shapes.length}>Clear all</Btn>
+                      <div className="flex items-center gap-0.5 rounded-md border border-neutral-900 bg-[#080808] p-0.5">
+                        <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitScale : z) - 0.25, 0.25, 4))}
+                          className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" title="Zoom out">−</button>
+                        <button type="button" onClick={() => setZoom('fit')}
+                          className={`px-2 py-1 text-xs font-medium ${zoom === 'fit' ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>Fit</button>
+                        <button type="button" onClick={() => setZoom(1)}
+                          className={`px-2 py-1 text-xs font-medium ${zoom === 1 ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>1:1</button>
+                        <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitScale : z) + 0.25, 0.25, 4))}
+                          className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" title="Zoom in">+</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {cropRect && cropRect.w > 4 && cropRect.h > 4 && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2">
+                      <span className="text-xs text-blue-200">
+                        Crop to {Math.round(cropRect.w)} × {Math.round(cropRect.h)}
+                      </span>
+                      <div className="ml-auto flex items-center gap-2">
+                        <Btn variant="ghost" size="sm" onClick={() => setCropRect(null)}>Cancel</Btn>
+                        <Btn variant="accent" size="sm" onClick={applyCrop}>Apply crop</Btn>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              )}
+
+              {/* Stage */}
+              <div ref={stageRef}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  const file = e.dataTransfer?.files?.[0];
+                  if (file) loadFile(file);
+                }}
+                className={`rounded-lg border ${dragOver ? 'border-blue-500 bg-blue-500/5' : 'border-neutral-900 bg-[#080808]'} transition-colors`}>
+                {hasImage ? (
+                  <div className="flex justify-center p-4 overflow-auto">
+                    <div className="relative shrink-0" style={{ width: displayW, height: displayH }}>
+                      <canvas ref={canvasRef}
+                        onPointerDown={onPointerDown}
+                        onPointerMove={onPointerMove}
+                        onPointerUp={onPointerUp}
+                        onPointerCancel={onPointerUp}
+                        style={{ width: displayW, height: displayH, cursor, touchAction: 'none' }}
+                        className="block rounded shadow-2xl shadow-black/40 bg-white" />
+
+                      {/* Overlays live in the DOM, not on the canvas, so they can
+                          never end up baked into the exported image. */}
+                      {selectionBox && (
+                        <div className="pointer-events-none absolute border border-dashed border-blue-400 bg-blue-400/10"
+                          style={{
+                            left: (selectionBox.x * scale) - 4,
+                            top: (selectionBox.y * scale) - 4,
+                            width: (selectionBox.w * scale) + 8,
+                            height: (selectionBox.h * scale) + 8,
+                          }} />
+                      )}
+                      {cropRect && cropRect.w > 0 && cropRect.h > 0 && (
+                        <div className="pointer-events-none absolute border-2 border-blue-400"
+                          style={{
+                            left: cropRect.x * scale,
+                            top: cropRect.y * scale,
+                            width: cropRect.w * scale,
+                            height: cropRect.h * scale,
+                            boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
+                          }} />
+                      )}
+                      {textDraft && (
+                        <textarea ref={textInputRef}
+                          value={textDraft.value}
+                          onChange={e => setTextDraft({ ...textDraft, value: e.target.value })}
+                          onBlur={commitText}
+                          onKeyDown={e => {
+                            e.stopPropagation();
+                            if (e.key === 'Escape') { e.preventDefault(); setTextDraft(null); }
+                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText(); }
+                          }}
+                          rows={1}
+                          spellCheck={false}
+                          placeholder="Type, then Enter"
+                          style={{
+                            position: 'absolute',
+                            left: textDraft.x * scale,
+                            top: textDraft.y * scale,
+                            minWidth: 140,
+                            fontSize: Math.max(11, prefs.fontSize * scale),
+                            lineHeight: 1.25,
+                            color: prefs.color,
+                            fontWeight: 600,
+                            fontFamily: IMAGE_FONT_STACK,
+                            padding: 0,
+                            margin: 0,
+                            background: 'rgba(0,0,0,0.35)',
+                            border: '1px dashed rgba(96,165,250,0.9)',
+                            outline: 'none',
+                            resize: 'none',
+                            overflow: 'hidden',
+                          }} />
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center gap-4 px-6 py-24 text-center">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-full border border-neutral-800 bg-neutral-950 text-neutral-600">
+                      <IconImage />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-neutral-200">Paste a screenshot to start</div>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Press <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">Ctrl</kbd>
+                        {' + '}
+                        <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">V</kbd>
+                        , drop an image file here, or upload one from the sidebar.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {hasImage && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-neutral-600">
+                  <span>Drag to draw</span>
+                  <span>·</span>
+                  <span><span className="text-neutral-400">V</span> select, move, <span className="text-neutral-400">Del</span> to remove</span>
+                  <span>·</span>
+                  <span><span className="text-neutral-400">Ctrl+Z</span> undo</span>
+                  <span>·</span>
+                  <span><span className="text-neutral-400">Ctrl+C</span> copy the result</span>
+                  {!imageSupportsFilter() && (
+                    <>
+                      <span>·</span>
+                      <span className="text-amber-500">This browser has no canvas blur — Blur falls back to a mosaic.</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+              <span className="font-mono">in-browser only · nothing uploaded</span>
+              <span>{hasImage ? `${scene.width} × ${scene.height} · ${scene.shapes.length} edits` : 'no image loaded'}</span>
+            </footer>
+          </main>
+        </>
+      );
+    }
+
+    /* ============================================================
        App
        ============================================================ */
     const APP_STATE_SCHEMA_VERSION = 2;
@@ -8567,6 +9729,9 @@ https://bit.ly/4vrcu64`;
       rcaTab: 'editor',
       rcaSignatories: DEFAULT_RCA_SIGNATORIES,
       rcaCompany: { ...DEFAULT_RCA_COMPANY },
+      // Image Editor: tool preferences only. The image itself is never stored
+      // here — see the Image Editor module note.
+      imageEditor: { ...DEFAULT_IMAGE_STATE },
       // Google Sheets sync: the OAuth Client ID (set in-app, non-secret) plus
       // durable file IDs of the app-owned sheets (one per module). No tokens
       // here — all non-secret, so it rides the normal localStorage + Firestore
@@ -8685,6 +9850,7 @@ https://bit.ly/4vrcu64`;
       const rcaSignatories = Array.isArray(merged.rcaSignatories) && merged.rcaSignatories.length
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
+      const imageEditor = imageNormalizeState(merged.imageEditor);
       const googleSheets = {
         clientId: (merged.googleSheets && typeof merged.googleSheets.clientId === 'string')
           ? merged.googleSheets.clientId
@@ -8710,6 +9876,7 @@ https://bit.ly/4vrcu64`;
         rca,
         rcaSignatories,
         rcaCompany,
+        imageEditor,
         googleSheets,
       };
     }
@@ -8717,7 +9884,7 @@ https://bit.ly/4vrcu64`;
     // Role-based access. Admin sees everything; semi-admin only gets the two
     // light-touch modules. Anyone signed in defaults to semi_admin.
     const ROLE_MODULES = {
-      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca'],
+      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'image'],
       semi_admin: ['whitelist_sms', 'editor', 'rca'],
     };
     const ROLE_LABELS = { admin: 'Admin', semi_admin: 'Semi-admin' };
@@ -9621,6 +10788,11 @@ match /shared/whitelistSmsTestNumbers {
         }
       }, []);
 
+      const showToast = useCallback((type, msg) => {
+        setToast({ type, msg });
+        setTimeout(() => setToast(null), 4000);
+      }, []);
+
       const onGenerate = async () => {
         setBusy(true);
         try {
@@ -9700,6 +10872,7 @@ match /shared/whitelistSmsTestNumbers {
         { id: 'whitelist_sms', label: 'Whitelist SMS' },
         { id: 'editor',  label: 'Editor' },
         { id: 'rca',     label: 'RCA' },
+        { id: 'image',   label: 'Image Editor', adminOnly: true },
         { id: 'users',   label: 'Users', adminOnly: true },
       ];
       const role = sync.role || 'semi_admin';
@@ -9726,6 +10899,7 @@ match /shared/whitelistSmsTestNumbers {
       const isBmrSms = state.module === 'bmr_sms';
       const isWlSms = state.module === 'whitelist_sms';
       const isRca = state.module === 'rca';
+      const isImage = state.module === 'image';
       const isUsers = state.module === 'users';
       const whitelistSms = wlSmsNormalizeState(state.whitelistSms);
       const setWhitelistSms = useCallback((next) => setState(s => {
@@ -9787,6 +10961,23 @@ match /shared/whitelistSmsTestNumbers {
           onSelect={(id) => setState(s => ({ ...s, module: id }))}
         />
       );
+
+      if (isImage) {
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <ImageEditorModule
+              state={state} setState={setState} sync={sync} onRetrySync={retrySync}
+              moduleSwitch={ModuleSwitch} onToast={showToast} />
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
 
       if (isUsers) {
         return (
