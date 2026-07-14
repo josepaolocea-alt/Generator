@@ -10645,7 +10645,7 @@ https://bit.ly/4vrcu64`;
                       <Select value={cap.clientId || ''} onChange={e => onAssign(cap.id, e.target.value)} className="!w-auto min-w-[180px]">
                         {cardsClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                       </Select>
-                      <span className="text-[10px] text-amber-300/80">check this — card screenshots look alike</span>
+                      <span className="text-[10px] text-amber-300">check this — card screenshots look alike</span>
                     </div>
                   )}
                   {cap.rows.length > 0 && (
@@ -10658,7 +10658,7 @@ https://bit.ly/4vrcu64`;
                           <div key={row.key} className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 ${flagged ? 'border-amber-500/40 bg-amber-500/5' : 'border-neutral-900 bg-neutral-900/50'}`}>
                             <div className="flex-1 min-w-0">
                               <div className="truncate text-xs text-neutral-200" title={`${clientName} · OCR read: ${row.ocrName}`}>{row.label}</div>
-                              <div className="truncate text-[10px] text-neutral-600">
+                              <div className="truncate text-[10px] text-neutral-500">
                                 {clientName}
                                 {!row.exact ? ' · fuzzy match' : ''}
                                 {row.conf < 70 ? ` · low confidence` : ''}
@@ -10674,7 +10674,7 @@ https://bit.ly/4vrcu64`;
                     </div>
                   )}
                   {cap.rows.length === 0 && (
-                    <p className="text-xs text-amber-300/90">Text was read but none of it matches the watchlist. Check the Config tab (names/aliases) if this screenshot should be recorded.</p>
+                    <p className="text-xs text-amber-300">Text was read but none of it matches the watchlist. Check the Config tab (names/aliases) if this screenshot should be recorded.</p>
                   )}
                   {cap.ignored.length > 0 && (
                     <div className="mt-2 text-[10px] leading-relaxed text-neutral-600">
@@ -10787,7 +10787,7 @@ https://bit.ly/4vrcu64`;
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Btn variant="ghost" size="md" onClick={() => shiftDay(-1)}><IconUp className="rotate-[-90deg]" />‹</Btn>
+            <Btn variant="ghost" size="md" onClick={() => shiftDay(-1)}>‹</Btn>
             <Input type="date" value={date} onChange={e => e.target.value && setDate(e.target.value)} className="!w-auto" />
             <Btn variant="ghost" size="md" onClick={() => shiftDay(1)}>›</Btn>
             <span className="text-[11px] text-neutral-600">cells are editable — blank means not recorded</span>
@@ -10799,7 +10799,9 @@ https://bit.ly/4vrcu64`;
               let filled = 0;
               for (const r of client.rows) filled += Object.keys(dRows[r.id] || {}).length;
               const total = client.rows.length * 24;
-              const cls = filled === 0 ? 'bg-neutral-900 text-neutral-600' : filled >= total ? 'bg-emerald-500/70 text-black' : 'bg-blue-500/40 text-blue-100';
+              // text-neutral-950 (not text-black): html.light inverts .text-black
+              // to near-white for primary buttons, which would blank these chips.
+              const cls = filled === 0 ? 'bg-neutral-900 text-neutral-500' : filled >= total ? 'bg-emerald-500/70 text-neutral-950' : 'bg-blue-500/40 text-blue-200';
               return (
                 <button key={dIso} onClick={() => setDate(dIso)} title={`${dIso} — ${filled}/${total} cells`}
                   className={`h-6 w-7 rounded text-[10px] font-medium transition-transform hover:scale-105 ${cls} ${dIso === date ? 'ring-1 ring-white/70' : ''}`}>
@@ -10820,7 +10822,7 @@ https://bit.ly/4vrcu64`;
               </thead>
               <tbody>
                 {client.rows.map(row => (
-                  <tr key={row.id} className="odd:bg-neutral-950/50">
+                  <tr key={row.id} className="odd:bg-neutral-900/30">
                     <td className="sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1">
                       <span className="mr-2 inline-block h-2 w-2 rounded-sm align-middle" style={{ background: row.color }} />
                       <span className="align-middle text-neutral-200">{row.label}</span>
@@ -11343,7 +11345,7 @@ https://bit.ly/4vrcu64`;
                   {hasPending && (
                     <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/40 bg-[#0b1220]/95 px-4 py-3 backdrop-blur">
                       <div className="text-xs text-neutral-300">
-                        Saving to <span className="font-semibold text-white">{recorderPrettyDate(target.date)}</span> · <span className="font-semibold text-white">{HOURS_24[target.hour]}</span>
+                        Saving to <span className="font-semibold text-neutral-100">{recorderPrettyDate(target.date)}</span> · <span className="font-semibold text-neutral-100">{HOURS_24[target.hour]}</span>
                         <span className="text-neutral-500"> — wrong slot? change it in the sidebar first</span>
                       </div>
                       <div className="flex items-center gap-2">
