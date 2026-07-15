@@ -9829,6 +9829,10 @@ function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onTo
         setCaptures((list) => list.map((c) => c.id === id ? { ...c, thumb } : c));
         const worker = await recorderEnsureWorker();
         const words = await recorderRecognizeWords(worker, canvas, 6);
+        try {
+          window.__recWords = words.map((w) => w.text + " [x" + Math.round(w.x0) + "-" + Math.round(w.x1) + " y" + Math.round((w.y0 + w.y1) / 2) + " c" + Math.round(w.conf) + "]");
+        } catch {
+        }
         const kind = recorderClassifyWords(words);
         let entries, tableMeta = null;
         if (kind === "cards") {

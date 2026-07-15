@@ -10390,6 +10390,16 @@ https://bit.ly/4vrcu64`;
       if (!/^\d+$/.test(s) || s.length > maxDigits) return null;
       return parseInt(s, 10);
     }
+    // Same shape check as recorderNumFromToken, but returns the repaired DIGIT
+    // STRING (not a parsed int) so a number OCR split across words can be
+    // stitched back together left-to-right. null when the token isn't a clean
+    // digit run.
+    function recorderDigitStr(text) {
+      const t = String(text || '').replace(/^\|+/, '').replace(/\|+$/, '');
+      if (!t || /[#,.:%()]/.test(t) || !/^[0-9OoQqIl|Ss]{1,6}$/.test(t)) return null;
+      const s = t.replace(/[OoQq]/g, '0').replace(/[Il|]/g, '1').replace(/[Ss]/g, '5');
+      return /^\d+$/.test(s) ? s : null;
+    }
     // A value word that starts LEFT of the value column's text edge has likely
     // swallowed the cell border as a leading stroke. Only strip that stroke when
     // it came through as a NON-digit ('|', 'I', 'l') — those are unambiguous
@@ -10449,10 +10459,37 @@ https://bit.ly/4vrcu64`;
         const nameText = nameParts.map(w => w.text).join(' ').trim();
         if (!nameText || recorderSig(nameText).length < 3) continue;
         let value = null, vconf = 100;
-        const windowed = valueX != null ? r.words.filter(w => ((w.x0 + w.x1) / 2) >= valueX - 10) : [];
-        for (let i = windowed.length - 1; i >= 0; i--) {
-          const n = recorderValueFromWord(windowed[i], valueX, 6);
-          if (n != null) { value = n; vconf = windowed[i].conf; break; }
+        if (valueX != null) {
+          // Value-column tokens, left→right. OCR sometimes splits one number
+          // across words ("117" → "1" + "17"), and on some browsers the
+          // preprocessing canvas renders just differently enough to trigger the
+          // split — so the SAME screenshot read 117 on one machine and 17 on
+          // another (the old code kept only the rightmost fragment). Anchor on
+          // the rightmost digit token and rebuild the number from the run of
+          // tightly-adjacent digit fragments (gap < ~half a digit width);
+          // a name token or a real gap ends the run.
+          const windowed = r.words.filter(w => ((w.x0 + w.x1) / 2) >= valueX - 10);
+          let end = -1;
+          for (let i = windowed.length - 1; i >= 0; i--) { if (recorderDigitStr(windowed[i].text) != null) { end = i; break; } }
+          if (end >= 0) {
+            const run = [windowed[end]];
+            for (let i = end - 1; i >= 0; i--) {
+              const cur = windowed[i];
+              if (recorderDigitStr(cur.text) == null) break;
+              if ((run[0].x0 - cur.x1) > medH * 0.35) break;
+              run.unshift(cur);
+            }
+            if (run.length > 1) {
+              const digits = run.map(w => recorderDigitStr(w.text)).join('');
+              if (/^\d+$/.test(digits) && digits.length <= 6) { value = parseInt(digits, 10); vconf = Math.min(...run.map(w => w.conf)); }
+            }
+            if (value == null) {
+              // Single token (or oversized run): keep the original per-word read
+              // so an attached leading border (I/l/|) is still stripped.
+              const n = recorderValueFromWord(windowed[end], valueX, 6);
+              if (n != null) { value = n; vconf = windowed[end].conf; }
+            }
+          }
         }
         if (value == null) {
           // No value column located — fall back to the rightmost short number
@@ -11637,6 +11674,7 @@ https://bit.ly/4vrcu64`;
             setCaptures(list => list.map(c => c.id === id ? { ...c, thumb } : c));
             const worker = await recorderEnsureWorker();
             const words = await recorderRecognizeWords(worker, canvas, 6);
+            try { window.__recWords = words.map(w => w.text + ' [x' + Math.round(w.x0) + '-' + Math.round(w.x1) + ' y' + Math.round((w.y0 + w.y1) / 2) + ' c' + Math.round(w.conf) + ']'); } catch {}
             const kind = recorderClassifyWords(words);
             let entries, tableMeta = null;
             if (kind === 'cards') {
