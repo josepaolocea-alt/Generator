@@ -10390,11 +10390,16 @@ https://bit.ly/4vrcu64`;
       if (!/^\d+$/.test(s) || s.length > maxDigits) return null;
       return parseInt(s, 10);
     }
-    // A value word that starts LEFT of the value column's text edge has very
-    // likely swallowed the cell border as a leading 1/I/l ("19" → "119").
-    // Genuine readings start at the same padding as the column header.
+    // A value word that starts LEFT of the value column's text edge has likely
+    // swallowed the cell border as a leading stroke. Only strip that stroke when
+    // it came through as a NON-digit ('|', 'I', 'l') — those are unambiguous
+    // border artifacts. A literal leading '1' is NOT stripped: it is
+    // indistinguishable from a real hundreds digit, and deciding on the
+    // sub-pixel x-threshold silently turned 117 into 17 — and did so only in
+    // some browsers, whose canvas rendering shifts the OCR bbox by a pixel or
+    // two. Keeping the full digits is both correct and browser-consistent.
     function recorderValueFromWord(w, valueX, maxDigits) {
-      if (valueX != null && w.x0 < valueX - 2 && /^[|Il1][0-9OoQqIl|Ss]{1,5}$/.test(w.text)) {
+      if (valueX != null && w.x0 < valueX - 2 && /^[Il|][0-9OoQqIl|Ss]{1,5}$/.test(w.text)) {
         const stripped = recorderNumFromToken(w.text.slice(1), maxDigits);
         if (stripped != null) return stripped;
       }

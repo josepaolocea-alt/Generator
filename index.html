@@ -8883,7 +8883,7 @@ function recorderNumFromToken(text, maxDigits) {
   return parseInt(s, 10);
 }
 function recorderValueFromWord(w, valueX, maxDigits) {
-  if (valueX != null && w.x0 < valueX - 2 && /^[|Il1][0-9OoQqIl|Ss]{1,5}$/.test(w.text)) {
+  if (valueX != null && w.x0 < valueX - 2 && /^[Il|][0-9OoQqIl|Ss]{1,5}$/.test(w.text)) {
     const stripped = recorderNumFromToken(w.text.slice(1), maxDigits);
     if (stripped != null) return stripped;
   }
