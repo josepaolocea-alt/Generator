@@ -2466,7 +2466,10 @@ const googleSheetsSync = (() => {
 const GOOGLE_SYNC_MODULES = {
   sip_fcs: { build: buildSipFcsBlob, sheetName: "SIP FCS — Hourly Record" },
   bmr: { build: buildBmrBlob, sheetName: "BMR VOIP — Balance Day & Night" },
-  bmr_sms: { build: buildBmrSmsBlob, sheetName: "BMR SMS — Balance Day & Night" }
+  bmr_sms: { build: buildBmrSmsBlob, sheetName: "BMR SMS — Balance Day & Night" },
+  // buildRecorderBlob is a hoisted function declaration defined with the
+  // Recorder module code further down this file.
+  recorder: { build: buildRecorderBlob, sheetName: "Recorder — VOS Hourly Record" }
 };
 const editorRuleId = () => "er_" + Math.random().toString(36).slice(2, 9);
 const DEFAULT_EDITOR_STATE = {
@@ -8263,7 +8266,7 @@ const DEFAULT_STATE = {
   // durable file IDs of the app-owned sheets (one per module). No tokens
   // here — all non-secret, so it rides the normal localStorage + Firestore
   // sync. sheetIds are empty until the first sync creates them.
-  googleSheets: { clientId: "", sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "" } }
+  googleSheets: { clientId: "", sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "" } }
 };
 function timestampMs(value) {
   if (!value) return 0;
@@ -8538,8 +8541,146 @@ function recorderNormalizeState(raw) {
     match: ["strict", "normal", "loose"].includes(src.match) ? src.match : "strict",
     overwrite: src.overwrite !== false,
     upscale: src.upscale !== false,
-    clampMax: Number.isFinite(Number(src.clampMax)) && Number(src.clampMax) > 0 ? Math.floor(Number(src.clampMax)) : 9999
+    clampMax: Number.isFinite(Number(src.clampMax)) && Number(src.clampMax) > 0 ? Math.floor(Number(src.clampMax)) : 9999,
+    // "Highlight max value in row" — same rule as SIP/FCS (defaults copied
+    // from its rule editor: green fill, white font). Applies to the export
+    // as conditional formatting and to the Data grid as a live preview.
+    maxInRow: {
+      enabled: !!(src.maxInRow && src.maxInRow.enabled),
+      color: presetColorHex(src.maxInRow && src.maxInRow.color, "#166534"),
+      fontColor: presetColorHex(src.maxInRow && src.maxInRow.fontColor, "#FFFFFF"),
+      bold: !!(src.maxInRow && src.maxInRow.bold)
+    },
+    // Export month/year live in the slice (not component state) so the
+    // Google Sheets sync builder can reproduce the exact workbook the
+    // Download button makes. exportYear stays a raw string so normalize
+    // never fights the year input mid-typing.
+    exportMonth: src.exportMonth != null && Number.isInteger(Number(src.exportMonth)) && Number(src.exportMonth) >= 0 && Number(src.exportMonth) <= 11 ? Number(src.exportMonth) : (/* @__PURE__ */ new Date()).getMonth(),
+    exportYear: src.exportYear != null && String(src.exportYear).trim() !== "" ? String(src.exportYear) : String((/* @__PURE__ */ new Date()).getFullYear())
   };
+}
+const RECORDER_SHARED_CONFIG_DOC = ["shared", "recorderConfig"];
+const RECORDER_SHARED_CONFIG_FIELDS = ["clients", "filePattern", "match", "overwrite", "upscale", "clampMax", "maxInRow"];
+const RECORDER_SHARED_MIGRATED_KEY = "mrg_recorder_shared_migrated_v1";
+const recorderMonthKey = (iso) => String(iso || "").slice(0, 7);
+const recorderSharedMonthDocId = (mk) => `recorderValues_${mk}`;
+function recorderMonthSlice(values, mk) {
+  const out = {};
+  for (const [cid, byDate] of Object.entries(values || {})) {
+    for (const [iso, rows] of Object.entries(byDate || {})) {
+      if (recorderMonthKey(iso) !== mk) continue;
+      (out[cid] = out[cid] || {})[iso] = rows;
+    }
+  }
+  return out;
+}
+function recorderApplyMonthSlice(values, mk, sharedMonth) {
+  const next = {};
+  for (const [cid, byDate] of Object.entries(values || {})) {
+    for (const [iso, rows] of Object.entries(byDate || {})) {
+      if (recorderMonthKey(iso) === mk) continue;
+      (next[cid] = next[cid] || {})[iso] = rows;
+    }
+  }
+  for (const [cid, byDate] of Object.entries(sharedMonth || {})) {
+    for (const [iso, rows] of Object.entries(byDate || {})) {
+      if (recorderMonthKey(iso) !== mk) continue;
+      if (!rows || typeof rows !== "object" || !Object.keys(rows).length) continue;
+      (next[cid] = next[cid] || {})[iso] = rows;
+    }
+  }
+  return next;
+}
+function recorderDiffValues(prev, next) {
+  const months = {};
+  const put = (mk, path, v) => {
+    let node = months[mk] = months[mk] || {};
+    for (let i = 0; i < path.length - 1; i++) {
+      const k = path[i];
+      if (node[k] == null || typeof node[k] !== "object") node[k] = {};
+      node = node[k];
+    }
+    node[path[path.length - 1]] = v;
+  };
+  const cids = /* @__PURE__ */ new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+  for (const cid of cids) {
+    const pc = (prev || {})[cid] || {}, nc = (next || {})[cid] || {};
+    const dates = /* @__PURE__ */ new Set([...Object.keys(pc), ...Object.keys(nc)]);
+    for (const iso of dates) {
+      const mk = recorderMonthKey(iso);
+      const pd = pc[iso], nd = nc[iso];
+      if (pd && !nd) {
+        put(mk, [cid, iso], null);
+        continue;
+      }
+      const prows = pd || {}, nrows = nd || {};
+      const rids = /* @__PURE__ */ new Set([...Object.keys(prows), ...Object.keys(nrows)]);
+      for (const rid of rids) {
+        const ph = prows[rid], nh = nrows[rid];
+        if (ph && !nh) {
+          put(mk, [cid, iso, rid], null);
+          continue;
+        }
+        const phh = ph || {}, nhh = nh || {};
+        const hours = /* @__PURE__ */ new Set([...Object.keys(phh), ...Object.keys(nhh)]);
+        for (const h of hours) {
+          const pv = phh[h], nv = nhh[h];
+          if (pv === nv) continue;
+          put(mk, [cid, iso, rid, h], nv == null ? null : nv);
+        }
+      }
+    }
+  }
+  return months;
+}
+function recorderMergeQueuedMonth(a, b) {
+  if (b == null || typeof b !== "object") return b;
+  if (a == null || typeof a !== "object") a = {};
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b)) {
+    out[k] = v != null && typeof v === "object" ? recorderMergeQueuedMonth(out[k], v) : v;
+  }
+  return out;
+}
+function recorderOverlayQueuedMonth(sharedMonth, queued) {
+  if (!queued) return sharedMonth;
+  const walk = (base, q) => {
+    const out = base != null && typeof base === "object" ? { ...base } : {};
+    for (const [k, v] of Object.entries(q)) {
+      if (v === null) delete out[k];
+      else if (typeof v === "object") out[k] = walk(out[k], v);
+      else out[k] = v;
+    }
+    return out;
+  };
+  return walk(sharedMonth || {}, queued);
+}
+function recorderMissingCells(localMonth, sharedMonth) {
+  const out = {};
+  let any = false;
+  for (const [cid, byDate] of Object.entries(localMonth || {})) {
+    for (const [iso, rows] of Object.entries(byDate || {})) {
+      for (const [rid, byHour] of Object.entries(rows || {})) {
+        for (const [h, v] of Object.entries(byHour || {})) {
+          const has = sharedMonth?.[cid]?.[iso]?.[rid]?.[h];
+          if (has != null || v == null) continue;
+          (((out[cid] = out[cid] || {})[iso] = out[cid][iso] || {})[rid] = out[cid][iso][rid] || {})[h] = v;
+          any = true;
+        }
+      }
+    }
+  }
+  return any ? out : null;
+}
+function recorderQueueToFirestore(queued, deleteField) {
+  const walk = (q) => {
+    const out = {};
+    for (const [k, v] of Object.entries(q)) {
+      out[k] = v === null ? deleteField() : typeof v === "object" ? walk(v) : v;
+    }
+    return out;
+  };
+  return walk(queued || {});
 }
 const recorderNorm = (s) => String(s || "").toUpperCase().replace(/\u00A0/g, " ").replace(/\|/g, "I").replace(/\s+/g, " ").trim();
 const recorderSig = (s) => recorderNorm(s).replace(/[^A-Z0-9]/g, "");
@@ -8975,8 +9116,30 @@ function recorderBuildWorkbook(rec, year, monthIdx) {
       for (let c = 1; c <= 26; c++) ws.getCell(sepRow, c).fill = sepFill;
       r = sepRow + 1;
     }
+    if (rec.maxInRow && rec.maxInRow.enabled && r > 2) {
+      ws.addConditionalFormatting({
+        ref: `C2:Z${r - 2}`,
+        rules: [{
+          type: "expression",
+          formulae: ["AND(ISNUMBER(C2),C2=MAX($C2:$Z2))"],
+          style: {
+            fill: { type: "pattern", pattern: "solid", bgColor: { argb: argbHex(rec.maxInRow.color) } },
+            font: { bold: !!rec.maxInRow.bold, color: { argb: argbHex(rec.maxInRow.fontColor) } }
+          },
+          priority: 10
+        }]
+      });
+    }
   }
   return wb;
+}
+async function buildRecorderBlob(state) {
+  const rec = recorderNormalizeState(state.recorder);
+  const year = recorderParseIntOr(rec.exportYear, (/* @__PURE__ */ new Date()).getFullYear());
+  const wb = recorderBuildWorkbook(rec, year, rec.exportMonth);
+  const buf = await wb.xlsx.writeBuffer();
+  const filename = recorderFileName(rec.filePattern, year, rec.exportMonth);
+  return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 function recorderCellText(v) {
   if (v == null) return "";
@@ -9192,13 +9355,16 @@ function RecorderMissingPanel({ missing, manual, setManual, hourLabel }) {
     ));
   }))))));
 }
-function RecorderDataTab({ rec, setRec, onToast, confirmDialog: confirmDialog2, onImport }) {
+function RecorderDataTab({ rec, setRec, onToast, confirmDialog: confirmDialog2, onImport, onVisibleMonth }) {
   const [clientSel, setClientSel] = useState(() => rec.clients[0] ? rec.clients[0].id : null);
   const [date, setDate] = useState(recorderTodayIso());
   const importRef = useRef(null);
+  const monthPrefix = date.slice(0, 7);
+  useEffect(() => {
+    if (onVisibleMonth) onVisibleMonth(monthPrefix);
+  }, [monthPrefix, onVisibleMonth]);
   const client = rec.clients.find((c) => c.id === clientSel) || rec.clients[0];
   if (!client) return /* @__PURE__ */ React.createElement("p", { className: "text-sm text-neutral-500" }, "No clients configured — add one in the Config tab.");
-  const monthPrefix = date.slice(0, 7);
   const [yy, mm] = monthPrefix.split("-").map(Number);
   const daysInMonth2 = new Date(yy, mm, 0).getDate();
   const byDate = rec.values[client.id] || {};
@@ -9271,18 +9437,24 @@ function RecorderDataTab({ rec, setRec, onToast, confirmDialog: confirmDialog2, 
       },
       i + 1
     );
-  })), /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-full border-collapse text-xs" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "sticky left-0 z-10 border-b border-neutral-900 bg-neutral-950 px-3 py-2 text-left font-semibold text-neutral-400" }, recorderPrettyDate(date)), HOURS_24.map((h, i) => /* @__PURE__ */ React.createElement("th", { key: i, className: `border-b border-neutral-900 bg-neutral-950 px-1 py-2 text-center font-medium ${i === curHour && date === today ? "text-blue-300" : "text-neutral-500"}` }, h)))), /* @__PURE__ */ React.createElement("tbody", null, client.rows.map((row) => /* @__PURE__ */ React.createElement("tr", { key: row.id, className: "odd:bg-neutral-900/30" }, /* @__PURE__ */ React.createElement("td", { className: "sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1" }, /* @__PURE__ */ React.createElement("span", { className: "mr-2 inline-block h-2 w-2 rounded-sm align-middle", style: { background: row.color } }), /* @__PURE__ */ React.createElement("span", { className: "align-middle text-neutral-200" }, row.label)), HOURS_24.map((_, h) => {
-    const v = (byRow[row.id] || {})[h];
-    return /* @__PURE__ */ React.createElement("td", { key: h, className: "border-b border-neutral-900/60 p-0.5 text-center" }, /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        value: v == null ? "" : String(v),
-        onChange: (e) => setCell(row.id, h, e.target.value.replace(/[^0-9]/g, "")),
-        inputMode: "numeric",
-        className: `w-10 rounded bg-transparent px-0.5 py-1 text-center outline-none focus:bg-neutral-800 ${v != null ? "text-neutral-100" : "text-neutral-600"}`
-      }
-    ));
-  })))))));
+  })), /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-full border-collapse text-xs" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "sticky left-0 z-10 border-b border-neutral-900 bg-neutral-950 px-3 py-2 text-left font-semibold text-neutral-400" }, recorderPrettyDate(date)), HOURS_24.map((h, i) => /* @__PURE__ */ React.createElement("th", { key: i, className: `border-b border-neutral-900 bg-neutral-950 px-1 py-2 text-center font-medium ${i === curHour && date === today ? "text-blue-300" : "text-neutral-500"}` }, h)))), /* @__PURE__ */ React.createElement("tbody", null, client.rows.map((row) => {
+    const rowVals = byRow[row.id] || {};
+    const rowMax = rec.maxInRow.enabled ? Object.values(rowVals).reduce((m, x) => x != null && (m == null || x > m) ? x : m, null) : null;
+    return /* @__PURE__ */ React.createElement("tr", { key: row.id, className: "odd:bg-neutral-900/30" }, /* @__PURE__ */ React.createElement("td", { className: "sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1" }, /* @__PURE__ */ React.createElement("span", { className: "mr-2 inline-block h-2 w-2 rounded-sm align-middle", style: { background: row.color } }), /* @__PURE__ */ React.createElement("span", { className: "align-middle text-neutral-200" }, row.label)), HOURS_24.map((_, h) => {
+      const v = rowVals[h];
+      const isMax = rowMax != null && v === rowMax;
+      return /* @__PURE__ */ React.createElement("td", { key: h, className: "border-b border-neutral-900/60 p-0.5 text-center" }, /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          value: v == null ? "" : String(v),
+          onChange: (e) => setCell(row.id, h, e.target.value.replace(/[^0-9]/g, "")),
+          inputMode: "numeric",
+          style: isMax ? { background: rec.maxInRow.color, color: rec.maxInRow.fontColor, fontWeight: rec.maxInRow.bold ? 700 : 400 } : void 0,
+          className: `w-10 rounded bg-transparent px-0.5 py-1 text-center outline-none focus:bg-neutral-800 ${v != null ? "text-neutral-100" : "text-neutral-600"}`
+        }
+      ));
+    }));
+  })))));
 }
 function RecorderConfigTab({ rec, setRec, confirmDialog: confirmDialog2, onToast }) {
   const [selId, setSelId] = useState(() => rec.clients[0] ? rec.clients[0].id : null);
@@ -9365,9 +9537,9 @@ function RecorderConfigTab({ rec, setRec, confirmDialog: confirmDialog2, onToast
 function RecorderRulesTab({ rec, setRec, engine, onPreload }) {
   const patch = (p) => setRec((r) => ({ ...r, ...p }));
   const Row = ({ label, hint, children }) => /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950 px-4 py-3" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-[240px] flex-1" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm text-neutral-200" }, label), hint && /* @__PURE__ */ React.createElement("div", { className: "mt-0.5 text-[11px] text-neutral-600" }, hint)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, children));
-  return /* @__PURE__ */ React.createElement("div", { className: "max-w-3xl space-y-2.5 anim-fade-in" }, /* @__PURE__ */ React.createElement(Row, { label: "Name matching", hint: "How OCR text is matched to watched rows. Exact matches always win; this only sets how much OCR misreading is tolerated." }, /* @__PURE__ */ React.createElement(Select, { value: rec.match, onChange: (e) => patch({ match: e.target.value }), className: "!w-auto" }, /* @__PURE__ */ React.createElement("option", { value: "strict" }, "Strict — 1 misread character (recommended)"), /* @__PURE__ */ React.createElement("option", { value: "normal" }, "Normal — 2 (may cross-match similar names)"), /* @__PURE__ */ React.createElement("option", { value: "loose" }, "Loose — 3 (risky with sibling names)"))), /* @__PURE__ */ React.createElement(Row, { label: "Overwrite on save", hint: "When a cell already has a value for the slot, saving a capture replaces it. Off = existing values are kept." }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", className: "h-4 w-4 accent-blue-500", checked: rec.overwrite, onChange: (e) => patch({ overwrite: e.target.checked }) })), /* @__PURE__ */ React.createElement(Row, { label: "Upscale small screenshots", hint: "2–3× enlargement before OCR. Helps with small UI text; turn off only if reading gets worse." }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", className: "h-4 w-4 accent-blue-500", checked: rec.upscale, onChange: (e) => patch({ upscale: e.target.checked }) })), /* @__PURE__ */ React.createElement(Row, { label: "Maximum value", hint: "Readings above this are clamped — protects against a prefix number sneaking in as a value." }, /* @__PURE__ */ React.createElement(Input, { type: "number", value: rec.clampMax, onChange: (e) => patch({ clampMax: Math.max(1, recorderParseIntOr(e.target.value, 9999)) }), className: "!w-28" })), /* @__PURE__ */ React.createElement(Row, { label: "Export file name", hint: "{Month} and {Year} are replaced at download time." }, /* @__PURE__ */ React.createElement(Input, { value: rec.filePattern, onChange: (e) => patch({ filePattern: e.target.value }), className: "!w-80 font-mono !text-xs" })), /* @__PURE__ */ React.createElement(Row, { label: "OCR engine", hint: "Tesseract.js — downloaded from CDN on first use (a few MB, then cached by the browser). Screenshots never leave this machine." }, /* @__PURE__ */ React.createElement(Pill, { tone: engine.status === "ready" ? "success" : engine.status === "idle" ? "default" : "accent" }, engine.status === "ready" ? "Ready" : engine.status === "idle" ? "Not loaded" : engine.label || "Loading…"), engine.status !== "ready" && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onPreload }, "Load now")));
+  return /* @__PURE__ */ React.createElement("div", { className: "max-w-3xl space-y-2.5 anim-fade-in" }, /* @__PURE__ */ React.createElement(Row, { label: "Name matching", hint: "How OCR text is matched to watched rows. Exact matches always win; this only sets how much OCR misreading is tolerated." }, /* @__PURE__ */ React.createElement(Select, { value: rec.match, onChange: (e) => patch({ match: e.target.value }), className: "!w-auto" }, /* @__PURE__ */ React.createElement("option", { value: "strict" }, "Strict — 1 misread character (recommended)"), /* @__PURE__ */ React.createElement("option", { value: "normal" }, "Normal — 2 (may cross-match similar names)"), /* @__PURE__ */ React.createElement("option", { value: "loose" }, "Loose — 3 (risky with sibling names)"))), /* @__PURE__ */ React.createElement(Row, { label: "Overwrite on save", hint: "When a cell already has a value for the slot, saving a capture replaces it. Off = existing values are kept." }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", className: "h-4 w-4 accent-blue-500", checked: rec.overwrite, onChange: (e) => patch({ overwrite: e.target.checked }) })), /* @__PURE__ */ React.createElement(Row, { label: "Upscale small screenshots", hint: "2–3× enlargement before OCR. Helps with small UI text; turn off only if reading gets worse." }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", className: "h-4 w-4 accent-blue-500", checked: rec.upscale, onChange: (e) => patch({ upscale: e.target.checked }) })), /* @__PURE__ */ React.createElement(Row, { label: "Maximum value", hint: "Readings above this are clamped — protects against a prefix number sneaking in as a value." }, /* @__PURE__ */ React.createElement(Input, { type: "number", value: rec.clampMax, onChange: (e) => patch({ clampMax: Math.max(1, recorderParseIntOr(e.target.value, 9999)) }), className: "!w-28" })), /* @__PURE__ */ React.createElement(Row, { label: "Highlight highest value in a row", hint: "Same rule as SIP/FCS — colors each row's maximum across the 24 hour columns, live in the Data grid and as conditional formatting in the exported workbook." }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Fill"), /* @__PURE__ */ React.createElement(PresetColorPicker, { value: rec.maxInRow.color, onChange: (hex) => patch({ maxInRow: { ...rec.maxInRow, color: hex } }), title: "Highlight fill color", showHex: false }), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Font"), /* @__PURE__ */ React.createElement(PresetColorPicker, { value: rec.maxInRow.fontColor, onChange: (hex) => patch({ maxInRow: { ...rec.maxInRow, fontColor: hex } }), title: "Highlight font color", showHex: false }), /* @__PURE__ */ React.createElement("label", { className: `inline-flex cursor-pointer items-center gap-1.5 text-xs ${rec.maxInRow.bold ? "text-neutral-100" : "text-neutral-500"}`, title: "Bold the highlighted value" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", className: "h-3.5 w-3.5 accent-blue-500", checked: rec.maxInRow.bold, onChange: (e) => patch({ maxInRow: { ...rec.maxInRow, bold: e.target.checked } }) }), /* @__PURE__ */ React.createElement("span", { className: "font-bold" }, "B")), /* @__PURE__ */ React.createElement("input", { type: "checkbox", className: "h-4 w-4 accent-blue-500", checked: rec.maxInRow.enabled, onChange: (e) => patch({ maxInRow: { ...rec.maxInRow, enabled: e.target.checked } }) })), /* @__PURE__ */ React.createElement(Row, { label: "Export file name", hint: "{Month} and {Year} are replaced at download time." }, /* @__PURE__ */ React.createElement(Input, { value: rec.filePattern, onChange: (e) => patch({ filePattern: e.target.value }), className: "!w-80 font-mono !text-xs" })), /* @__PURE__ */ React.createElement(Row, { label: "OCR engine", hint: "Tesseract.js — downloaded from CDN on first use (a few MB, then cached by the browser). Screenshots never leave this machine." }, /* @__PURE__ */ React.createElement(Pill, { tone: engine.status === "ready" ? "success" : engine.status === "idle" ? "default" : "accent" }, engine.status === "ready" ? "Ready" : engine.status === "idle" ? "Not loaded" : engine.label || "Loading…"), engine.status !== "ready" && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onPreload }, "Load now")));
 }
-function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setTarget, engine, slotStats, exportSel, setExportSel, onExport, busyExport }) {
+function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setTarget, engine, slotStats, exportSel, setExportSel, onExport, busyExport, shared, onRefreshShared, gsheets }) {
   const theme = state.theme || "dark";
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const exportYear = recorderParseIntOr(exportSel.year, (/* @__PURE__ */ new Date()).getFullYear());
@@ -9383,9 +9555,9 @@ function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setT
   )), /* @__PURE__ */ React.createElement("h1", { className: "text-[17px] font-bold tracking-tight leading-tight mt-2" }, "Recorder"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500 mt-1" }, "Screenshots → hourly record workbook"), /* @__PURE__ */ React.createElement(AccountChip, { sync })), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto min-h-0 space-y-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "every capture saves here" }, "Recording slot"), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2" }, /* @__PURE__ */ React.createElement(Input, { type: "date", value: target.date, onChange: (e) => {
     const v = e.target.value;
     if (v) setTarget((t) => ({ ...t, date: v }));
-  } }), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: target.hour, onChange: (e) => setTarget((t) => ({ ...t, hour: Number(e.target.value) })) }, HOURS_24.map((h, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, h))), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setTarget({ date: recorderTodayIso(), hour: (/* @__PURE__ */ new Date()).getHours() }) }, "Now")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "saved values at this slot" }, "Coverage"), /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, slotStats.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-center justify-between gap-2 text-xs" }, /* @__PURE__ */ React.createElement("span", { className: "min-w-0 truncate text-neutral-400" }, s.name), /* @__PURE__ */ React.createElement(Pill, { tone: s.filled >= s.total && s.total > 0 ? "success" : s.filled ? "accent" : "default" }, s.filled, "/", s.total))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: engine.status === "ready" ? "loaded" : "loads on first capture" }, "OCR engine"), /* @__PURE__ */ React.createElement(Pill, { tone: engine.status === "ready" ? "success" : engine.status === "idle" ? "default" : "accent" }, engine.status === "ready" ? "Ready" : engine.status === "idle" ? "Not loaded" : engine.label || "Loading…"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "Screenshots are read in this browser only — images are never stored in the app state or synced to the cloud."))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Export month"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: exportSel.month, onChange: (e) => setExportSel((x) => ({ ...x, month: Number(e.target.value) })) }, RECORDER_MONTHS.map((m, i) => /* @__PURE__ */ React.createElement("option", { key: m, value: i }, m))), /* @__PURE__ */ React.createElement(Input, { type: "number", value: exportSel.year, onChange: (e) => setExportSel((x) => ({ ...x, year: e.target.value })), className: "!w-24" }))), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busyExport, className: "w-full" }, busyExport ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Building") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Download workbook")), /* @__PURE__ */ React.createElement("p", { className: "truncate text-center font-mono text-[10px] text-neutral-600", title: recorderFileName(rec.filePattern, exportYear, exportSel.month) }, recorderFileName(rec.filePattern, exportYear, exportSel.month))));
+  } }), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: target.hour, onChange: (e) => setTarget((t) => ({ ...t, hour: Number(e.target.value) })) }, HOURS_24.map((h, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, h))), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setTarget({ date: recorderTodayIso(), hour: (/* @__PURE__ */ new Date()).getHours() }) }, "Now")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "saved values at this slot" }, "Coverage"), /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, slotStats.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-center justify-between gap-2 text-xs" }, /* @__PURE__ */ React.createElement("span", { className: "min-w-0 truncate text-neutral-400" }, s.name), /* @__PURE__ */ React.createElement(Pill, { tone: s.filled >= s.total && s.total > 0 ? "success" : s.filled ? "accent" : "default" }, s.filled, "/", s.total))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "everyone signed in sees the same data" }, "Team sync"), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: shared.status === "live" ? "success" : shared.status === "loading" ? "accent" : "muted" }, shared.status === "live" ? "Shared — live" : shared.status === "loading" ? "Refreshing…" : shared.status === "error" ? "Sync error" : "Local only"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: onRefreshShared, disabled: shared.status === "loading" || !sync.uid }, /* @__PURE__ */ React.createElement(IconReset, null), " Refresh")), shared.status === "live" && shared.at > 0 && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-neutral-600" }, "Team data pulled ", new Date(shared.at).toLocaleTimeString(), " — refreshes every minute and before each export."), shared.message && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-amber-300" }, shared.message)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: engine.status === "ready" ? "loaded" : "loads on first capture" }, "OCR engine"), /* @__PURE__ */ React.createElement(Pill, { tone: engine.status === "ready" ? "success" : engine.status === "idle" ? "default" : "accent" }, engine.status === "ready" ? "Ready" : engine.status === "idle" ? "Not loaded" : engine.label || "Loading…"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "Screenshots are read in this browser only — images are never stored in the app state or synced to the cloud."))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "recorder", sheetId: state.googleSheets?.sheetIds?.recorder }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Export month"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: exportSel.month, onChange: (e) => setExportSel((x) => ({ ...x, month: Number(e.target.value) })) }, RECORDER_MONTHS.map((m, i) => /* @__PURE__ */ React.createElement("option", { key: m, value: i }, m))), /* @__PURE__ */ React.createElement(Input, { type: "number", value: exportSel.year, onChange: (e) => setExportSel((x) => ({ ...x, year: e.target.value })), className: "!w-24" }))), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busyExport, className: "w-full" }, busyExport ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Building") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Download workbook")), /* @__PURE__ */ React.createElement("p", { className: "truncate text-center font-mono text-[10px] text-neutral-600", title: recorderFileName(rec.filePattern, exportYear, exportSel.month) }, recorderFileName(rec.filePattern, exportYear, exportSel.month))));
 }
-function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast, confirmDialog: confirmDialog2 }) {
+function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast, confirmDialog: confirmDialog2, gsheets }) {
   const rec = useMemo(() => recorderNormalizeState(state.recorder), [state.recorder]);
   const setRec = useCallback((next) => setState((s) => {
     const prev = recorderNormalizeState(s.recorder);
@@ -9396,12 +9568,243 @@ function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onTo
   const [target, setTarget] = useState(() => ({ date: recorderTodayIso(), hour: (/* @__PURE__ */ new Date()).getHours() }));
   const [engine, setEngine] = useState(() => ({ status: recorderWorkerPromise ? "ready" : "idle", label: "" }));
   const [busyExport, setBusyExport] = useState(false);
-  const [exportSel, setExportSel] = useState(() => ({ month: (/* @__PURE__ */ new Date()).getMonth(), year: (/* @__PURE__ */ new Date()).getFullYear() }));
   const queueRef = useRef(Promise.resolve());
   const recRef = useRef(rec);
   recRef.current = rec;
   const targetRef = useRef(target);
   targetRef.current = target;
+  const exportSel = { month: rec.exportMonth, year: rec.exportYear };
+  const setExportSel = useCallback((updater) => setRec((r) => {
+    const cur = { month: r.exportMonth, year: r.exportYear };
+    const nx = typeof updater === "function" ? updater(cur) : updater;
+    return { ...r, exportMonth: nx.month, exportYear: String(nx.year ?? "") };
+  }), [setRec]);
+  const [shared, setShared] = useState({ status: "idle", at: 0, message: "" });
+  const sharedQueueRef = useRef({ config: null, months: {} });
+  const sharedFlushTimerRef = useRef(null);
+  const sharedFlushBusyRef = useRef(false);
+  const sharedLoadedMonthsRef = useRef(/* @__PURE__ */ new Set());
+  const sharedRefreshRef = useRef({ inFlight: null, queued: /* @__PURE__ */ new Set() });
+  const sharedInitRef = useRef(false);
+  const applyingRemoteRef = useRef(false);
+  const prevRecShadowRef = useRef(rec);
+  const flushSharedRef = useRef(() => {
+  });
+  const refreshSharedRef = useRef(() => null);
+  const canShared = useCallback(() => !!(window.__fb && window.__fbm && sync.uid), [sync.uid]);
+  const sharedErrMessage = (e) => {
+    const code = e?.code ? ` (${e.code})` : "";
+    return e?.code === "permission-denied" ? `Firestore rules denied shared access${code} — allow signed-in reads/writes on shared/recorderConfig and shared/recorderValues_*.` : `Team sync failed${code}. Your entries stay saved locally — Refresh retries.`;
+  };
+  const scheduleSharedFlush = useCallback(() => {
+    if (sharedFlushTimerRef.current) clearTimeout(sharedFlushTimerRef.current);
+    sharedFlushTimerRef.current = setTimeout(() => {
+      flushSharedRef.current();
+    }, 800);
+  }, []);
+  const flushShared = useCallback(async () => {
+    const q = sharedQueueRef.current;
+    if (!q.config && !Object.keys(q.months).length) return;
+    if (!canShared()) return;
+    if (sharedFlushBusyRef.current) {
+      scheduleSharedFlush();
+      return;
+    }
+    sharedFlushBusyRef.current = true;
+    sharedQueueRef.current = { config: null, months: {} };
+    try {
+      const { db } = window.__fb;
+      const { doc, setDoc, serverTimestamp, deleteField } = window.__fbm;
+      if (q.config) {
+        await setDoc(
+          doc(db, RECORDER_SHARED_CONFIG_DOC[0], RECORDER_SHARED_CONFIG_DOC[1]),
+          { ...firestoreSanitize(q.config), updatedAt: serverTimestamp(), updatedBy: sync.uid, updatedByEmail: sync.email || "" },
+          { merge: true }
+        );
+      }
+      for (const [mk, m] of Object.entries(q.months)) {
+        await setDoc(
+          doc(db, "shared", recorderSharedMonthDocId(mk)),
+          { values: recorderQueueToFirestore(m, deleteField), updatedAt: serverTimestamp(), updatedBy: sync.uid },
+          { merge: true }
+        );
+        sharedLoadedMonthsRef.current.add(mk);
+      }
+      setShared({ status: "live", at: Date.now(), message: "" });
+    } catch (e) {
+      const later = sharedQueueRef.current;
+      const months = { ...q.months };
+      for (const [mk, m] of Object.entries(later.months)) months[mk] = recorderMergeQueuedMonth(months[mk], m);
+      sharedQueueRef.current = {
+        config: q.config || later.config ? { ...q.config || {}, ...later.config || {} } : null,
+        months
+      };
+      console.warn("recorder shared sync save failed", { code: e?.code, message: e?.message, uid: sync.uid, error: e });
+      setShared({ status: "error", at: Date.now(), message: sharedErrMessage(e) });
+    } finally {
+      sharedFlushBusyRef.current = false;
+    }
+  }, [canShared, scheduleSharedFlush, sync.uid, sync.email]);
+  flushSharedRef.current = flushShared;
+  const refreshShared = useCallback(async (monthKeys = []) => {
+    if (!canShared()) {
+      setShared({ status: window.__fb ? "offline" : "idle", at: Date.now(), message: window.__fb ? "Sign in to share Recorder data with the team." : "" });
+      return null;
+    }
+    const want = [...new Set(monthKeys.filter(Boolean))];
+    const rr = sharedRefreshRef.current;
+    if (rr.inFlight) {
+      want.forEach((mk) => rr.queued.add(mk));
+      return rr.inFlight;
+    }
+    const run = (async () => {
+      setShared((s) => ({ ...s, status: "loading" }));
+      try {
+        const { db } = window.__fb;
+        const { doc, getDoc, setDoc, serverTimestamp } = window.__fbm;
+        const local = recRef.current;
+        const cref = doc(db, RECORDER_SHARED_CONFIG_DOC[0], RECORDER_SHARED_CONFIG_DOC[1]);
+        const csnap = await getDoc(cref);
+        let cfgPatch = null;
+        if (!csnap.exists()) {
+          const seed = {};
+          for (const f of RECORDER_SHARED_CONFIG_FIELDS) seed[f] = firestoreSanitize(local[f]);
+          await setDoc(cref, { ...seed, updatedAt: serverTimestamp(), updatedBy: sync.uid, updatedByEmail: sync.email || "" });
+        } else {
+          const data = firestoreDesanitize(csnap.data() || {});
+          cfgPatch = {};
+          for (const f of RECORDER_SHARED_CONFIG_FIELDS) if (data[f] !== void 0) cfgPatch[f] = data[f];
+        }
+        let migrated = {};
+        try {
+          migrated = JSON.parse(localStorage.getItem(RECORDER_SHARED_MIGRATED_KEY)) || {};
+        } catch {
+        }
+        const monthPatches = {};
+        for (const mk of want) {
+          const mref = doc(db, "shared", recorderSharedMonthDocId(mk));
+          const msnap = await getDoc(mref);
+          const localMonth = recorderMonthSlice(local.values, mk);
+          if (!msnap.exists()) {
+            if (Object.keys(localMonth).length) {
+              await setDoc(mref, { values: localMonth, updatedAt: serverTimestamp(), updatedBy: sync.uid });
+            }
+            monthPatches[mk] = localMonth;
+          } else {
+            const sharedMonth = firestoreDesanitize(msnap.data() || {}).values || {};
+            if (!migrated[mk]) {
+              const adds = recorderMissingCells(localMonth, sharedMonth);
+              if (adds) await setDoc(mref, { values: adds, updatedAt: serverTimestamp(), updatedBy: sync.uid }, { merge: true });
+              monthPatches[mk] = adds ? recorderMergeQueuedMonth(sharedMonth, adds) : sharedMonth;
+            } else {
+              monthPatches[mk] = sharedMonth;
+            }
+          }
+          migrated[mk] = 1;
+          sharedLoadedMonthsRef.current.add(mk);
+        }
+        try {
+          localStorage.setItem(RECORDER_SHARED_MIGRATED_KEY, JSON.stringify(migrated));
+        } catch {
+        }
+        applyingRemoteRef.current = true;
+        setState((s) => {
+          const prev = recorderNormalizeState(s.recorder);
+          let values = prev.values;
+          for (const [mk, m] of Object.entries(monthPatches)) {
+            values = recorderApplyMonthSlice(values, mk, recorderOverlayQueuedMonth(m, sharedQueueRef.current.months[mk]));
+          }
+          const cfg = cfgPatch ? { ...cfgPatch, ...sharedQueueRef.current.config || {} } : {};
+          const changed = JSON.stringify(values) !== JSON.stringify(prev.values) || Object.keys(cfg).some((f) => JSON.stringify(cfg[f]) !== JSON.stringify(prev[f]));
+          if (!changed) {
+            applyingRemoteRef.current = false;
+            return s;
+          }
+          return { ...s, recorder: { ...prev, ...cfg, values } };
+        });
+        setShared({ status: "live", at: Date.now(), message: "" });
+        return { monthPatches };
+      } catch (e) {
+        console.warn("recorder shared sync refresh failed", { code: e?.code, message: e?.message, uid: sync.uid, error: e });
+        setShared({ status: "error", at: Date.now(), message: sharedErrMessage(e) });
+        return null;
+      } finally {
+        rr.inFlight = null;
+        if (rr.queued.size) {
+          const next = [...rr.queued];
+          rr.queued.clear();
+          refreshSharedRef.current(next);
+        }
+      }
+    })();
+    rr.inFlight = run;
+    return run;
+  }, [canShared, setState, sync.uid, sync.email]);
+  refreshSharedRef.current = refreshShared;
+  const dataMonthRef = useRef(null);
+  const monthsInView = useCallback(() => {
+    const year = recorderParseIntOr(recRef.current.exportYear, (/* @__PURE__ */ new Date()).getFullYear());
+    return [...new Set([
+      recorderMonthKey(targetRef.current.date),
+      `${year}-${String(recRef.current.exportMonth + 1).padStart(2, "0")}`,
+      dataMonthRef.current
+    ].filter(Boolean))];
+  }, []);
+  const onVisibleMonth = useCallback((mk) => {
+    dataMonthRef.current = mk;
+    if (canShared() && !sharedLoadedMonthsRef.current.has(mk)) refreshSharedRef.current([mk]);
+  }, [canShared]);
+  useEffect(() => {
+    if (!canShared()) {
+      sharedInitRef.current = false;
+      setShared({ status: window.__fb ? "offline" : "idle", at: 0, message: window.__fb && !sync.uid ? "Sign in to share Recorder data with the team." : "" });
+      return;
+    }
+    const missing2 = monthsInView().filter((mk) => !sharedLoadedMonthsRef.current.has(mk));
+    if (!sharedInitRef.current || missing2.length) {
+      sharedInitRef.current = true;
+      refreshSharedRef.current(missing2.length ? missing2 : monthsInView());
+    }
+  }, [sync.uid, target.date, rec.exportMonth, rec.exportYear, canShared, monthsInView]);
+  useEffect(() => {
+    if (!canShared()) return;
+    const tick = () => {
+      if (!document.hidden) refreshSharedRef.current(monthsInView());
+    };
+    const t = setInterval(tick, 6e4);
+    window.addEventListener("focus", tick);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("focus", tick);
+    };
+  }, [sync.uid, canShared, monthsInView]);
+  useEffect(() => {
+    const prev = prevRecShadowRef.current;
+    prevRecShadowRef.current = rec;
+    if (applyingRemoteRef.current) {
+      applyingRemoteRef.current = false;
+      return;
+    }
+    if (prev === rec || !canShared()) return;
+    const q = sharedQueueRef.current;
+    let any = false;
+    for (const f of RECORDER_SHARED_CONFIG_FIELDS) {
+      if (JSON.stringify(prev[f]) !== JSON.stringify(rec[f])) {
+        (q.config = q.config || {})[f] = rec[f];
+        any = true;
+      }
+    }
+    const months = recorderDiffValues(prev.values, rec.values);
+    for (const [mk, m] of Object.entries(months)) {
+      q.months[mk] = recorderMergeQueuedMonth(q.months[mk], m);
+      any = true;
+    }
+    if (any) scheduleSharedFlush();
+  }, [rec, canShared, scheduleSharedFlush]);
+  useEffect(() => () => {
+    if (sharedFlushTimerRef.current) clearTimeout(sharedFlushTimerRef.current);
+    flushSharedRef.current();
+  }, []);
   useEffect(() => {
     window.__recorderOcrProgress = (m) => {
       if (!m || !m.status) return;
@@ -9559,12 +9962,36 @@ function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onTo
   const doExport = async () => {
     setBusyExport(true);
     try {
-      const year = recorderParseIntOr(exportSel.year, (/* @__PURE__ */ new Date()).getFullYear());
-      const wb = recorderBuildWorkbook(recRef.current, year, exportSel.month);
+      const year = recorderParseIntOr(recRef.current.exportYear, (/* @__PURE__ */ new Date()).getFullYear());
+      const monthIdx = recRef.current.exportMonth;
+      const mk = `${year}-${String(monthIdx + 1).padStart(2, "0")}`;
+      let recForExport = recRef.current;
+      try {
+        await flushSharedRef.current();
+        const res = await refreshSharedRef.current([mk]);
+        if (res && res.monthPatches && res.monthPatches[mk]) {
+          recForExport = {
+            ...recForExport,
+            values: recorderApplyMonthSlice(
+              recForExport.values,
+              mk,
+              recorderOverlayQueuedMonth(res.monthPatches[mk], sharedQueueRef.current.months[mk])
+            )
+          };
+        }
+      } catch {
+      }
+      const wb = recorderBuildWorkbook(recForExport, year, monthIdx);
       const buf = await wb.xlsx.writeBuffer();
-      const fname = recorderFileName(recRef.current.filePattern, year, exportSel.month);
+      const fname = recorderFileName(recForExport.filePattern, year, monthIdx);
       saveAs(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), fname);
       onToast("ok", `Downloaded ${fname}`);
+      if (gsheets && gsheets.conn && gsheets.conn.connected) {
+        try {
+          await gsheets.sync("recorder", { interactive: false });
+        } catch {
+        }
+      }
     } catch (err) {
       onToast("err", `Export failed: ${String(err && err.message || err)}`);
     } finally {
@@ -9602,9 +10029,12 @@ function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onTo
       exportSel,
       setExportSel,
       onExport: doExport,
-      busyExport
+      busyExport,
+      shared,
+      onRefreshShared: () => refreshSharedRef.current(monthsInView()),
+      gsheets
     }
-  ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-20" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module · Admin only"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Recorder")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, TABS.map(([id, label]) => /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-20" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module · Team shared"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Recorder")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, TABS.map(([id, label]) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: id,
@@ -9627,11 +10057,11 @@ function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onTo
   )), /* @__PURE__ */ React.createElement(RecorderMissingPanel, { missing, manual, setManual, hourLabel: `${recorderPrettyDate(target.date)} · ${HOURS_24[target.hour]}` }), hasPending && /* @__PURE__ */ React.createElement("div", { className: "sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/40 bg-[#0b1220]/95 px-4 py-3 backdrop-blur" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-neutral-300" }, "Saving to ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-neutral-100" }, recorderPrettyDate(target.date)), " · ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-neutral-100" }, HOURS_24[target.hour]), /* @__PURE__ */ React.createElement("span", { className: "text-neutral-500" }, " — wrong slot? change it in the sidebar first")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => {
     setCaptures([]);
     setManual({});
-  } }, "Discard all"), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "md", onClick: commitAll }, "Commit all")))), rec.tab === "data" && /* @__PURE__ */ React.createElement(RecorderDataTab, { rec, setRec, onToast, confirmDialog: confirmDialog2, onImport: importFile }), rec.tab === "config" && /* @__PURE__ */ React.createElement(RecorderConfigTab, { rec, setRec, confirmDialog: confirmDialog2, onToast }), rec.tab === "rules" && /* @__PURE__ */ React.createElement(RecorderRulesTab, { rec, setRec, engine, onPreload: preloadEngine })), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "state.recorder · numbers only, images never stored"), /* @__PURE__ */ React.createElement("span", null, rec.clients.length, " clients · ", rec.clients.reduce((n, c) => n + c.rows.length, 0), " watched rows"))));
+  } }, "Discard all"), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "md", onClick: commitAll }, "Commit all")))), rec.tab === "data" && /* @__PURE__ */ React.createElement(RecorderDataTab, { rec, setRec, onToast, confirmDialog: confirmDialog2, onImport: importFile, onVisibleMonth }), rec.tab === "config" && /* @__PURE__ */ React.createElement(RecorderConfigTab, { rec, setRec, confirmDialog: confirmDialog2, onToast }), rec.tab === "rules" && /* @__PURE__ */ React.createElement(RecorderRulesTab, { rec, setRec, engine, onPreload: preloadEngine })), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "state.recorder · numbers only, images never stored"), /* @__PURE__ */ React.createElement("span", null, rec.clients.length, " clients · ", rec.clients.reduce((n, c) => n + c.rows.length, 0), " watched rows"))));
 }
 const ROLE_MODULES = {
   admin: ["sip_fcs", "bmr", "bmr_sms", "whitelist_sms", "editor", "rca", "image", "recorder"],
-  semi_admin: ["whitelist_sms", "editor", "rca"]
+  semi_admin: ["whitelist_sms", "editor", "rca", "recorder"]
 };
 const ROLE_LABELS = { admin: "Admin", semi_admin: "Semi-admin" };
 function isSuperAdminEmail(email) {
@@ -10461,13 +10891,16 @@ function App() {
     { id: "editor", label: "Editor" },
     { id: "rca", label: "RCA" },
     { id: "image", label: "Image Editor", adminOnly: true },
-    { id: "recorder", label: "Recorder", adminOnly: true },
+    // Recorder is a TEAM module: every signed-in user (any role) can use
+    // it — its data is shared via shared/recorder* docs. authOnly keeps it
+    // hidden signed-out, where entries would be stuck in one browser.
+    { id: "recorder", label: "Recorder", authOnly: true },
     { id: "users", label: "Users", adminOnly: true }
   ];
   const role = sync.role || "semi_admin";
   const isAdmin = role === "admin";
   const roleEnforced = !!window.__fb && !!sync.uid;
-  const MODULES = roleEnforced ? ALL_MODULES.filter((m) => m.adminOnly ? isAdmin : moduleAllowed(m.id, role)) : ALL_MODULES.filter((m) => !m.adminOnly);
+  const MODULES = roleEnforced ? ALL_MODULES.filter((m) => m.adminOnly ? isAdmin : moduleAllowed(m.id, role)) : ALL_MODULES.filter((m) => !m.adminOnly && !m.authOnly);
   useEffect(() => {
     if (!roleEnforced) return;
     const current = state.module || "sip_fcs";
@@ -10567,7 +11000,8 @@ function App() {
         onRetrySync: retrySync,
         moduleSwitch: ModuleSwitch,
         onToast: showToast,
-        confirmDialog
+        confirmDialog,
+        gsheets: googleSyncProps
       }
     ), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }

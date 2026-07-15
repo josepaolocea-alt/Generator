@@ -2245,11 +2245,14 @@
 
     // Modules that support Google Sheets sync → the in-memory workbook builder
     // and the (static) name used when the app first creates that module's sheet.
-    // Only these three sync; other modules just download as before.
+    // Only these four sync; other modules just download as before.
     const GOOGLE_SYNC_MODULES = {
-      sip_fcs: { build: buildSipFcsBlob, sheetName: 'SIP FCS — Hourly Record' },
-      bmr:     { build: buildBmrBlob,    sheetName: 'BMR VOIP — Balance Day & Night' },
-      bmr_sms: { build: buildBmrSmsBlob, sheetName: 'BMR SMS — Balance Day & Night' },
+      sip_fcs:  { build: buildSipFcsBlob,   sheetName: 'SIP FCS — Hourly Record' },
+      bmr:      { build: buildBmrBlob,      sheetName: 'BMR VOIP — Balance Day & Night' },
+      bmr_sms:  { build: buildBmrSmsBlob,   sheetName: 'BMR SMS — Balance Day & Night' },
+      // buildRecorderBlob is a hoisted function declaration defined with the
+      // Recorder module code further down this file.
+      recorder: { build: buildRecorderBlob, sheetName: 'Recorder — VOS Hourly Record' },
     };
 
     /* ============================================================
@@ -9736,7 +9739,7 @@ https://bit.ly/4vrcu64`;
       // durable file IDs of the app-owned sheets (one per module). No tokens
       // here — all non-secret, so it rides the normal localStorage + Firestore
       // sync. sheetIds are empty until the first sync creates them.
-      googleSheets: { clientId: '', sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '' } },
+      googleSheets: { clientId: '', sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' } },
     };
 
     function timestampMs(value) {
@@ -9884,13 +9887,15 @@ https://bit.ly/4vrcu64`;
     }
 
     /* ────────────────────────────────────────────────────────────────────
-       Recorder module (admin only)
+       Recorder module (team shared — every signed-in user)
        Paste VOS / dashboard screenshots → OCR (Tesseract.js, lazy-loaded)
        → match configured gateway/metric names → commit numbers into a
        per-client month grid → export the hourly record workbook.
        Screenshots are processed in-memory only; `state.recorder` holds
        nothing but plain numbers + config (same localStorage/Firestore
        budget rules as the Image Editor — see PROJECT_RESUME §11b).
+       Values + config are ALSO mirrored to shared Firestore docs so the
+       whole team works on one grid — see the shared team sync helpers.
        ──────────────────────────────────────────────────────────────────── */
 
     const RECORDER_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -10014,7 +10019,180 @@ https://bit.ly/4vrcu64`;
         overwrite: src.overwrite !== false,
         upscale: src.upscale !== false,
         clampMax: (Number.isFinite(Number(src.clampMax)) && Number(src.clampMax) > 0) ? Math.floor(Number(src.clampMax)) : 9999,
+        // "Highlight max value in row" — same rule as SIP/FCS (defaults copied
+        // from its rule editor: green fill, white font). Applies to the export
+        // as conditional formatting and to the Data grid as a live preview.
+        maxInRow: {
+          enabled: !!(src.maxInRow && src.maxInRow.enabled),
+          color: presetColorHex(src.maxInRow && src.maxInRow.color, '#166534'),
+          fontColor: presetColorHex(src.maxInRow && src.maxInRow.fontColor, '#FFFFFF'),
+          bold: !!(src.maxInRow && src.maxInRow.bold),
+        },
+        // Export month/year live in the slice (not component state) so the
+        // Google Sheets sync builder can reproduce the exact workbook the
+        // Download button makes. exportYear stays a raw string so normalize
+        // never fights the year input mid-typing.
+        exportMonth: (src.exportMonth != null && Number.isInteger(Number(src.exportMonth)) && Number(src.exportMonth) >= 0 && Number(src.exportMonth) <= 11)
+          ? Number(src.exportMonth) : new Date().getMonth(),
+        exportYear: (src.exportYear != null && String(src.exportYear).trim() !== '') ? String(src.exportYear) : String(new Date().getFullYear()),
       };
+    }
+
+    /* ── Recorder: shared team sync (Firestore) ──
+       Recorder data is shared across ALL signed-in users so the whole team
+       sees (and fills) the same hourly grid:
+         shared/recorderConfig            → clients/watch rows + settings/rules
+         shared/recorderValues_{YYYY-MM}  → one doc per month of readings
+       Same design decision as the Whitelist SMS shared number DB: plain
+       getDoc/setDoc only, NO onSnapshot — Firestore's watch channel hits
+       "INTERNAL ASSERTION FAILED" on some machines (see loadSharedTestNumbers).
+       Freshness comes from a refresh on module open / month navigation, a 60s
+       poll + window-focus refresh while the module is open, a manual Refresh
+       button, and a flush+refresh right before every export.
+       Writes are per-cell nested merges (setDoc {merge:true}; deletions become
+       deleteField() at flush time), so two users recording different slots
+       never clobber each other. Per-month docs keep each doc far below the
+       1MB Firestore cap no matter how many months accumulate. */
+    const RECORDER_SHARED_CONFIG_DOC = ['shared', 'recorderConfig'];
+    const RECORDER_SHARED_CONFIG_FIELDS = ['clients', 'filePattern', 'match', 'overwrite', 'upscale', 'clampMax', 'maxInRow'];
+    // One-time per-device flag: which months already had their local cells
+    // additively uploaded into the shared docs (rollout migration; the values
+    // in localStorage belong to the device, so the flag is device-wide).
+    const RECORDER_SHARED_MIGRATED_KEY = 'mrg_recorder_shared_migrated_v1';
+    const recorderMonthKey = iso => String(iso || '').slice(0, 7);
+    const recorderSharedMonthDocId = mk => `recorderValues_${mk}`;
+
+    // Slice rec.values down to one month: { [clientId]: { [dateIso]: rows } }.
+    function recorderMonthSlice(values, mk) {
+      const out = {};
+      for (const [cid, byDate] of Object.entries(values || {})) {
+        for (const [iso, rows] of Object.entries(byDate || {})) {
+          if (recorderMonthKey(iso) !== mk) continue;
+          (out[cid] = out[cid] || {})[iso] = rows;
+        }
+      }
+      return out;
+    }
+
+    // Replace one month of `values` with a shared month slice, leaving every
+    // other month untouched.
+    function recorderApplyMonthSlice(values, mk, sharedMonth) {
+      const next = {};
+      for (const [cid, byDate] of Object.entries(values || {})) {
+        for (const [iso, rows] of Object.entries(byDate || {})) {
+          if (recorderMonthKey(iso) === mk) continue;
+          (next[cid] = next[cid] || {})[iso] = rows;
+        }
+      }
+      for (const [cid, byDate] of Object.entries(sharedMonth || {})) {
+        for (const [iso, rows] of Object.entries(byDate || {})) {
+          if (recorderMonthKey(iso) !== mk) continue;
+          if (!rows || typeof rows !== 'object' || !Object.keys(rows).length) continue;
+          (next[cid] = next[cid] || {})[iso] = rows;
+        }
+      }
+      return next;
+    }
+
+    // Diff two sparse value trees → per-month nested merge objects. `null`
+    // marks a deletion (converted to deleteField() only at flush time so the
+    // queue stays plain JSON and can be overlaid onto fetched snapshots).
+    function recorderDiffValues(prev, next) {
+      const months = {};
+      const put = (mk, path, v) => {
+        let node = (months[mk] = months[mk] || {});
+        for (let i = 0; i < path.length - 1; i++) {
+          const k = path[i];
+          if (node[k] == null || typeof node[k] !== 'object') node[k] = {};
+          node = node[k];
+        }
+        node[path[path.length - 1]] = v;
+      };
+      const cids = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+      for (const cid of cids) {
+        const pc = (prev || {})[cid] || {}, nc = (next || {})[cid] || {};
+        const dates = new Set([...Object.keys(pc), ...Object.keys(nc)]);
+        for (const iso of dates) {
+          const mk = recorderMonthKey(iso);
+          const pd = pc[iso], nd = nc[iso];
+          if (pd && !nd) { put(mk, [cid, iso], null); continue; }
+          const prows = pd || {}, nrows = nd || {};
+          const rids = new Set([...Object.keys(prows), ...Object.keys(nrows)]);
+          for (const rid of rids) {
+            const ph = prows[rid], nh = nrows[rid];
+            if (ph && !nh) { put(mk, [cid, iso, rid], null); continue; }
+            const phh = ph || {}, nhh = nh || {};
+            const hours = new Set([...Object.keys(phh), ...Object.keys(nhh)]);
+            for (const h of hours) {
+              const pv = phh[h], nv = nhh[h];
+              if (pv === nv) continue;
+              put(mk, [cid, iso, rid, h], nv == null ? null : nv);
+            }
+          }
+        }
+      }
+      return months;
+    }
+
+    // Deep-merge one queued month diff into another (b wins; null deletion
+    // markers replace whole subtrees just like they will in Firestore).
+    function recorderMergeQueuedMonth(a, b) {
+      if (b == null || typeof b !== 'object') return b;
+      if (a == null || typeof a !== 'object') a = {};
+      const out = { ...a };
+      for (const [k, v] of Object.entries(b)) {
+        out[k] = (v != null && typeof v === 'object') ? recorderMergeQueuedMonth(out[k], v) : v;
+      }
+      return out;
+    }
+
+    // Overlay pending (unflushed) queued writes onto a freshly fetched shared
+    // month so a refresh can never revert cells the user just typed.
+    function recorderOverlayQueuedMonth(sharedMonth, queued) {
+      if (!queued) return sharedMonth;
+      const walk = (base, q) => {
+        const out = (base != null && typeof base === 'object') ? { ...base } : {};
+        for (const [k, v] of Object.entries(q)) {
+          if (v === null) delete out[k];
+          else if (typeof v === 'object') out[k] = walk(out[k], v);
+          else out[k] = v;
+        }
+        return out;
+      };
+      return walk(sharedMonth || {}, queued);
+    }
+
+    // Cells present locally but missing in the shared month → nested add
+    // object for a one-time additive migration write (shared wins conflicts,
+    // so a stale device can never overwrite the team's newer entries).
+    function recorderMissingCells(localMonth, sharedMonth) {
+      const out = {};
+      let any = false;
+      for (const [cid, byDate] of Object.entries(localMonth || {})) {
+        for (const [iso, rows] of Object.entries(byDate || {})) {
+          for (const [rid, byHour] of Object.entries(rows || {})) {
+            for (const [h, v] of Object.entries(byHour || {})) {
+              const has = sharedMonth?.[cid]?.[iso]?.[rid]?.[h];
+              if (has != null || v == null) continue;
+              ((((out[cid] = out[cid] || {})[iso] = out[cid][iso] || {})[rid] = out[cid][iso][rid] || {}))[h] = v;
+              any = true;
+            }
+          }
+        }
+      }
+      return any ? out : null;
+    }
+
+    // Queue → Firestore write shape: null markers become deleteField().
+    function recorderQueueToFirestore(queued, deleteField) {
+      const walk = (q) => {
+        const out = {};
+        for (const [k, v] of Object.entries(q)) {
+          out[k] = v === null ? deleteField() : (typeof v === 'object' ? walk(v) : v);
+        }
+        return out;
+      };
+      return walk(queued || {});
     }
 
     /* ── Recorder: name matching ── */
@@ -10449,8 +10627,35 @@ https://bit.ly/4vrcu64`;
           for (let c = 1; c <= 26; c++) ws.getCell(sepRow, c).fill = sepFill;
           r = sepRow + 1;
         }
+        // "Highlight max value in row" — same formula the SIP/FCS builder
+        // writes (Google-Sheets-compatible). One relative-row rule covers the
+        // whole grid; ISNUMBER skips date/separator/blank rows.
+        if (rec.maxInRow && rec.maxInRow.enabled && r > 2) {
+          ws.addConditionalFormatting({
+            ref: `C2:Z${r - 2}`,
+            rules: [{
+              type: 'expression',
+              formulae: ['AND(ISNUMBER(C2),C2=MAX($C2:$Z2))'],
+              style: {
+                fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(rec.maxInRow.color) } },
+                font: { bold: !!rec.maxInRow.bold, color: { argb: argbHex(rec.maxInRow.fontColor) } },
+              },
+              priority: 10,
+            }],
+          });
+        }
       }
       return wb;
+    }
+    // Google Sheets sync builder — reproduces exactly what the Download
+    // button makes for the month/year picked in the Recorder sidebar.
+    async function buildRecorderBlob(state) {
+      const rec = recorderNormalizeState(state.recorder);
+      const year = recorderParseIntOr(rec.exportYear, new Date().getFullYear());
+      const wb = recorderBuildWorkbook(rec, year, rec.exportMonth);
+      const buf = await wb.xlsx.writeBuffer();
+      const filename = recorderFileName(rec.filePattern, year, rec.exportMonth);
+      return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
     }
     function recorderCellText(v) {
       if (v == null) return '';
@@ -10728,13 +10933,16 @@ https://bit.ly/4vrcu64`;
       );
     }
 
-    function RecorderDataTab({ rec, setRec, onToast, confirmDialog, onImport }) {
+    function RecorderDataTab({ rec, setRec, onToast, confirmDialog, onImport, onVisibleMonth }) {
       const [clientSel, setClientSel] = useState(() => (rec.clients[0] ? rec.clients[0].id : null));
       const [date, setDate] = useState(recorderTodayIso());
       const importRef = useRef(null);
+      const monthPrefix = date.slice(0, 7);
+      // Tell the module which month is on screen so the shared team sync can
+      // pull it from Firestore the first time it's viewed this session.
+      useEffect(() => { if (onVisibleMonth) onVisibleMonth(monthPrefix); }, [monthPrefix, onVisibleMonth]);
       const client = rec.clients.find(c => c.id === clientSel) || rec.clients[0];
       if (!client) return <p className="text-sm text-neutral-500">No clients configured — add one in the Config tab.</p>;
-      const monthPrefix = date.slice(0, 7);
       const [yy, mm] = monthPrefix.split('-').map(Number);
       const daysInMonth = new Date(yy, mm, 0).getDate();
       const byDate = rec.values[client.id] || {};
@@ -10821,24 +11029,35 @@ https://bit.ly/4vrcu64`;
                 </tr>
               </thead>
               <tbody>
-                {client.rows.map(row => (
-                  <tr key={row.id} className="odd:bg-neutral-900/30">
-                    <td className="sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1">
-                      <span className="mr-2 inline-block h-2 w-2 rounded-sm align-middle" style={{ background: row.color }} />
-                      <span className="align-middle text-neutral-200">{row.label}</span>
-                    </td>
-                    {HOURS_24.map((_, h) => {
-                      const v = (byRow[row.id] || {})[h];
-                      return (
-                        <td key={h} className="border-b border-neutral-900/60 p-0.5 text-center">
-                          <input value={v == null ? '' : String(v)} onChange={e => setCell(row.id, h, e.target.value.replace(/[^0-9]/g, ''))}
-                            inputMode="numeric"
-                            className={`w-10 rounded bg-transparent px-0.5 py-1 text-center outline-none focus:bg-neutral-800 ${v != null ? 'text-neutral-100' : 'text-neutral-600'}`} />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                {client.rows.map(row => {
+                  const rowVals = byRow[row.id] || {};
+                  // Live preview of the "highest value in a row" rule — same
+                  // semantics as the exported conditional formatting (ties all
+                  // highlight, single lone value counts as the max).
+                  const rowMax = rec.maxInRow.enabled
+                    ? Object.values(rowVals).reduce((m, x) => (x != null && (m == null || x > m)) ? x : m, null)
+                    : null;
+                  return (
+                    <tr key={row.id} className="odd:bg-neutral-900/30">
+                      <td className="sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1">
+                        <span className="mr-2 inline-block h-2 w-2 rounded-sm align-middle" style={{ background: row.color }} />
+                        <span className="align-middle text-neutral-200">{row.label}</span>
+                      </td>
+                      {HOURS_24.map((_, h) => {
+                        const v = rowVals[h];
+                        const isMax = rowMax != null && v === rowMax;
+                        return (
+                          <td key={h} className="border-b border-neutral-900/60 p-0.5 text-center">
+                            <input value={v == null ? '' : String(v)} onChange={e => setCell(row.id, h, e.target.value.replace(/[^0-9]/g, ''))}
+                              inputMode="numeric"
+                              style={isMax ? { background: rec.maxInRow.color, color: rec.maxInRow.fontColor, fontWeight: rec.maxInRow.bold ? 700 : 400 } : undefined}
+                              className={`w-10 rounded bg-transparent px-0.5 py-1 text-center outline-none focus:bg-neutral-800 ${v != null ? 'text-neutral-100' : 'text-neutral-600'}`} />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -11023,6 +11242,17 @@ https://bit.ly/4vrcu64`;
           <Row label="Maximum value" hint="Readings above this are clamped — protects against a prefix number sneaking in as a value.">
             <Input type="number" value={rec.clampMax} onChange={e => patch({ clampMax: Math.max(1, recorderParseIntOr(e.target.value, 9999)) })} className="!w-28" />
           </Row>
+          <Row label="Highlight highest value in a row" hint="Same rule as SIP/FCS — colors each row's maximum across the 24 hour columns, live in the Data grid and as conditional formatting in the exported workbook.">
+            <span className="text-[10px] uppercase tracking-wide text-neutral-500">Fill</span>
+            <PresetColorPicker value={rec.maxInRow.color} onChange={hex => patch({ maxInRow: { ...rec.maxInRow, color: hex } })} title="Highlight fill color" showHex={false} />
+            <span className="text-[10px] uppercase tracking-wide text-neutral-500">Font</span>
+            <PresetColorPicker value={rec.maxInRow.fontColor} onChange={hex => patch({ maxInRow: { ...rec.maxInRow, fontColor: hex } })} title="Highlight font color" showHex={false} />
+            <label className={`inline-flex cursor-pointer items-center gap-1.5 text-xs ${rec.maxInRow.bold ? 'text-neutral-100' : 'text-neutral-500'}`} title="Bold the highlighted value">
+              <input type="checkbox" className="h-3.5 w-3.5 accent-blue-500" checked={rec.maxInRow.bold} onChange={e => patch({ maxInRow: { ...rec.maxInRow, bold: e.target.checked } })} />
+              <span className="font-bold">B</span>
+            </label>
+            <input type="checkbox" className="h-4 w-4 accent-blue-500" checked={rec.maxInRow.enabled} onChange={e => patch({ maxInRow: { ...rec.maxInRow, enabled: e.target.checked } })} />
+          </Row>
           <Row label="Export file name" hint="{Month} and {Year} are replaced at download time.">
             <Input value={rec.filePattern} onChange={e => patch({ filePattern: e.target.value })} className="!w-80 font-mono !text-xs" />
           </Row>
@@ -11036,7 +11266,7 @@ https://bit.ly/4vrcu64`;
       );
     }
 
-    function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setTarget, engine, slotStats, exportSel, setExportSel, onExport, busyExport }) {
+    function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setTarget, engine, slotStats, exportSel, setExportSel, onExport, busyExport, shared, onRefreshShared, gsheets }) {
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const exportYear = recorderParseIntOr(exportSel.year, new Date().getFullYear());
@@ -11081,6 +11311,21 @@ https://bit.ly/4vrcu64`;
               </div>
             </div>
             <div>
+              <SectionLabel hint="everyone signed in sees the same data">Team sync</SectionLabel>
+              <div className="flex items-center justify-between gap-2">
+                <Pill tone={shared.status === 'live' ? 'success' : shared.status === 'loading' ? 'accent' : 'muted'}>
+                  {shared.status === 'live' ? 'Shared — live' : shared.status === 'loading' ? 'Refreshing…' : shared.status === 'error' ? 'Sync error' : 'Local only'}
+                </Pill>
+                <Btn variant="ghost" size="sm" onClick={onRefreshShared} disabled={shared.status === 'loading' || !sync.uid}><IconReset /> Refresh</Btn>
+              </div>
+              {shared.status === 'live' && shared.at > 0 && (
+                <p className="mt-1.5 text-[10px] leading-relaxed text-neutral-600">
+                  Team data pulled {new Date(shared.at).toLocaleTimeString()} — refreshes every minute and before each export.
+                </p>
+              )}
+              {shared.message && <p className="mt-1.5 text-[10px] leading-relaxed text-amber-300">{shared.message}</p>}
+            </div>
+            <div>
               <SectionLabel hint={engine.status === 'ready' ? 'loaded' : 'loads on first capture'}>OCR engine</SectionLabel>
               <Pill tone={engine.status === 'ready' ? 'success' : engine.status === 'idle' ? 'default' : 'accent'}>
                 {engine.status === 'ready' ? 'Ready' : engine.status === 'idle' ? 'Not loaded' : (engine.label || 'Loading…')}
@@ -11091,6 +11336,7 @@ https://bit.ly/4vrcu64`;
             </div>
           </div>
           <div className="p-5 border-t border-neutral-900 space-y-3">
+            <GoogleSheetSync gsheets={gsheets} moduleId="recorder" sheetId={state.googleSheets?.sheetIds?.recorder} />
             <div>
               <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Export month</label>
               <div className="flex gap-2">
@@ -11111,7 +11357,7 @@ https://bit.ly/4vrcu64`;
       );
     }
 
-    function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast, confirmDialog }) {
+    function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast, confirmDialog, gsheets }) {
       const rec = useMemo(() => recorderNormalizeState(state.recorder), [state.recorder]);
       const setRec = useCallback((next) => setState(s => {
         const prev = recorderNormalizeState(s.recorder);
@@ -11122,10 +11368,246 @@ https://bit.ly/4vrcu64`;
       const [target, setTarget] = useState(() => ({ date: recorderTodayIso(), hour: new Date().getHours() }));
       const [engine, setEngine] = useState(() => ({ status: recorderWorkerPromise ? 'ready' : 'idle', label: '' }));
       const [busyExport, setBusyExport] = useState(false);
-      const [exportSel, setExportSel] = useState(() => ({ month: new Date().getMonth(), year: new Date().getFullYear() }));
       const queueRef = useRef(Promise.resolve());
       const recRef = useRef(rec); recRef.current = rec;
       const targetRef = useRef(target); targetRef.current = target;
+      // Export month/year are persisted on the slice (rec.exportMonth /
+      // rec.exportYear) so the Google Sheets builder sees the same selection.
+      const exportSel = { month: rec.exportMonth, year: rec.exportYear };
+      const setExportSel = useCallback((updater) => setRec(r => {
+        const cur = { month: r.exportMonth, year: r.exportYear };
+        const nx = typeof updater === 'function' ? updater(cur) : updater;
+        return { ...r, exportMonth: nx.month, exportYear: String(nx.year ?? '') };
+      }), [setRec]);
+
+      /* ── Shared team sync (design notes at the module-scope helpers) ── */
+      const [shared, setShared] = useState({ status: 'idle', at: 0, message: '' });
+      const sharedQueueRef = useRef({ config: null, months: {} });
+      const sharedFlushTimerRef = useRef(null);
+      const sharedFlushBusyRef = useRef(false);
+      const sharedLoadedMonthsRef = useRef(new Set());
+      const sharedRefreshRef = useRef({ inFlight: null, queued: new Set() });
+      const sharedInitRef = useRef(false);
+      const applyingRemoteRef = useRef(false);
+      const prevRecShadowRef = useRef(rec);
+      const flushSharedRef = useRef(() => {});
+      const refreshSharedRef = useRef(() => null);
+      const canShared = useCallback(() => !!(window.__fb && window.__fbm && sync.uid), [sync.uid]);
+      const sharedErrMessage = (e) => {
+        const code = e?.code ? ` (${e.code})` : '';
+        return e?.code === 'permission-denied'
+          ? `Firestore rules denied shared access${code} — allow signed-in reads/writes on shared/recorderConfig and shared/recorderValues_*.`
+          : `Team sync failed${code}. Your entries stay saved locally — Refresh retries.`;
+      };
+
+      const scheduleSharedFlush = useCallback(() => {
+        if (sharedFlushTimerRef.current) clearTimeout(sharedFlushTimerRef.current);
+        sharedFlushTimerRef.current = setTimeout(() => { flushSharedRef.current(); }, 800);
+      }, []);
+
+      const flushShared = useCallback(async () => {
+        const q = sharedQueueRef.current;
+        if (!q.config && !Object.keys(q.months).length) return;
+        if (!canShared()) return; // stays queued; retried on the next edit after sign-in
+        if (sharedFlushBusyRef.current) { scheduleSharedFlush(); return; }
+        sharedFlushBusyRef.current = true;
+        sharedQueueRef.current = { config: null, months: {} };
+        try {
+          const { db } = window.__fb;
+          const { doc, setDoc, serverTimestamp, deleteField } = window.__fbm;
+          if (q.config) {
+            await setDoc(doc(db, RECORDER_SHARED_CONFIG_DOC[0], RECORDER_SHARED_CONFIG_DOC[1]),
+              { ...firestoreSanitize(q.config), updatedAt: serverTimestamp(), updatedBy: sync.uid, updatedByEmail: sync.email || '' },
+              { merge: true });
+          }
+          for (const [mk, m] of Object.entries(q.months)) {
+            await setDoc(doc(db, 'shared', recorderSharedMonthDocId(mk)),
+              { values: recorderQueueToFirestore(m, deleteField), updatedAt: serverTimestamp(), updatedBy: sync.uid },
+              { merge: true });
+            sharedLoadedMonthsRef.current.add(mk);
+          }
+          setShared({ status: 'live', at: Date.now(), message: '' });
+        } catch (e) {
+          // Re-queue the failed ops under anything queued meanwhile (newer wins).
+          const later = sharedQueueRef.current;
+          const months = { ...q.months };
+          for (const [mk, m] of Object.entries(later.months)) months[mk] = recorderMergeQueuedMonth(months[mk], m);
+          sharedQueueRef.current = {
+            config: (q.config || later.config) ? { ...(q.config || {}), ...(later.config || {}) } : null,
+            months,
+          };
+          console.warn('recorder shared sync save failed', { code: e?.code, message: e?.message, uid: sync.uid, error: e });
+          setShared({ status: 'error', at: Date.now(), message: sharedErrMessage(e) });
+        } finally {
+          sharedFlushBusyRef.current = false;
+        }
+      }, [canShared, scheduleSharedFlush, sync.uid, sync.email]);
+      flushSharedRef.current = flushShared;
+
+      const refreshShared = useCallback(async (monthKeys = []) => {
+        if (!canShared()) {
+          setShared({ status: window.__fb ? 'offline' : 'idle', at: Date.now(), message: window.__fb ? 'Sign in to share Recorder data with the team.' : '' });
+          return null;
+        }
+        const want = [...new Set(monthKeys.filter(Boolean))];
+        const rr = sharedRefreshRef.current;
+        if (rr.inFlight) {
+          want.forEach(mk => rr.queued.add(mk));
+          return rr.inFlight;
+        }
+        const run = (async () => {
+          setShared(s => ({ ...s, status: 'loading' }));
+          try {
+            const { db } = window.__fb;
+            const { doc, getDoc, setDoc, serverTimestamp } = window.__fbm;
+            const local = recRef.current;
+            // Config doc: seed it the first time anyone opens the module,
+            // otherwise adopt the shared copy (clients, rules, settings).
+            const cref = doc(db, RECORDER_SHARED_CONFIG_DOC[0], RECORDER_SHARED_CONFIG_DOC[1]);
+            const csnap = await getDoc(cref);
+            let cfgPatch = null;
+            if (!csnap.exists()) {
+              const seed = {};
+              for (const f of RECORDER_SHARED_CONFIG_FIELDS) seed[f] = firestoreSanitize(local[f]);
+              await setDoc(cref, { ...seed, updatedAt: serverTimestamp(), updatedBy: sync.uid, updatedByEmail: sync.email || '' });
+            } else {
+              const data = firestoreDesanitize(csnap.data() || {});
+              cfgPatch = {};
+              for (const f of RECORDER_SHARED_CONFIG_FIELDS) if (data[f] !== undefined) cfgPatch[f] = data[f];
+            }
+            let migrated = {};
+            try { migrated = JSON.parse(localStorage.getItem(RECORDER_SHARED_MIGRATED_KEY)) || {}; } catch {}
+            const monthPatches = {};
+            for (const mk of want) {
+              const mref = doc(db, 'shared', recorderSharedMonthDocId(mk));
+              const msnap = await getDoc(mref);
+              const localMonth = recorderMonthSlice(local.values, mk);
+              if (!msnap.exists()) {
+                // First time anyone opens this month — seed it wholesale from
+                // this device, so recordings made before the rollout (e.g. the
+                // admin's existing months) are preserved in the shared copy.
+                if (Object.keys(localMonth).length) {
+                  await setDoc(mref, { values: localMonth, updatedAt: serverTimestamp(), updatedBy: sync.uid });
+                }
+                monthPatches[mk] = localMonth;
+              } else {
+                const sharedMonth = (firestoreDesanitize(msnap.data() || {})).values || {};
+                if (!migrated[mk]) {
+                  // One-time per-device top-up: upload cells this device has
+                  // that the shared doc lacks. Shared wins on conflicts, so a
+                  // stale laptop can never overwrite the team's newer entries.
+                  const adds = recorderMissingCells(localMonth, sharedMonth);
+                  if (adds) await setDoc(mref, { values: adds, updatedAt: serverTimestamp(), updatedBy: sync.uid }, { merge: true });
+                  monthPatches[mk] = adds ? recorderMergeQueuedMonth(sharedMonth, adds) : sharedMonth;
+                } else {
+                  monthPatches[mk] = sharedMonth;
+                }
+              }
+              migrated[mk] = 1;
+              sharedLoadedMonthsRef.current.add(mk);
+            }
+            try { localStorage.setItem(RECORDER_SHARED_MIGRATED_KEY, JSON.stringify(migrated)); } catch {}
+            // Apply to app state. Pending unflushed writes are overlaid so a
+            // refresh can never revert cells the user typed a moment ago, and
+            // an unchanged snapshot returns the SAME state object so the
+            // quiet 60s poll doesn't bump localUpdatedAt / re-save the
+            // per-user doc every minute.
+            applyingRemoteRef.current = true;
+            setState(s => {
+              const prev = recorderNormalizeState(s.recorder);
+              let values = prev.values;
+              for (const [mk, m] of Object.entries(monthPatches)) {
+                values = recorderApplyMonthSlice(values, mk, recorderOverlayQueuedMonth(m, sharedQueueRef.current.months[mk]));
+              }
+              const cfg = cfgPatch ? { ...cfgPatch, ...(sharedQueueRef.current.config || {}) } : {};
+              const changed = JSON.stringify(values) !== JSON.stringify(prev.values)
+                || Object.keys(cfg).some(f => JSON.stringify(cfg[f]) !== JSON.stringify(prev[f]));
+              if (!changed) { applyingRemoteRef.current = false; return s; }
+              return { ...s, recorder: { ...prev, ...cfg, values } };
+            });
+            setShared({ status: 'live', at: Date.now(), message: '' });
+            return { monthPatches };
+          } catch (e) {
+            console.warn('recorder shared sync refresh failed', { code: e?.code, message: e?.message, uid: sync.uid, error: e });
+            setShared({ status: 'error', at: Date.now(), message: sharedErrMessage(e) });
+            return null;
+          } finally {
+            rr.inFlight = null;
+            if (rr.queued.size) {
+              const next = [...rr.queued];
+              rr.queued.clear();
+              refreshSharedRef.current(next);
+            }
+          }
+        })();
+        rr.inFlight = run;
+        return run;
+      }, [canShared, setState, sync.uid, sync.email]);
+      refreshSharedRef.current = refreshShared;
+
+      // Months the UI currently cares about: the recording slot, the export
+      // selection, and the month open in the Data tab.
+      const dataMonthRef = useRef(null);
+      const monthsInView = useCallback(() => {
+        const year = recorderParseIntOr(recRef.current.exportYear, new Date().getFullYear());
+        return [...new Set([
+          recorderMonthKey(targetRef.current.date),
+          `${year}-${String(recRef.current.exportMonth + 1).padStart(2, '0')}`,
+          dataMonthRef.current,
+        ].filter(Boolean))];
+      }, []);
+      const onVisibleMonth = useCallback((mk) => {
+        dataMonthRef.current = mk;
+        if (canShared() && !sharedLoadedMonthsRef.current.has(mk)) refreshSharedRef.current([mk]);
+      }, [canShared]);
+
+      // Initial load, sign-in/out transitions, and newly viewed months.
+      useEffect(() => {
+        if (!canShared()) {
+          sharedInitRef.current = false;
+          setShared({ status: window.__fb ? 'offline' : 'idle', at: 0, message: (window.__fb && !sync.uid) ? 'Sign in to share Recorder data with the team.' : '' });
+          return;
+        }
+        const missing = monthsInView().filter(mk => !sharedLoadedMonthsRef.current.has(mk));
+        if (!sharedInitRef.current || missing.length) {
+          sharedInitRef.current = true;
+          refreshSharedRef.current(missing.length ? missing : monthsInView());
+        }
+      }, [sync.uid, target.date, rec.exportMonth, rec.exportYear, canShared, monthsInView]);
+
+      // 60s poll + window-focus refresh while the module is open (plain gets —
+      // see the no-onSnapshot note at the shared helpers).
+      useEffect(() => {
+        if (!canShared()) return;
+        const tick = () => { if (!document.hidden) refreshSharedRef.current(monthsInView()); };
+        const t = setInterval(tick, 60000);
+        window.addEventListener('focus', tick);
+        return () => { clearInterval(t); window.removeEventListener('focus', tick); };
+      }, [sync.uid, canShared, monthsInView]);
+
+      // Queue shared writes from every local recorder edit: diff the committed
+      // slice against the previous one. Remote applies only refresh the shadow.
+      useEffect(() => {
+        const prev = prevRecShadowRef.current;
+        prevRecShadowRef.current = rec;
+        if (applyingRemoteRef.current) { applyingRemoteRef.current = false; return; }
+        if (prev === rec || !canShared()) return;
+        const q = sharedQueueRef.current;
+        let any = false;
+        for (const f of RECORDER_SHARED_CONFIG_FIELDS) {
+          if (JSON.stringify(prev[f]) !== JSON.stringify(rec[f])) { (q.config = q.config || {})[f] = rec[f]; any = true; }
+        }
+        const months = recorderDiffValues(prev.values, rec.values);
+        for (const [mk, m] of Object.entries(months)) { q.months[mk] = recorderMergeQueuedMonth(q.months[mk], m); any = true; }
+        if (any) scheduleSharedFlush();
+      }, [rec, canShared, scheduleSharedFlush]);
+
+      // Best-effort flush when leaving the module / closing the tab soon after
+      // an edit (the debounce is 800ms, so this rarely has anything to do).
+      useEffect(() => () => {
+        if (sharedFlushTimerRef.current) clearTimeout(sharedFlushTimerRef.current);
+        flushSharedRef.current();
+      }, []);
 
       useEffect(() => {
         window.__recorderOcrProgress = (m) => {
@@ -11281,12 +11763,34 @@ https://bit.ly/4vrcu64`;
       const doExport = async () => {
         setBusyExport(true);
         try {
-          const year = recorderParseIntOr(exportSel.year, new Date().getFullYear());
-          const wb = recorderBuildWorkbook(recRef.current, year, exportSel.month);
+          const year = recorderParseIntOr(recRef.current.exportYear, new Date().getFullYear());
+          const monthIdx = recRef.current.exportMonth;
+          const mk = `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
+          // Push pending edits and pull the team's latest for the export month
+          // so the workbook includes everyone's inputs. Best effort — the
+          // export still works offline from local data.
+          let recForExport = recRef.current;
+          try {
+            await flushSharedRef.current();
+            const res = await refreshSharedRef.current([mk]);
+            if (res && res.monthPatches && res.monthPatches[mk]) {
+              recForExport = {
+                ...recForExport,
+                values: recorderApplyMonthSlice(recForExport.values, mk,
+                  recorderOverlayQueuedMonth(res.monthPatches[mk], sharedQueueRef.current.months[mk])),
+              };
+            }
+          } catch {}
+          const wb = recorderBuildWorkbook(recForExport, year, monthIdx);
           const buf = await wb.xlsx.writeBuffer();
-          const fname = recorderFileName(recRef.current.filePattern, year, exportSel.month);
+          const fname = recorderFileName(recForExport.filePattern, year, monthIdx);
           saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fname);
           onToast('ok', `Downloaded ${fname}`);
+          // Mirror to the module's Google Sheet when already connected —
+          // silent, exactly like the other modules' Generate buttons.
+          if (gsheets && gsheets.conn && gsheets.conn.connected) {
+            try { await gsheets.sync('recorder', { interactive: false }); } catch { /* toast surfaced by the sync handler */ }
+          }
         } catch (err) {
           onToast('err', `Export failed: ${String((err && err.message) || err)}`);
         } finally {
@@ -11313,11 +11817,12 @@ https://bit.ly/4vrcu64`;
         <>
           <RecorderSidebar state={state} setState={setState} rec={rec} sync={sync} onRetrySync={onRetrySync}
             target={target} setTarget={setTarget} engine={engine} slotStats={slotStats}
-            exportSel={exportSel} setExportSel={setExportSel} onExport={doExport} busyExport={busyExport} />
+            exportSel={exportSel} setExportSel={setExportSel} onExport={doExport} busyExport={busyExport}
+            shared={shared} onRefreshShared={() => refreshSharedRef.current(monthsInView())} gsheets={gsheets} />
           <main className="flex-1 min-w-0 flex flex-col">
             <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-20">
               <div className="app-title-block min-w-0">
-                <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module · Admin only</div>
+                <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module · Team shared</div>
                 <h2 className="truncate text-[22px] font-bold tracking-tight">Recorder</h2>
               </div>
               <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
@@ -11356,7 +11861,7 @@ https://bit.ly/4vrcu64`;
                   )}
                 </div>
               )}
-              {rec.tab === 'data' && <RecorderDataTab rec={rec} setRec={setRec} onToast={onToast} confirmDialog={confirmDialog} onImport={importFile} />}
+              {rec.tab === 'data' && <RecorderDataTab rec={rec} setRec={setRec} onToast={onToast} confirmDialog={confirmDialog} onImport={importFile} onVisibleMonth={onVisibleMonth} />}
               {rec.tab === 'config' && <RecorderConfigTab rec={rec} setRec={setRec} confirmDialog={confirmDialog} onToast={onToast} />}
               {rec.tab === 'rules' && <RecorderRulesTab rec={rec} setRec={setRec} engine={engine} onPreload={preloadEngine} />}
             </div>
@@ -11370,11 +11875,12 @@ https://bit.ly/4vrcu64`;
     }
 
 
-    // Role-based access. Admin sees everything; semi-admin only gets the two
-    // light-touch modules. Anyone signed in defaults to semi_admin.
+    // Role-based access. Admin sees everything; semi-admin gets the
+    // light-touch modules plus the team-shared Recorder. Anyone signed in
+    // defaults to semi_admin, so every Firebase user can use the Recorder.
     const ROLE_MODULES = {
       admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'image', 'recorder'],
-      semi_admin: ['whitelist_sms', 'editor', 'rca'],
+      semi_admin: ['whitelist_sms', 'editor', 'rca', 'recorder'],
     };
     const ROLE_LABELS = { admin: 'Admin', semi_admin: 'Semi-admin' };
     function isSuperAdminEmail(email) {
@@ -12362,7 +12868,10 @@ match /shared/whitelistSmsTestNumbers {
         { id: 'editor',  label: 'Editor' },
         { id: 'rca',     label: 'RCA' },
         { id: 'image',   label: 'Image Editor', adminOnly: true },
-        { id: 'recorder', label: 'Recorder', adminOnly: true },
+        // Recorder is a TEAM module: every signed-in user (any role) can use
+        // it — its data is shared via shared/recorder* docs. authOnly keeps it
+        // hidden signed-out, where entries would be stuck in one browser.
+        { id: 'recorder', label: 'Recorder', authOnly: true },
         { id: 'users',   label: 'Users', adminOnly: true },
       ];
       const role = sync.role || 'semi_admin';
@@ -12373,7 +12882,7 @@ match /shared/whitelistSmsTestNumbers {
       const roleEnforced = !!window.__fb && !!sync.uid;
       const MODULES = roleEnforced
         ? ALL_MODULES.filter(m => m.adminOnly ? isAdmin : moduleAllowed(m.id, role))
-        : ALL_MODULES.filter(m => !m.adminOnly);
+        : ALL_MODULES.filter(m => !m.adminOnly && !m.authOnly);
 
       useEffect(() => {
         if (!roleEnforced) return;
@@ -12475,7 +12984,8 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <RecorderModule
               state={state} setState={setState} sync={sync} onRetrySync={retrySync}
-              moduleSwitch={ModuleSwitch} onToast={showToast} confirmDialog={confirmDialog} />
+              moduleSwitch={ModuleSwitch} onToast={showToast} confirmDialog={confirmDialog}
+              gsheets={googleSyncProps} />
             {toast && (
               <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
                 {toast.msg}
