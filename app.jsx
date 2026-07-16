@@ -11940,7 +11940,7 @@ https://bit.ly/4vrcu64`;
     // defaults to semi_admin, so every Firebase user can use the Recorder.
     const ROLE_MODULES = {
       admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'image', 'recorder'],
-      semi_admin: ['whitelist_sms', 'editor', 'rca', 'recorder'],
+      semi_admin: ['whitelist_sms', 'editor', 'rca'],
     };
     const ROLE_LABELS = { admin: 'Admin', semi_admin: 'Semi-admin' };
     function isSuperAdminEmail(email) {
@@ -12928,10 +12928,9 @@ match /shared/whitelistSmsTestNumbers {
         { id: 'editor',  label: 'Editor' },
         { id: 'rca',     label: 'RCA' },
         { id: 'image',   label: 'Image Editor', adminOnly: true },
-        // Recorder is a TEAM module: every signed-in user (any role) can use
-        // it — its data is shared via shared/recorder* docs. authOnly keeps it
-        // hidden signed-out, where entries would be stuck in one browser.
-        { id: 'recorder', label: 'Recorder', authOnly: true },
+        // Recorder data still lives in the shared/recorder* docs, but the tab
+        // is admin-only — signed-out and semi-admin users never see it.
+        { id: 'recorder', label: 'Recorder', adminOnly: true },
         { id: 'users',   label: 'Users', adminOnly: true },
       ];
       const role = sync.role || 'semi_admin';
@@ -12942,7 +12941,7 @@ match /shared/whitelistSmsTestNumbers {
       const roleEnforced = !!window.__fb && !!sync.uid;
       const MODULES = roleEnforced
         ? ALL_MODULES.filter(m => m.adminOnly ? isAdmin : moduleAllowed(m.id, role))
-        : ALL_MODULES.filter(m => !m.adminOnly && !m.authOnly);
+        : ALL_MODULES.filter(m => !m.adminOnly);
 
       useEffect(() => {
         if (!roleEnforced) return;
