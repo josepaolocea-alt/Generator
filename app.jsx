@@ -10323,17 +10323,34 @@ https://bit.ly/4vrcu64`;
         w = source.naturalWidth; h = source.naturalHeight;
       }
       if (!w || !h) throw new Error('Could not read that image');
-      // Small UI crops OCR poorly at native size; upscale + grayscale
-      // measurably improves Tesseract on 11px table text (aim ≥40px x-height
-      // for tight crops like the TWILIO 4-row table).
-      const scale = (upscale && w < 1600) ? Math.max(2, Math.min(4, Math.round(1800 / w))) : 1;
+      // Small UI crops OCR poorly at native size; upscale so thin strokes get
+      // enough pixels to survive (aim a large x-height for tight crops like the
+      // TWILIO 4-row table). Target ~2400px wide, cap 5x.
+      const scale = (upscale && w < 1600) ? Math.max(2, Math.min(5, Math.round(2400 / w))) : 1;
       const canvas = document.createElement('canvas');
       canvas.width = w * scale; canvas.height = h * scale;
       const ctx = canvas.getContext('2d');
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      try { ctx.filter = 'grayscale(1) contrast(1.15)'; } catch {}
       ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+      // Grayscale + gamma darkening done PER PIXEL, not via ctx.filter. Canvas
+      // `filter` is implemented differently by Blink (Chrome/Edge) and Gecko
+      // (Firefox): on Blink it faded the thin leading "1" stroke enough that
+      // Tesseract dropped the digit, so the SAME screenshot read 117 in Firefox
+      // but 17 in Chrome/Edge. A per-pixel transform renders identically on
+      // every engine, and gamma > 1 thickens thin anti-aliased strokes while
+      // leaving the white background white.
+      try {
+        const im = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = im.data;
+        const lut = new Uint8ClampedArray(256);
+        for (let v = 0; v < 256; v++) lut[v] = Math.round(255 * Math.pow(v / 255, 1.7));
+        for (let i = 0; i < d.length; i += 4) {
+          const g = lut[(d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0];
+          d[i] = d[i + 1] = d[i + 2] = g;
+        }
+        ctx.putImageData(im, 0, 0);
+      } catch {}
       return canvas;
     }
     function recorderThumb(canvas) {
@@ -11674,7 +11691,7 @@ https://bit.ly/4vrcu64`;
             setCaptures(list => list.map(c => c.id === id ? { ...c, thumb } : c));
             const worker = await recorderEnsureWorker();
             const words = await recorderRecognizeWords(worker, canvas, 6);
-            try { window.__recWords = words.map(w => w.text + ' [x' + Math.round(w.x0) + '-' + Math.round(w.x1) + ' y' + Math.round((w.y0 + w.y1) / 2) + ' c' + Math.round(w.conf) + ']'); } catch {}
+            try { window.__recWords = words.map(w => w.text + ' [x' + Math.round(w.x0) + '-' + Math.round(w.x1) + ' y' + Math.round((w.y0 + w.y1) / 2) + ' c' + Math.round(w.conf) + ']'); window.__recCanvas = canvas.width + 'x' + canvas.height + ' upscale=' + recRef.current.upscale; } catch {}
             const kind = recorderClassifyWords(words);
             let entries, tableMeta = null;
             if (kind === 'cards') {

@@ -8815,18 +8815,26 @@ async function recorderFileToCanvas(file, upscale) {
     h = source.naturalHeight;
   }
   if (!w || !h) throw new Error("Could not read that image");
-  const scale = upscale && w < 1600 ? Math.max(2, Math.min(4, Math.round(1800 / w))) : 1;
+  const scale = upscale && w < 1600 ? Math.max(2, Math.min(5, Math.round(2400 / w))) : 1;
   const canvas = document.createElement("canvas");
   canvas.width = w * scale;
   canvas.height = h * scale;
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
   try {
-    ctx.filter = "grayscale(1) contrast(1.15)";
+    const im = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = im.data;
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) lut[v] = Math.round(255 * Math.pow(v / 255, 1.7));
+    for (let i = 0; i < d.length; i += 4) {
+      const g = lut[(d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1e3 | 0];
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    ctx.putImageData(im, 0, 0);
   } catch {
   }
-  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 function recorderThumb(canvas) {
@@ -8882,6 +8890,12 @@ function recorderNumFromToken(text, maxDigits) {
   if (!/^\d+$/.test(s) || s.length > maxDigits) return null;
   return parseInt(s, 10);
 }
+function recorderDigitStr(text) {
+  const t = String(text || "").replace(/^\|+/, "").replace(/\|+$/, "");
+  if (!t || /[#,.:%()]/.test(t) || !/^[0-9OoQqIl|Ss]{1,6}$/.test(t)) return null;
+  const s = t.replace(/[OoQq]/g, "0").replace(/[Il|]/g, "1").replace(/[Ss]/g, "5");
+  return /^\d+$/.test(s) ? s : null;
+}
 function recorderValueFromWord(w, valueX, maxDigits) {
   if (valueX != null && w.x0 < valueX - 2 && /^[Il|][0-9OoQqIl|Ss]{1,5}$/.test(w.text)) {
     const stripped = recorderNumFromToken(w.text.slice(1), maxDigits);
@@ -8932,13 +8946,37 @@ function recorderParseTable(words, imgW) {
     const nameText = nameParts.map((w) => w.text).join(" ").trim();
     if (!nameText || recorderSig(nameText).length < 3) continue;
     let value = null, vconf = 100;
-    const windowed = valueX != null ? r.words.filter((w) => (w.x0 + w.x1) / 2 >= valueX - 10) : [];
-    for (let i = windowed.length - 1; i >= 0; i--) {
-      const n = recorderValueFromWord(windowed[i], valueX, 6);
-      if (n != null) {
-        value = n;
-        vconf = windowed[i].conf;
-        break;
+    if (valueX != null) {
+      const windowed = r.words.filter((w) => (w.x0 + w.x1) / 2 >= valueX - 10);
+      let end = -1;
+      for (let i = windowed.length - 1; i >= 0; i--) {
+        if (recorderDigitStr(windowed[i].text) != null) {
+          end = i;
+          break;
+        }
+      }
+      if (end >= 0) {
+        const run = [windowed[end]];
+        for (let i = end - 1; i >= 0; i--) {
+          const cur = windowed[i];
+          if (recorderDigitStr(cur.text) == null) break;
+          if (run[0].x0 - cur.x1 > medH * 0.35) break;
+          run.unshift(cur);
+        }
+        if (run.length > 1) {
+          const digits = run.map((w) => recorderDigitStr(w.text)).join("");
+          if (/^\d+$/.test(digits) && digits.length <= 6) {
+            value = parseInt(digits, 10);
+            vconf = Math.min(...run.map((w) => w.conf));
+          }
+        }
+        if (value == null) {
+          const n = recorderValueFromWord(windowed[end], valueX, 6);
+          if (n != null) {
+            value = n;
+            vconf = windowed[end].conf;
+          }
+        }
       }
     }
     if (value == null) {
@@ -9831,6 +9869,7 @@ function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onTo
         const words = await recorderRecognizeWords(worker, canvas, 6);
         try {
           window.__recWords = words.map((w) => w.text + " [x" + Math.round(w.x0) + "-" + Math.round(w.x1) + " y" + Math.round((w.y0 + w.y1) / 2) + " c" + Math.round(w.conf) + "]");
+          window.__recCanvas = canvas.width + "x" + canvas.height + " upscale=" + recRef.current.upscale;
         } catch {
         }
         const kind = recorderClassifyWords(words);
