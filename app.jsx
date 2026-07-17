@@ -2888,7 +2888,7 @@ https://bit.ly/4vrcu64`;
     }
 
     function Card({ children, className = '' }) {
-      return <div className={`rounded-lg border border-neutral-900 bg-[#0c0c0c] ${className}`}>{children}</div>;
+      return <div className={`rounded-lg border border-neutral-900 bg-[#232327] ${className}`}>{children}</div>;
     }
 
     function IconSheet() {
@@ -3093,7 +3093,7 @@ https://bit.ly/4vrcu64`;
             <span
               ref={popupRef}
               style={{ position: 'fixed', top: popupPos.top, left: popupPos.left, zIndex: 50 }}
-              className="w-[254px] rounded-md border border-neutral-800 bg-[#0c0c0c] p-2 shadow-2xl">
+              className="w-[254px] rounded-md border border-neutral-800 bg-[#232327] p-2 shadow-2xl">
               <span className="block space-y-1">
                 {PRESET_COLOR_ROWS.map((row, rowIndex) => (
                   <span key={rowIndex} className="grid grid-cols-10 gap-1">
@@ -3209,7 +3209,7 @@ https://bit.ly/4vrcu64`;
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay"
           onClick={() => onResolve(cancelValue)}>
           <div
-            className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl anim-panel"
+            className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel"
             onClick={e => e.stopPropagation()}>
             {title && <h3 className="text-sm font-bold tracking-tight mb-1.5">{title}</h3>}
             {message && <p className="text-[12.5px] text-neutral-400 leading-relaxed">{message}</p>}
@@ -3267,7 +3267,7 @@ https://bit.ly/4vrcu64`;
 
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay">
-          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#0c0c0c] p-6 shadow-2xl anim-panel">
+          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel">
             <div className="flex items-center gap-3 mb-1">
               <svg viewBox="0 0 512 512" className="w-9 h-9 rounded-md shrink-0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <rect width="512" height="512" rx="100" fill="#2196F3"/>
@@ -3279,7 +3279,7 @@ https://bit.ly/4vrcu64`;
               </div>
             </div>
 
-            <div className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808] mt-5">
+            <div className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d] mt-5">
               {[['signin','Sign in'], ['signup','Create account']].map(([m, label]) => (
                 <button key={m} type="button"
                   onClick={() => { setMode(m); setError(null); setInfo(null); }}
@@ -3370,7 +3370,7 @@ https://bit.ly/4vrcu64`;
 
       if (collapsed) {
         return (
-          <aside className="w-10 shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col items-center py-4 gap-3">
+          <aside className="w-10 shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col items-center py-4 gap-3">
             <button onClick={() => setCollapsed(false)}
               title="Expand uploaded sheets"
               className="text-neutral-500 hover:text-neutral-200 transition-colors">
@@ -3384,7 +3384,7 @@ https://bit.ly/4vrcu64`;
       }
 
       return (
-        <aside className="w-[280px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[280px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SectionLabel hint={imported.length ? `${imported.length} sheet${imported.length === 1 ? '' : 's'}` : ''}>Uploaded</SectionLabel>
@@ -3478,7 +3478,7 @@ https://bit.ly/4vrcu64`;
       const [dragRow, setDragRow] = useState(null);
 
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           {/* Brand */}
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
@@ -4239,12 +4239,12 @@ https://bit.ly/4vrcu64`;
                     <React.Fragment key={dIdx}>
                       {visibleItems(sheet.metrics).map((m, mIdx) => (
                         <tr key={mIdx} className={`border-b border-neutral-900/60 ${wk ? 'bg-red-950/20' : ''}`}>
-                          <td className="px-3 py-1.5 text-neutral-400 font-mono sticky left-0 bg-[#0c0c0c]">{mIdx === 0 ? `${year}-${pad(month + 1)}-${pad(dIdx + 1)}` : ''}</td>
+                          <td className="px-3 py-1.5 text-neutral-400 font-mono sticky left-0 bg-[#232327]">{mIdx === 0 ? `${year}-${pad(month + 1)}-${pad(dIdx + 1)}` : ''}</td>
                           <td className="px-3 py-1.5 text-neutral-200" style={itemColor(m) ? { background: itemColor(m) } : {}}>{itemLabel(m)}</td>
                           {hours.map((_, hi) => <td key={hi} className="px-2 py-1.5 text-neutral-700 text-center" style={itemColor(m) && itemColorExtend(m) ? { background: itemColor(m) } : {}}>·</td>)}
                         </tr>
                       ))}
-                      {showSeparator && dIdx < sample - 1 && <tr className="h-2 bg-[#0a0a0a]"><td colSpan={2 + hours.length}></td></tr>}
+                      {showSeparator && dIdx < sample - 1 && <tr className="h-2 bg-[#1c1c1f]"><td colSpan={2 + hours.length}></td></tr>}
                     </React.Fragment>
                   );
                 })}
@@ -5888,7 +5888,7 @@ https://bit.ly/4vrcu64`;
       const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
 
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -6247,7 +6247,7 @@ https://bit.ly/4vrcu64`;
       ];
 
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -6333,7 +6333,7 @@ https://bit.ly/4vrcu64`;
       const grid = editorNormalizeGrid(editor.cells);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -6832,7 +6832,7 @@ https://bit.ly/4vrcu64`;
       });
       const numbers = wlSmsEffectiveNumbers(wl, sharedTestNumbers);
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -7012,7 +7012,7 @@ https://bit.ly/4vrcu64`;
 
           <Card className="p-4">
             <SectionLabel hint={modeHint}>Paste content</SectionLabel>
-            <div className="mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5 w-fit">
+            <div className="mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#1a1a1d] p-0.5 w-fit">
               {[
                 { id: 'auto',  label: 'With separator' },
                 { id: 'lines', label: 'Without separator' },
@@ -7867,7 +7867,7 @@ https://bit.ly/4vrcu64`;
       const enabledSections = RCA_SECTION_DEFS.filter(def => rca.sections[def.key]?.show !== false).length;
       const fileStem = rcaFileNameStem(rca);
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -8880,7 +8880,7 @@ https://bit.ly/4vrcu64`;
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const hasImage = !!scene.img;
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -9481,7 +9481,7 @@ https://bit.ly/4vrcu64`;
             onCopy={copyImage} onDownload={downloadImage} busy={busy} />
 
           <main className="flex-1 min-w-0 flex flex-col">
-            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
               <div className="app-title-block min-w-0">
                 <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                 <h2 className="truncate text-[22px] font-bold tracking-tight">
@@ -9505,7 +9505,7 @@ https://bit.ly/4vrcu64`;
                 <Card className="p-3">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
                     {/* Tools */}
-                    <div className="flex flex-wrap items-center gap-1 rounded-md border border-neutral-900 bg-[#080808] p-1">
+                    <div className="flex flex-wrap items-center gap-1 rounded-md border border-neutral-900 bg-[#1a1a1d] p-1">
                       {IMAGE_TOOLS.map(tool => (
                         <button key={tool.id} type="button"
                           onClick={() => setPrefs({ tool: tool.id })}
@@ -9550,7 +9550,7 @@ https://bit.ly/4vrcu64`;
                         </Btn>
                       )}
                       <Btn variant="ghost" size="sm" onClick={clearShapes} disabled={!scene.shapes.length}>Clear all</Btn>
-                      <div className="flex items-center gap-0.5 rounded-md border border-neutral-900 bg-[#080808] p-0.5">
+                      <div className="flex items-center gap-0.5 rounded-md border border-neutral-900 bg-[#1a1a1d] p-0.5">
                         <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitScale : z) - 0.25, 0.25, 4))}
                           className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" title="Zoom out">−</button>
                         <button type="button" onClick={() => setZoom('fit')}
@@ -9587,7 +9587,7 @@ https://bit.ly/4vrcu64`;
                   const file = e.dataTransfer?.files?.[0];
                   if (file) loadFile(file);
                 }}
-                className={`rounded-lg border ${dragOver ? 'border-blue-500 bg-blue-500/5' : 'border-neutral-900 bg-[#080808]'} transition-colors`}>
+                className={`rounded-lg border ${dragOver ? 'border-blue-500 bg-blue-500/5' : 'border-neutral-900 bg-[#1a1a1d]'} transition-colors`}>
                 {hasImage ? (
                   <div className="flex justify-center p-4 overflow-auto">
                     <div className="relative shrink-0" style={{ width: displayW, height: displayH }}>
@@ -11098,7 +11098,7 @@ https://bit.ly/4vrcu64`;
                     : null;
                   return (
                     <tr key={row.id} className="odd:bg-neutral-900/30">
-                      <td className="sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#0a0a0a] px-3 py-1">
+                      <td className="sticky left-0 z-10 whitespace-nowrap border-b border-neutral-900/60 bg-[#1c1c1f] px-3 py-1">
                         <span className="mr-2 inline-block h-2 w-2 rounded-sm align-middle" style={{ background: row.color }} />
                         <span className="align-middle text-neutral-200">{row.label}</span>
                       </td>
@@ -11330,7 +11330,7 @@ https://bit.ly/4vrcu64`;
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const exportYear = recorderParseIntOr(exportSel.year, new Date().getFullYear());
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#070707] h-screen sticky top-0 flex flex-col">
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -11880,7 +11880,7 @@ https://bit.ly/4vrcu64`;
             exportSel={exportSel} setExportSel={setExportSel} onExport={doExport} busyExport={busyExport}
             shared={shared} onRefreshShared={() => refreshSharedRef.current(monthsInView())} gsheets={gsheets} />
           <main className="flex-1 min-w-0 flex flex-col">
-            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-20">
+            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20">
               <div className="app-title-block min-w-0">
                 <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module · Team shared</div>
                 <h2 className="truncate text-[22px] font-bold tracking-tight">Recorder</h2>
@@ -11908,7 +11908,7 @@ https://bit.ly/4vrcu64`;
                   ))}
                   <RecorderMissingPanel missing={missing} manual={manual} setManual={setManual} hourLabel={`${recorderPrettyDate(target.date)} · ${HOURS_24[target.hour]}`} />
                   {hasPending && (
-                    <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/40 bg-[#0b1220]/95 px-4 py-3 backdrop-blur">
+                    <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/40 bg-[#16203a]/95 px-4 py-3 backdrop-blur">
                       <div className="text-xs text-neutral-300">
                         Saving to <span className="font-semibold text-neutral-100">{recorderPrettyDate(target.date)}</span> · <span className="font-semibold text-neutral-100">{HOURS_24[target.hour]}</span>
                         <span className="text-neutral-500"> — wrong slot? change it in the sidebar first</span>
@@ -12212,7 +12212,7 @@ match /shared/whitelistSmsTestNumbers {
       const mutedCls = 'app-segment-muted text-neutral-500 hover:text-neutral-200';
 
       return (
-        <div ref={containerRef} className="app-segmented relative flex items-center gap-1 rounded-md border border-neutral-800 bg-[#080808] p-0.5">
+        <div ref={containerRef} className="app-segmented relative flex items-center gap-1 rounded-md border border-neutral-800 bg-[#1a1a1d] p-0.5">
           <div ref={measureRef} aria-hidden="true"
             style={{ position: 'fixed', left: '-99999px', top: 0, display: 'flex', gap: '4px', pointerEvents: 'none', visibility: 'hidden' }}>
             {modules.map(m => (
@@ -12241,7 +12241,7 @@ match /shared/whitelistSmsTestNumbers {
               </button>
               {open && (
                 <div role="menu"
-                  className="app-segment-more-menu absolute right-0 top-full z-30 mt-1 min-w-[170px] rounded-md border border-neutral-800 bg-[#0c0c0c] p-1 shadow-2xl">
+                  className="app-segment-more-menu absolute right-0 top-full z-30 mt-1 min-w-[170px] rounded-md border border-neutral-800 bg-[#232327] p-1 shadow-2xl">
                   {overflow.map(m => {
                     const isActive = current === m.id;
                     return (
@@ -13061,7 +13061,7 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <Sidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} gsheets={googleSyncProps} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
                 <div className="app-title-block min-w-0">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="truncate text-[22px] font-bold tracking-tight">Users</h2>
@@ -13098,7 +13098,7 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <EditorSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
                 <div className="app-title-block min-w-0">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="truncate text-[22px] font-bold tracking-tight">Editor / {editor.name || 'Pasted Table'}</h2>
@@ -13112,7 +13112,7 @@ match /shared/whitelistSmsTestNumbers {
                   {ModuleSwitch}
                   <Btn variant="ghost" size="sm" onClick={undoEditor} disabled={!editorUndoStack.length} title="Undo last Editor change"><IconUndo /> Undo</Btn>
                   <Btn variant="ghost" size="sm" onClick={resetEditor}>Reset</Btn>
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
                     {EDITOR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, editorTab: t.id }))}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
@@ -13164,7 +13164,7 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <BmrSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} gsheets={googleSyncProps} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
                 <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="text-[22px] font-bold tracking-tight">BMR VOIP · {bmrTodayString()}</h2>
@@ -13176,7 +13176,7 @@ match /shared/whitelistSmsTestNumbers {
                 </div>
                 <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
                     {BMR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, bmrTab: t.id }))}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
@@ -13244,7 +13244,7 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <BmrSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} gsheets={googleSyncProps} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
                 <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="text-[22px] font-bold tracking-tight">BMR SMS · {bmrTodayString()}</h2>
@@ -13257,7 +13257,7 @@ match /shared/whitelistSmsTestNumbers {
                 </div>
                 <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
                     {BMR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, bmrSmsTab: t.id }))}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrSmsTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
@@ -13327,7 +13327,7 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <WlSmsSidebar state={state} setState={setState} onGenerate={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} sharedTestNumbers={sharedTestNumbers} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
                 <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="text-[22px] font-bold tracking-tight">Whitelist SMS{wl.senderId ? ` · ${wl.senderId}` : ''}</h2>
@@ -13339,7 +13339,7 @@ match /shared/whitelistSmsTestNumbers {
                 </div>
                 <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
                     {WL_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, whitelistSmsTab: t.id }))}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${whitelistSmsTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
@@ -13405,7 +13405,7 @@ match /shared/whitelistSmsTestNumbers {
           <div className="flex min-h-screen text-neutral-100">
             <RcaSidebar state={state} setState={setState} onGenerateDocx={onGenerate} busy={busy} sync={sync} onRetrySync={retrySync} />
             <main className="flex-1 min-w-0 flex flex-col">
-              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
                 <div className="app-title-block">
                   <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Module</div>
                   <h2 className="text-[22px] font-bold tracking-tight">RCA · {rca.customerCid || 'New Incident Report'}</h2>
@@ -13454,7 +13454,7 @@ match /shared/whitelistSmsTestNumbers {
           <UploadedSidebar state={state} setState={setState} />
           <main className="flex-1 min-w-0 flex flex-col">
             {/* Top bar */}
-            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#0a0a0a]/95 backdrop-blur z-10">
+            <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10">
               <div className="app-title-block">
                 <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1">Report</div>
                 <h2 className="text-[22px] font-bold tracking-tight">{MONTHS[state.month]} {state.year}</h2>
@@ -13466,7 +13466,7 @@ match /shared/whitelistSmsTestNumbers {
               </div>
               <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                 {ModuleSwitch}
-                <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#080808]">
+                <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
                   {TABS.map(t => (
                     <button key={t.id} onClick={() => setState(s => ({ ...s, tab: t.id }))}
                       className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
@@ -13552,7 +13552,7 @@ match /shared/whitelistSmsTestNumbers {
         if (this.state.error) {
           const msg = String(this.state.error?.message || this.state.error || 'Unknown error');
           return (
-            <div className="min-h-screen flex items-center justify-center p-8 bg-[#0a0a0a] text-neutral-100">
+            <div className="min-h-screen flex items-center justify-center p-8 bg-[#1c1c1f] text-neutral-100">
               <div className="max-w-lg w-full border border-red-500/40 bg-red-500/5 rounded-xl p-6">
                 <div className="text-red-300 text-sm font-semibold mb-2">Something went wrong</div>
                 <pre className="text-[11px] text-neutral-400 font-mono whitespace-pre-wrap break-words mb-4">{msg}</pre>
