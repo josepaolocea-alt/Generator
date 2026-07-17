@@ -7287,6 +7287,27 @@ function imageSupportsFilter() {
   }
   return __imageFilterSupport;
 }
+function useDevicePixelRatio() {
+  const [dpr, setDpr] = useState(() => typeof window === "undefined" ? 1 : window.devicePixelRatio || 1);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    let query = null;
+    let stopped = false;
+    const arm = () => {
+      if (stopped) return;
+      const current = window.devicePixelRatio || 1;
+      setDpr(current);
+      query = window.matchMedia(`(resolution: ${current}dppx)`);
+      query.addEventListener("change", arm, { once: true });
+    };
+    arm();
+    return () => {
+      stopped = true;
+      if (query) query.removeEventListener("change", arm);
+    };
+  }, []);
+  return dpr;
+}
 let __imageMeasureCtx = null;
 function imageMeasureText(text, size) {
   if (!__imageMeasureCtx) __imageMeasureCtx = document.createElement("canvas").getContext("2d");
@@ -7609,7 +7630,12 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stageWidth, setStageWidth] = useState(0);
+  const dpr = useDevicePixelRatio();
   const canvasRef = useRef(null);
+  const sceneCanvasRef = useRef(null);
+  if (!sceneCanvasRef.current && typeof document !== "undefined") {
+    sceneCanvasRef.current = document.createElement("canvas");
+  }
   const stageRef = useRef(null);
   const dragRef = useRef(null);
   const objectUrlRef = useRef(null);
@@ -7699,13 +7725,6 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
     return () => window.removeEventListener("paste", onPaste);
   }, [loadFile]);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !scene.img) return;
-    if (canvas.width !== scene.width) canvas.width = scene.width;
-    if (canvas.height !== scene.height) canvas.height = scene.height;
-    imageRenderScene(canvas, scene, draft);
-  }, [scene, draft]);
-  useEffect(() => {
     const stage = stageRef.current;
     if (!stage || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
@@ -7715,10 +7734,33 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
     setStageWidth(stage.clientWidth);
     return () => ro.disconnect();
   }, [hasImage]);
-  const fitScale = scene.width && stageWidth ? Math.min(1, (stageWidth - 8) / scene.width) : 1;
-  const scale = zoom === "fit" ? fitScale : zoom;
-  const displayW = Math.max(1, Math.round(scene.width * scale));
-  const displayH = Math.max(1, Math.round(scene.height * scale));
+  const fitZoom = scene.width && stageWidth ? Math.min(1, (stageWidth - 8) * dpr / scene.width) : 1;
+  const zoomLevel = zoom === "fit" ? fitZoom : zoom;
+  const scale = zoomLevel / dpr;
+  const displayW = Math.max(1, scene.width * scale);
+  const displayH = Math.max(1, scene.height * scale);
+  useEffect(() => {
+    const offscreen = sceneCanvasRef.current;
+    if (!offscreen || !scene.img) return;
+    if (offscreen.width !== scene.width) offscreen.width = scene.width;
+    if (offscreen.height !== scene.height) offscreen.height = scene.height;
+    imageRenderScene(offscreen, scene, draft);
+  }, [scene, draft]);
+  useEffect(() => {
+    const offscreen = sceneCanvasRef.current;
+    const canvas = canvasRef.current;
+    if (!offscreen || !canvas || !scene.img) return;
+    const bw = Math.max(1, Math.round(scene.width * zoomLevel));
+    const bh = Math.max(1, Math.round(scene.height * zoomLevel));
+    if (canvas.width !== bw) canvas.width = bw;
+    if (canvas.height !== bh) canvas.height = bh;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, bw, bh);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(offscreen, 0, 0, offscreen.width, offscreen.height, 0, 0, bw, bh);
+  }, [scene, draft, zoomLevel]);
   const toImagePoint = useCallback((e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -7923,7 +7965,7 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
     setPrefs({ tool: "select" });
   }, [commit, cropRect, onToast, scene.img, scene.width, scene.height, setPrefs]);
   const toBlob = useCallback((format) => new Promise((resolve, reject) => {
-    const canvas = canvasRef.current;
+    const canvas = sceneCanvasRef.current;
     if (!canvas || !sceneRef.current.img) {
       reject(new Error("There is no image to export"));
       return;
@@ -8074,7 +8116,7 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
       onDownload: downloadImage,
       busy
     }
-  ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Image Editor", hasImage ? ` · ${scene.width} × ${scene.height}` : "")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: scene.shapes.length ? "accent" : "muted" }, scene.shapes.length, " edits"), /* @__PURE__ */ React.createElement(Pill, null, Math.round(scale * 100), "%")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, moduleSwitch, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: undo, disabled: !historyLen, title: "Undo (Ctrl+Z)" }, /* @__PURE__ */ React.createElement(IconUndo, null), " Undo"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: redo, disabled: !futureLen, title: "Redo (Ctrl+Y)" }, /* @__PURE__ */ React.createElement(IconRedo, null), " Redo"), hasImage && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: closeImage }, "Close"))), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1700px] space-y-4" }, hasImage && /* @__PURE__ */ React.createElement(Card, { className: "p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-x-4 gap-y-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-1 rounded-md border border-neutral-900 bg-[#1a1a1d] p-1" }, IMAGE_TOOLS.map((tool) => /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Image Editor", hasImage ? ` · ${scene.width} × ${scene.height}` : "")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: scene.shapes.length ? "accent" : "muted" }, scene.shapes.length, " edits"), /* @__PURE__ */ React.createElement(Pill, null, Math.round(zoomLevel * 100), "%")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, moduleSwitch, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: undo, disabled: !historyLen, title: "Undo (Ctrl+Z)" }, /* @__PURE__ */ React.createElement(IconUndo, null), " Undo"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: redo, disabled: !futureLen, title: "Redo (Ctrl+Y)" }, /* @__PURE__ */ React.createElement(IconRedo, null), " Redo"), hasImage && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: closeImage }, "Close"))), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1700px] space-y-4" }, hasImage && /* @__PURE__ */ React.createElement(Card, { className: "p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-x-4 gap-y-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-1 rounded-md border border-neutral-900 bg-[#1a1a1d] p-1" }, IMAGE_TOOLS.map((tool) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: tool.id,
@@ -8123,7 +8165,7 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
     "button",
     {
       type: "button",
-      onClick: () => setZoom((z) => imageClamp((z === "fit" ? fitScale : z) - 0.25, 0.25, 4)),
+      onClick: () => setZoom((z) => imageClamp((z === "fit" ? fitZoom : z) - 0.25, 0.25, 4)),
       className: "px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100",
       title: "Zoom out"
     },
@@ -8148,7 +8190,7 @@ function ImageEditorModule({ state, setState, sync, onRetrySync, moduleSwitch, o
     "button",
     {
       type: "button",
-      onClick: () => setZoom((z) => imageClamp((z === "fit" ? fitScale : z) + 0.25, 0.25, 4)),
+      onClick: () => setZoom((z) => imageClamp((z === "fit" ? fitZoom : z) + 0.25, 0.25, 4)),
       className: "px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100",
       title: "Zoom in"
     },
@@ -8854,7 +8896,7 @@ async function recorderFileToCanvas(file, upscale) {
   return canvas;
 }
 function recorderThumb(canvas) {
-  const w = Math.min(260, canvas.width);
+  const w = Math.min(1280, canvas.width);
   const h = Math.max(1, Math.round(canvas.height * (w / canvas.width)));
   const t = document.createElement("canvas");
   t.width = w;
@@ -9371,8 +9413,33 @@ function RecorderDropZone({ onFiles, engine }) {
 }
 function RecorderCaptureCard({ cap, rec, target, onAssign, onValue, onCommit, onDiscard }) {
   const cardsClients = rec.clients.filter((c) => c.type === "cards");
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setZoomed(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomed]);
   const existing = (clientId, rowId) => (((rec.values[clientId] || {})[target.date] || {})[rowId] || {})[target.hour];
-  return /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-900 bg-neutral-950 p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-start gap-4" }, /* @__PURE__ */ React.createElement("div", { className: "w-[180px] shrink-0" }, cap.thumb ? /* @__PURE__ */ React.createElement("img", { src: cap.thumb, alt: "", className: "w-full rounded border border-neutral-800" }) : /* @__PURE__ */ React.createElement("div", { className: "h-20 rounded border border-neutral-800 bg-neutral-900 animate-pulse" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap gap-1.5" }, cap.status === "ocr" && /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, "Reading…"), cap.status === "ready" && /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, cap.kind === "cards" ? "Cards" : "Gateway table"), cap.status === "ready" && /* @__PURE__ */ React.createElement(Pill, { tone: cap.rows.length ? "success" : "muted" }, cap.rows.length, " matched"), cap.status === "empty" && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, "Nothing readable"), cap.status === "error" && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, "Failed"))), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-[260px]" }, cap.status === "error" && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-red-300" }, cap.error), cap.status === "ocr" && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500" }, "Running OCR…"), cap.status === "empty" && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500" }, "No values were recognized. Try a tighter screenshot of the table, or type the numbers in the “Still missing” panel below."), cap.status === "ready" && /* @__PURE__ */ React.createElement(React.Fragment, null, cap.kind === "cards" && /* @__PURE__ */ React.createElement("div", { className: "mb-3 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Client"), /* @__PURE__ */ React.createElement(Select, { value: cap.clientId || "", onChange: (e) => onAssign(cap.id, e.target.value), className: "!w-auto min-w-[180px]" }, cardsClients.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.id, value: c.id }, c.name))), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-amber-300" }, "check this — card screenshots look alike")), cap.rows.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "grid gap-1.5 sm:grid-cols-2" }, cap.rows.map((row) => {
+  return /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-900 bg-neutral-950 p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-start gap-4" }, /* @__PURE__ */ React.createElement("div", { className: "w-[300px] max-w-full shrink-0" }, cap.thumb ? /* @__PURE__ */ React.createElement(
+    "img",
+    {
+      src: cap.thumb,
+      alt: "",
+      title: "Click to enlarge",
+      onClick: () => setZoomed(true),
+      className: "w-full cursor-zoom-in rounded border border-neutral-800"
+    }
+  ) : /* @__PURE__ */ React.createElement("div", { className: "h-20 rounded border border-neutral-800 bg-neutral-900 animate-pulse" }), zoomed && cap.thumb && /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: "fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay cursor-zoom-out",
+      onClick: () => setZoomed(false)
+    },
+    /* @__PURE__ */ React.createElement("img", { src: cap.thumb, alt: "", className: "max-h-[92vh] max-w-[96vw] rounded border border-neutral-700 object-contain shadow-2xl" })
+  ), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap gap-1.5" }, cap.status === "ocr" && /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, "Reading…"), cap.status === "ready" && /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, cap.kind === "cards" ? "Cards" : "Gateway table"), cap.status === "ready" && /* @__PURE__ */ React.createElement(Pill, { tone: cap.rows.length ? "success" : "muted" }, cap.rows.length, " matched"), cap.status === "empty" && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, "Nothing readable"), cap.status === "error" && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, "Failed"))), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-[260px]" }, cap.status === "error" && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-red-300" }, cap.error), cap.status === "ocr" && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500" }, "Running OCR…"), cap.status === "empty" && /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500" }, "No values were recognized. Try a tighter screenshot of the table, or type the numbers in the “Still missing” panel below."), cap.status === "ready" && /* @__PURE__ */ React.createElement(React.Fragment, null, cap.kind === "cards" && /* @__PURE__ */ React.createElement("div", { className: "mb-3 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Client"), /* @__PURE__ */ React.createElement(Select, { value: cap.clientId || "", onChange: (e) => onAssign(cap.id, e.target.value), className: "!w-auto min-w-[180px]" }, cardsClients.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.id, value: c.id }, c.name))), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-amber-300" }, "check this — card screenshots look alike")), cap.rows.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "grid gap-1.5 sm:grid-cols-2" }, cap.rows.map((row) => {
     const prev = existing(row.clientId, row.rowId);
     const clientName = (rec.clients.find((c) => c.id === row.clientId) || {}).name || "";
     const flagged = row.conf < 70 || !row.exact;

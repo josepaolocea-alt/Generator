@@ -8626,6 +8626,31 @@ https://bit.ly/4vrcu64`;
       return __imageFilterSupport;
     }
 
+    // A canvas backing store is measured in real screen pixels, so anything drawn
+    // for display has to know the ratio. It is not fixed for the life of the page:
+    // dragging the window to a monitor with different scaling changes it, and a
+    // resolution media query is the only thing that reports that.
+    function useDevicePixelRatio() {
+      const [dpr, setDpr] = useState(() => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1));
+      useEffect(() => {
+        if (typeof window === 'undefined' || !window.matchMedia) return;
+        let query = null;
+        let stopped = false;
+        // The query only ever fires to say "this is no longer the ratio", so each
+        // firing has to re-arm a fresh query against the new value.
+        const arm = () => {
+          if (stopped) return;
+          const current = window.devicePixelRatio || 1;
+          setDpr(current);
+          query = window.matchMedia(`(resolution: ${current}dppx)`);
+          query.addEventListener('change', arm, { once: true });
+        };
+        arm();
+        return () => { stopped = true; if (query) query.removeEventListener('change', arm); };
+      }, []);
+      return dpr;
+    }
+
     let __imageMeasureCtx = null;
     function imageMeasureText(text, size) {
       if (!__imageMeasureCtx) __imageMeasureCtx = document.createElement('canvas').getContext('2d');
@@ -9008,7 +9033,17 @@ https://bit.ly/4vrcu64`;
       const [busy, setBusy] = useState(false);
       const [stageWidth, setStageWidth] = useState(0);
 
+      const dpr = useDevicePixelRatio();
+
       const canvasRef = useRef(null);
+      // The scene is always rendered at the image's own resolution, never the
+      // display's. Blur and pixelate sample this canvas back to build their
+      // effect, and export encodes it, so one canvas pixel has to stay one image
+      // pixel. The visible canvas below is a separate, device-pixel-sized copy.
+      const sceneCanvasRef = useRef(null);
+      if (!sceneCanvasRef.current && typeof document !== 'undefined') {
+        sceneCanvasRef.current = document.createElement('canvas');
+      }
       const stageRef = useRef(null);
       const dragRef = useRef(null);
       const objectUrlRef = useRef(null);
@@ -9107,14 +9142,6 @@ https://bit.ly/4vrcu64`;
       /* ---------- render ---------- */
 
       useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || !scene.img) return;
-        if (canvas.width !== scene.width) canvas.width = scene.width;
-        if (canvas.height !== scene.height) canvas.height = scene.height;
-        imageRenderScene(canvas, scene, draft);
-      }, [scene, draft]);
-
-      useEffect(() => {
         const stage = stageRef.current;
         if (!stage || typeof ResizeObserver === 'undefined') return;
         const ro = new ResizeObserver(entries => {
@@ -9125,12 +9152,54 @@ https://bit.ly/4vrcu64`;
         return () => ro.disconnect();
       }, [hasImage]);
 
-      const fitScale = (scene.width && stageWidth)
-        ? Math.min(1, (stageWidth - 8) / scene.width)
+      // Zoom counts device pixels per image pixel, so 1:1 puts one image pixel on
+      // one screen pixel and a pasted screenshot looks exactly as sharp as it did
+      // on screen. `scale` converts that to the CSS pixels layout needs: on a
+      // 150%-scaled display, 1:1 is a CSS scale of 0.667. Fit never goes above 1:1
+      // because magnifying past it only invents pixels the image does not have.
+      const fitZoom = (scene.width && stageWidth)
+        ? Math.min(1, ((stageWidth - 8) * dpr) / scene.width)
         : 1;
-      const scale = zoom === 'fit' ? fitScale : zoom;
-      const displayW = Math.max(1, Math.round(scene.width * scale));
-      const displayH = Math.max(1, Math.round(scene.height * scale));
+      const zoomLevel = zoom === 'fit' ? fitZoom : zoom;
+      const scale = zoomLevel / dpr;
+      // Deliberately not rounded to whole CSS pixels. Rounding here and then
+      // multiplying back up by the ratio lands a fraction off the device grid —
+      // at 1:1 on a 150% display that alone resamples the image by half a pixel.
+      const displayW = Math.max(1, scene.width * scale);
+      const displayH = Math.max(1, scene.height * scale);
+
+      // Paint the scene at the image's own resolution. Zoom is deliberately not a
+      // dependency: this is the expensive pass (a blur region re-filters on every
+      // run) and the result does not depend on how large it is being shown.
+      useEffect(() => {
+        const offscreen = sceneCanvasRef.current;
+        if (!offscreen || !scene.img) return;
+        if (offscreen.width !== scene.width) offscreen.width = scene.width;
+        if (offscreen.height !== scene.height) offscreen.height = scene.height;
+        imageRenderScene(offscreen, scene, draft);
+      }, [scene, draft]);
+
+      // Blit that onto a canvas whose backing store is the physical pixels the CSS
+      // box covers. Sizing the visible canvas in image pixels instead left the
+      // browser stretching it onto the device grid, which softened every image the
+      // stage was not already shrinking. Runs after the pass above, same commit.
+      useEffect(() => {
+        const offscreen = sceneCanvasRef.current;
+        const canvas = canvasRef.current;
+        if (!offscreen || !canvas || !scene.img) return;
+        // Derived from the image, not from displayW, so at 1:1 this is exactly the
+        // image's own pixel count and the draw below is a straight copy.
+        const bw = Math.max(1, Math.round(scene.width * zoomLevel));
+        const bh = Math.max(1, Math.round(scene.height * zoomLevel));
+        if (canvas.width !== bw) canvas.width = bw;
+        if (canvas.height !== bh) canvas.height = bh;
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, bw, bh);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(offscreen, 0, 0, offscreen.width, offscreen.height, 0, 0, bw, bh);
+      }, [scene, draft, zoomLevel]);
 
       /* ---------- pointer ---------- */
 
@@ -9333,8 +9402,11 @@ https://bit.ly/4vrcu64`;
         setPrefs({ tool: 'select' });
       }, [commit, cropRect, onToast, scene.img, scene.width, scene.height, setPrefs]);
 
+      // Encodes the image-resolution scene, not the visible canvas — the visible
+      // one is sized for the screen and would export at whatever the current zoom
+      // happened to be.
       const toBlob = useCallback((format) => new Promise((resolve, reject) => {
-        const canvas = canvasRef.current;
+        const canvas = sceneCanvasRef.current;
         if (!canvas || !sceneRef.current.img) { reject(new Error('There is no image to export')); return; }
         const done = (blob) => blob ? resolve(blob) : reject(new Error('The browser could not encode the image'));
         if (format === 'jpeg') {
@@ -9490,7 +9562,7 @@ https://bit.ly/4vrcu64`;
               </div>
               <div className="app-pill-row hidden xl:flex items-center gap-2">
                 <Pill tone={scene.shapes.length ? 'accent' : 'muted'}>{scene.shapes.length} edits</Pill>
-                <Pill>{Math.round(scale * 100)}%</Pill>
+                <Pill>{Math.round(zoomLevel * 100)}%</Pill>
               </div>
               <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                 {moduleSwitch}
@@ -9551,13 +9623,13 @@ https://bit.ly/4vrcu64`;
                       )}
                       <Btn variant="ghost" size="sm" onClick={clearShapes} disabled={!scene.shapes.length}>Clear all</Btn>
                       <div className="flex items-center gap-0.5 rounded-md border border-neutral-900 bg-[#1a1a1d] p-0.5">
-                        <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitScale : z) - 0.25, 0.25, 4))}
+                        <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitZoom : z) - 0.25, 0.25, 4))}
                           className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" title="Zoom out">−</button>
                         <button type="button" onClick={() => setZoom('fit')}
                           className={`px-2 py-1 text-xs font-medium ${zoom === 'fit' ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>Fit</button>
                         <button type="button" onClick={() => setZoom(1)}
                           className={`px-2 py-1 text-xs font-medium ${zoom === 1 ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>1:1</button>
-                        <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitScale : z) + 0.25, 0.25, 4))}
+                        <button type="button" onClick={() => setZoom(z => imageClamp((z === 'fit' ? fitZoom : z) + 0.25, 0.25, 4))}
                           className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-100" title="Zoom in">+</button>
                       </div>
                     </div>
@@ -10354,7 +10426,10 @@ https://bit.ly/4vrcu64`;
       return canvas;
     }
     function recorderThumb(canvas) {
-      const w = Math.min(260, canvas.width);
+      // Kept large enough that the click-to-enlarge view on the capture card
+      // stays readable; the data URL lives in component state only (never
+      // persisted), so the bigger size costs memory for this session only.
+      const w = Math.min(1280, canvas.width);
       const h = Math.max(1, Math.round(canvas.height * (w / canvas.width)));
       const t = document.createElement('canvas');
       t.width = w; t.height = h;
@@ -10881,14 +10956,28 @@ https://bit.ly/4vrcu64`;
 
     function RecorderCaptureCard({ cap, rec, target, onAssign, onValue, onCommit, onDiscard }) {
       const cardsClients = rec.clients.filter(c => c.type === 'cards');
+      const [zoomed, setZoomed] = useState(false);
+      useEffect(() => {
+        if (!zoomed) return;
+        const onKey = e => { if (e.key === 'Escape') setZoomed(false); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [zoomed]);
       const existing = (clientId, rowId) => ((((rec.values[clientId] || {})[target.date]) || {})[rowId] || {})[target.hour];
       return (
         <div className="rounded-lg border border-neutral-900 bg-neutral-950 p-4">
           <div className="flex flex-wrap items-start gap-4">
-            <div className="w-[180px] shrink-0">
+            <div className="w-[300px] max-w-full shrink-0">
               {cap.thumb
-                ? <img src={cap.thumb} alt="" className="w-full rounded border border-neutral-800" />
+                ? <img src={cap.thumb} alt="" title="Click to enlarge" onClick={() => setZoomed(true)}
+                    className="w-full cursor-zoom-in rounded border border-neutral-800" />
                 : <div className="h-20 rounded border border-neutral-800 bg-neutral-900 animate-pulse" />}
+              {zoomed && cap.thumb && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay cursor-zoom-out"
+                  onClick={() => setZoomed(false)}>
+                  <img src={cap.thumb} alt="" className="max-h-[92vh] max-w-[96vw] rounded border border-neutral-700 object-contain shadow-2xl" />
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {cap.status === 'ocr' && <Pill tone="accent">Reading…</Pill>}
                 {cap.status === 'ready' && <Pill tone="accent">{cap.kind === 'cards' ? 'Cards' : 'Gateway table'}</Pill>}
