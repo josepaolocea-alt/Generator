@@ -2697,6 +2697,92 @@ https://bit.ly/4vrcu64`;
       return blocks;
     }
 
+    // GSM 7-bit default alphabet + extension table. Any character outside this
+    // set forces the whole SMS into UCS-2 (UTF-16) encoding, which drops the
+    // per-part limit from 160 to 70 characters.
+    const WL_SMS_GSM7_SET = new Set(
+      '@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑܧ¿abcdefghijklmnopqrstuvwxyzäöñüà'
+      + '^{}\\[~]|€'
+    );
+
+    // Friendly names + GSM-safe replacements for the special characters that
+    // most often sneak in from Word / Google Docs copy-paste. fix: '' means
+    // "safe to remove"; entries without fix are flagged but never auto-fixed.
+    const WL_SMS_SPECIAL_CHAR_INFO = {
+      '—': { name: 'Em dash', fix: '-' },
+      '–': { name: 'En dash', fix: '-' },
+      '―': { name: 'Horizontal bar', fix: '-' },
+      '‐': { name: 'Hyphen (Unicode)', fix: '-' },
+      '‑': { name: 'Non-breaking hyphen', fix: '-' },
+      '‒': { name: 'Figure dash', fix: '-' },
+      '−': { name: 'Minus sign', fix: '-' },
+      '‘': { name: 'Left single quote', fix: "'" },
+      '’': { name: 'Right single quote (curly apostrophe)', fix: "'" },
+      '‚': { name: 'Low single quote', fix: "'" },
+      '‛': { name: 'Reversed single quote', fix: "'" },
+      '′': { name: 'Prime', fix: "'" },
+      '`': { name: 'Backtick', fix: "'" },
+      '´': { name: 'Acute accent', fix: "'" },
+      '“': { name: 'Left double quote', fix: '"' },
+      '”': { name: 'Right double quote', fix: '"' },
+      '„': { name: 'Low double quote', fix: '"' },
+      '″': { name: 'Double prime', fix: '"' },
+      '«': { name: 'Left angle quote', fix: '"' },
+      '»': { name: 'Right angle quote', fix: '"' },
+      '‹': { name: 'Left single angle quote', fix: "'" },
+      '›': { name: 'Right single angle quote', fix: "'" },
+      '…': { name: 'Ellipsis', fix: '...' },
+      '•': { name: 'Bullet', fix: '-' },
+      '·': { name: 'Middle dot', fix: '-' },
+      ' ': { name: 'Non-breaking space', fix: ' ' },
+      ' ': { name: 'Narrow non-breaking space', fix: ' ' },
+      ' ': { name: 'En space', fix: ' ' },
+      ' ': { name: 'Em space', fix: ' ' },
+      ' ': { name: 'Thin space', fix: ' ' },
+      '\u2028': { name: 'Line separator', fix: '\n' },
+      '\u2029': { name: 'Paragraph separator', fix: '\n' },
+      '­': { name: 'Soft hyphen', fix: '' },
+      '​': { name: 'Zero-width space', fix: '' },
+      '‌': { name: 'Zero-width non-joiner', fix: '' },
+      '‍': { name: 'Zero-width joiner', fix: '' },
+      '﻿': { name: 'Zero-width no-break space (BOM)', fix: '' },
+      '™': { name: 'Trademark sign', fix: 'TM' },
+      '®': { name: 'Registered sign', fix: '(R)' },
+      '©': { name: 'Copyright sign', fix: '(C)' },
+    };
+
+    function wlSmsCodePointLabel(ch) {
+      return 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+    }
+
+    // Invisible offenders (nbsp, zero-width chars) render as their codepoint
+    // so the highlight has something visible to show.
+    function wlSmsCharVisible(ch) {
+      return /[\s\u00AD\u200B-\u200D\uFEFF\u2028\u2029]/.test(ch) ? wlSmsCodePointLabel(ch) : ch;
+    }
+
+    function wlSmsAnalyzeUtf(text) {
+      const segments = []; // [{ text, special }] — consecutive runs, in order
+      const offenders = new Map(); // char -> count
+      for (const ch of String(text ?? '')) {
+        const special = !WL_SMS_GSM7_SET.has(ch);
+        if (special) offenders.set(ch, (offenders.get(ch) || 0) + 1);
+        const last = segments[segments.length - 1];
+        if (last && last.special === special) last.text += ch;
+        else segments.push({ text: ch, special });
+      }
+      return { segments, offenders, isUtf: offenders.size > 0 };
+    }
+
+    function wlSmsApplySafeFixes(text) {
+      let out = '';
+      for (const ch of String(text ?? '')) {
+        const info = WL_SMS_GSM7_SET.has(ch) ? null : WL_SMS_SPECIAL_CHAR_INFO[ch];
+        out += (info && info.fix !== undefined) ? info.fix : ch;
+      }
+      return out;
+    }
+
     function wlSmsNormalizeState(raw = {}) {
       const merged = { ...DEFAULT_WL_SMS_STATE, ...(raw || {}) };
       // testNumbers in user state is legacy — the live source is the shared
@@ -7060,6 +7146,134 @@ https://bit.ly/4vrcu64`;
               <div>
                 <Btn variant="ghost" size="sm" onClick={addBlock}><IconPlus /> Add empty content</Btn>
               </div>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    function WlSmsUtfHighlight({ segments }) {
+      return (
+        <div className="whitespace-pre-wrap break-words rounded-md border border-neutral-900 bg-neutral-950 p-3 text-[12px] leading-relaxed text-neutral-200">
+          {segments.length === 0 && <span className="text-neutral-500 italic">Empty</span>}
+          {segments.map((s, i) => s.special ? (
+            <span key={i} className="rounded border border-red-500/30 bg-red-500/10 px-0.5 font-semibold text-red-300">
+              {[...s.text].map(wlSmsCharVisible).join('')}
+            </span>
+          ) : (
+            <span key={i}>{s.text}</span>
+          ))}
+        </div>
+      );
+    }
+
+    function WlSmsUtfOffenderChips({ offenders }) {
+      const entries = Array.from(offenders.entries());
+      if (!entries.length) return null;
+      return (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {entries.map(([ch, count]) => {
+            const info = WL_SMS_SPECIAL_CHAR_INFO[ch];
+            const name = info?.name || (ch.codePointAt(0) > 0xFFFF ? 'Emoji / symbol' : 'Non-GSM character');
+            return (
+              <span key={ch} className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                <span className="font-mono text-[13px] font-bold">{wlSmsCharVisible(ch)}</span>
+                <span className="font-mono text-[10px] opacity-70">{wlSmsCodePointLabel(ch)}</span>
+                <span>{name}</span>
+                <span className="opacity-70">×{count}</span>
+                {info?.fix !== undefined && (
+                  <span className="opacity-70">→ {info.fix === '' ? 'remove' : JSON.stringify(info.fix)}</span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function WlSmsUtfStatusPill({ analysis }) {
+      const specialCount = Array.from(analysis.offenders.values()).reduce((a, b) => a + b, 0);
+      return analysis.isUtf ? (
+        <span className="inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-300">
+          UTF · {specialCount} special char{specialCount === 1 ? '' : 's'}
+        </span>
+      ) : (
+        <span className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+          GSM-7 · safe
+        </span>
+      );
+    }
+
+    function WlSmsUtfCheckPanel({ wl, onChange }) {
+      const [adhoc, setAdhoc] = useState('');
+      const contents = wl.contents || [];
+      const analyses = contents.map(c => wlSmsAnalyzeUtf(c));
+      const utfBlocks = analyses.filter(a => a.isUtf).length;
+      const adhocAnalysis = wlSmsAnalyzeUtf(adhoc);
+      const isFixable = (text) => wlSmsApplySafeFixes(text) !== text;
+      const fixBlock = (i) => {
+        const next = [...contents];
+        next[i] = wlSmsApplySafeFixes(next[i]);
+        onChange({ ...wl, contents: next });
+      };
+      const fixAll = () => onChange({ ...wl, contents: contents.map(wlSmsApplySafeFixes) });
+      const anyFixable = contents.some(isFixable);
+      return (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <SectionLabel hint="Paste anything here to check it without touching the content blocks">Quick check</SectionLabel>
+            <Textarea rows={4} value={adhoc} onChange={e => setAdhoc(e.target.value)}
+              placeholder="Paste text here to see which characters force UTF..." />
+            {adhoc.trim() && (
+              <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <WlSmsUtfStatusPill analysis={adhocAnalysis} />
+                  {adhocAnalysis.isUtf && isFixable(adhoc) && (
+                    <Btn variant="ghost" size="sm" onClick={() => setAdhoc(wlSmsApplySafeFixes(adhoc))}>Apply safe replacements</Btn>
+                  )}
+                </div>
+                {adhocAnalysis.isUtf && <WlSmsUtfHighlight segments={adhocAnalysis.segments} />}
+                <WlSmsUtfOffenderChips offenders={adhocAnalysis.offenders} />
+              </div>
+            )}
+          </Card>
+
+          <Card className="p-4">
+            <SectionLabel hint="Checks every parsed content block from the Content tab">Content blocks</SectionLabel>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-neutral-500">
+                {contents.length === 0
+                  ? 'No content blocks yet.'
+                  : utfBlocks === 0
+                    ? `All ${contents.length} content block${contents.length === 1 ? '' : 's'} are GSM-7 safe.`
+                    : `${utfBlocks} of ${contents.length} content block${contents.length === 1 ? '' : 's'} will be sent as UTF.`}
+              </span>
+              {anyFixable && (
+                <Btn variant="ghost" size="sm" onClick={fixAll}>Fix all fixable</Btn>
+              )}
+            </div>
+            <div className="space-y-2">
+              {contents.length === 0 && (
+                <div className="text-[12px] text-neutral-500 italic">Nothing to check. Paste content in the Content tab first.</div>
+              )}
+              {contents.map((block, i) => {
+                const a = analyses[i];
+                return (
+                  <div key={i} className="rounded-md border border-neutral-900 bg-neutral-950 p-2">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-wide text-neutral-500">Content {i + 1}</span>
+                        <WlSmsUtfStatusPill analysis={a} />
+                      </div>
+                      {a.isUtf && isFixable(block) && (
+                        <button onClick={() => fixBlock(i)} className="text-[10px] text-neutral-500 hover:text-blue-300">Fix this block</button>
+                      )}
+                    </div>
+                    <WlSmsUtfHighlight segments={a.segments} />
+                    <WlSmsUtfOffenderChips offenders={a.offenders} />
+                  </div>
+                );
+              })}
             </div>
           </Card>
         </div>
@@ -13408,6 +13622,7 @@ match /shared/whitelistSmsTestNumbers {
         const rowCount = (wl.contents || []).filter(s => s && s.trim()).length * numbers.length;
         const WL_TABS = [
           { id: 'content', label: 'Content' },
+          { id: 'utf',     label: 'UTF Check' },
           { id: 'numbers', label: 'Numbers' },
           { id: 'preview', label: 'Preview' },
           { id: 'notes',   label: 'Notes' },
@@ -13445,6 +13660,12 @@ match /shared/whitelistSmsTestNumbers {
                     <div className="space-y-6">
                       <SectionLabel hint="Paste content separated by a dash line — each block becomes one row">Content</SectionLabel>
                       <WlSmsContentPanel wl={wl} onChange={setWl} />
+                    </div>
+                  )}
+                  {whitelistSmsTab === 'utf' && (
+                    <div className="space-y-6">
+                      <SectionLabel hint="Characters outside the GSM-7 alphabet force UTF (UCS-2) — 70 chars per SMS part instead of 160">Special character finder</SectionLabel>
+                      <WlSmsUtfCheckPanel wl={wl} onChange={setWl} />
                     </div>
                   )}
                   {whitelistSmsTab === 'numbers' && (

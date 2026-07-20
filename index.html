@@ -2891,6 +2891,78 @@ function parseWlSmsBlasts(text, mode = "auto") {
   if (tail) blocks.push(stripWlSmsLeadingNumber(tail));
   return blocks;
 }
+const WL_SMS_GSM7_SET = new Set(
+  `@£$¥èéùìòÇ
+Øø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑܧ¿abcdefghijklmnopqrstuvwxyzäöñüà^{}\\[~]|€`
+);
+const WL_SMS_SPECIAL_CHAR_INFO = {
+  "—": { name: "Em dash", fix: "-" },
+  "–": { name: "En dash", fix: "-" },
+  "―": { name: "Horizontal bar", fix: "-" },
+  "‐": { name: "Hyphen (Unicode)", fix: "-" },
+  "‑": { name: "Non-breaking hyphen", fix: "-" },
+  "‒": { name: "Figure dash", fix: "-" },
+  "−": { name: "Minus sign", fix: "-" },
+  "‘": { name: "Left single quote", fix: "'" },
+  "’": { name: "Right single quote (curly apostrophe)", fix: "'" },
+  "‚": { name: "Low single quote", fix: "'" },
+  "‛": { name: "Reversed single quote", fix: "'" },
+  "′": { name: "Prime", fix: "'" },
+  "`": { name: "Backtick", fix: "'" },
+  "´": { name: "Acute accent", fix: "'" },
+  "“": { name: "Left double quote", fix: '"' },
+  "”": { name: "Right double quote", fix: '"' },
+  "„": { name: "Low double quote", fix: '"' },
+  "″": { name: "Double prime", fix: '"' },
+  "«": { name: "Left angle quote", fix: '"' },
+  "»": { name: "Right angle quote", fix: '"' },
+  "‹": { name: "Left single angle quote", fix: "'" },
+  "›": { name: "Right single angle quote", fix: "'" },
+  "…": { name: "Ellipsis", fix: "..." },
+  "•": { name: "Bullet", fix: "-" },
+  "·": { name: "Middle dot", fix: "-" },
+  " ": { name: "Non-breaking space", fix: " " },
+  " ": { name: "Narrow non-breaking space", fix: " " },
+  " ": { name: "En space", fix: " " },
+  " ": { name: "Em space", fix: " " },
+  " ": { name: "Thin space", fix: " " },
+  "\u2028": { name: "Line separator", fix: "\n" },
+  "\u2029": { name: "Paragraph separator", fix: "\n" },
+  "­": { name: "Soft hyphen", fix: "" },
+  "​": { name: "Zero-width space", fix: "" },
+  "‌": { name: "Zero-width non-joiner", fix: "" },
+  "‍": { name: "Zero-width joiner", fix: "" },
+  "\uFEFF": { name: "Zero-width no-break space (BOM)", fix: "" },
+  "™": { name: "Trademark sign", fix: "TM" },
+  "®": { name: "Registered sign", fix: "(R)" },
+  "©": { name: "Copyright sign", fix: "(C)" }
+};
+function wlSmsCodePointLabel(ch) {
+  return "U+" + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+}
+function wlSmsCharVisible(ch) {
+  return /[\s\u00AD\u200B-\u200D\uFEFF\u2028\u2029]/.test(ch) ? wlSmsCodePointLabel(ch) : ch;
+}
+function wlSmsAnalyzeUtf(text) {
+  const segments = [];
+  const offenders = /* @__PURE__ */ new Map();
+  for (const ch of String(text ?? "")) {
+    const special = !WL_SMS_GSM7_SET.has(ch);
+    if (special) offenders.set(ch, (offenders.get(ch) || 0) + 1);
+    const last = segments[segments.length - 1];
+    if (last && last.special === special) last.text += ch;
+    else segments.push({ text: ch, special });
+  }
+  return { segments, offenders, isUtf: offenders.size > 0 };
+}
+function wlSmsApplySafeFixes(text) {
+  let out = "";
+  for (const ch of String(text ?? "")) {
+    const info = WL_SMS_GSM7_SET.has(ch) ? null : WL_SMS_SPECIAL_CHAR_INFO[ch];
+    out += info && info.fix !== void 0 ? info.fix : ch;
+  }
+  return out;
+}
 function wlSmsNormalizeState(raw = {}) {
   const merged = { ...DEFAULT_WL_SMS_STATE, ...raw || {} };
   const testNumbers = Array.isArray(merged.testNumbers) ? merged.testNumbers.map((n) => ({
@@ -6191,6 +6263,49 @@ function WlSmsContentPanel({ wl, onChange }) {
     },
     copiedIndex === i ? "Copied" : "Copy"
   ), /* @__PURE__ */ React.createElement("button", { onClick: () => deleteBlock(i), className: "text-[10px] text-neutral-500 hover:text-red-300" }, "Remove"))), /* @__PURE__ */ React.createElement(Textarea, { rows: 3, value: block, onChange: (e) => updateBlock(i, e.target.value) }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addBlock }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add empty content")))));
+}
+function WlSmsUtfHighlight({ segments }) {
+  return /* @__PURE__ */ React.createElement("div", { className: "whitespace-pre-wrap break-words rounded-md border border-neutral-900 bg-neutral-950 p-3 text-[12px] leading-relaxed text-neutral-200" }, segments.length === 0 && /* @__PURE__ */ React.createElement("span", { className: "text-neutral-500 italic" }, "Empty"), segments.map((s, i) => s.special ? /* @__PURE__ */ React.createElement("span", { key: i, className: "rounded border border-red-500/30 bg-red-500/10 px-0.5 font-semibold text-red-300" }, [...s.text].map(wlSmsCharVisible).join("")) : /* @__PURE__ */ React.createElement("span", { key: i }, s.text)));
+}
+function WlSmsUtfOffenderChips({ offenders }) {
+  const entries = Array.from(offenders.entries());
+  if (!entries.length) return null;
+  return /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap gap-1.5" }, entries.map(([ch, count]) => {
+    const info = WL_SMS_SPECIAL_CHAR_INFO[ch];
+    const name = info?.name || (ch.codePointAt(0) > 65535 ? "Emoji / symbol" : "Non-GSM character");
+    return /* @__PURE__ */ React.createElement("span", { key: ch, className: "inline-flex items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono text-[13px] font-bold" }, wlSmsCharVisible(ch)), /* @__PURE__ */ React.createElement("span", { className: "font-mono text-[10px] opacity-70" }, wlSmsCodePointLabel(ch)), /* @__PURE__ */ React.createElement("span", null, name), /* @__PURE__ */ React.createElement("span", { className: "opacity-70" }, "×", count), info?.fix !== void 0 && /* @__PURE__ */ React.createElement("span", { className: "opacity-70" }, "→ ", info.fix === "" ? "remove" : JSON.stringify(info.fix)));
+  }));
+}
+function WlSmsUtfStatusPill({ analysis }) {
+  const specialCount = Array.from(analysis.offenders.values()).reduce((a, b) => a + b, 0);
+  return analysis.isUtf ? /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-300" }, "UTF · ", specialCount, " special char", specialCount === 1 ? "" : "s") : /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300" }, "GSM-7 · safe");
+}
+function WlSmsUtfCheckPanel({ wl, onChange }) {
+  const [adhoc, setAdhoc] = useState("");
+  const contents = wl.contents || [];
+  const analyses = contents.map((c) => wlSmsAnalyzeUtf(c));
+  const utfBlocks = analyses.filter((a) => a.isUtf).length;
+  const adhocAnalysis = wlSmsAnalyzeUtf(adhoc);
+  const isFixable = (text) => wlSmsApplySafeFixes(text) !== text;
+  const fixBlock = (i) => {
+    const next = [...contents];
+    next[i] = wlSmsApplySafeFixes(next[i]);
+    onChange({ ...wl, contents: next });
+  };
+  const fixAll = () => onChange({ ...wl, contents: contents.map(wlSmsApplySafeFixes) });
+  const anyFixable = contents.some(isFixable);
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Paste anything here to check it without touching the content blocks" }, "Quick check"), /* @__PURE__ */ React.createElement(
+    Textarea,
+    {
+      rows: 4,
+      value: adhoc,
+      onChange: (e) => setAdhoc(e.target.value),
+      placeholder: "Paste text here to see which characters force UTF..."
+    }
+  ), adhoc.trim() && /* @__PURE__ */ React.createElement("div", { className: "mt-2 space-y-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(WlSmsUtfStatusPill, { analysis: adhocAnalysis }), adhocAnalysis.isUtf && isFixable(adhoc) && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => setAdhoc(wlSmsApplySafeFixes(adhoc)) }, "Apply safe replacements")), adhocAnalysis.isUtf && /* @__PURE__ */ React.createElement(WlSmsUtfHighlight, { segments: adhocAnalysis.segments }), /* @__PURE__ */ React.createElement(WlSmsUtfOffenderChips, { offenders: adhocAnalysis.offenders }))), /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Checks every parsed content block from the Content tab" }, "Content blocks"), /* @__PURE__ */ React.createElement("div", { className: "mb-3 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500" }, contents.length === 0 ? "No content blocks yet." : utfBlocks === 0 ? `All ${contents.length} content block${contents.length === 1 ? "" : "s"} are GSM-7 safe.` : `${utfBlocks} of ${contents.length} content block${contents.length === 1 ? "" : "s"} will be sent as UTF.`), anyFixable && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: fixAll }, "Fix all fixable")), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, contents.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[12px] text-neutral-500 italic" }, "Nothing to check. Paste content in the Content tab first."), contents.map((block, i) => {
+    const a = analyses[i];
+    return /* @__PURE__ */ React.createElement("div", { key: i, className: "rounded-md border border-neutral-900 bg-neutral-950 p-2" }, /* @__PURE__ */ React.createElement("div", { className: "mb-1 flex flex-wrap items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Content ", i + 1), /* @__PURE__ */ React.createElement(WlSmsUtfStatusPill, { analysis: a })), a.isUtf && isFixable(block) && /* @__PURE__ */ React.createElement("button", { onClick: () => fixBlock(i), className: "text-[10px] text-neutral-500 hover:text-blue-300" }, "Fix this block")), /* @__PURE__ */ React.createElement(WlSmsUtfHighlight, { segments: a.segments }), /* @__PURE__ */ React.createElement(WlSmsUtfOffenderChips, { offenders: a.offenders }));
+  }))));
 }
 function WlSmsNumbersPanel({ wl, onChange, sharedTestNumbers, onChangeSharedTestNumbers, sharedReady }) {
   const [newLabel, setNewLabel] = useState("");
@@ -11204,6 +11319,7 @@ e.g. Added SMS client, hid old WHS row, adjusted balance rule.`
     const rowCount = (wl.contents || []).filter((s) => s && s.trim()).length * numbers.length;
     const WL_TABS = [
       { id: "content", label: "Content" },
+      { id: "utf", label: "UTF Check" },
       { id: "numbers", label: "Numbers" },
       { id: "preview", label: "Preview" },
       { id: "notes", label: "Notes" }
@@ -11216,7 +11332,7 @@ e.g. Added SMS client, hid old WHS row, adjusted balance rule.`
         className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${whitelistSmsTab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
       },
       t.label
-    ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: whitelistSmsTab, className: "anim-fade-in" }, whitelistSmsTab === "content" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Paste content separated by a dash line — each block becomes one row" }, "Content"), /* @__PURE__ */ React.createElement(WlSmsContentPanel, { wl, onChange: setWl })), whitelistSmsTab === "numbers" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Pick the test numbers to include in the output" }, "Test numbers"), /* @__PURE__ */ React.createElement(WlSmsNumbersPanel, { wl, onChange: setWl, sharedTestNumbers, onChangeSharedTestNumbers: setSharedTestNumbers, sharedReady: sharedTestNumbersReady })), whitelistSmsTab === "preview" && /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Same shape as the generated xlsx" }, "Preview"), /* @__PURE__ */ React.createElement(WlSmsPreview, { wl, sharedTestNumbers })), whitelistSmsTab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Free-form notes carried with the Whitelist SMS config" }, "Notes"), /* @__PURE__ */ React.createElement(
+    ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: whitelistSmsTab, className: "anim-fade-in" }, whitelistSmsTab === "content" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Paste content separated by a dash line — each block becomes one row" }, "Content"), /* @__PURE__ */ React.createElement(WlSmsContentPanel, { wl, onChange: setWl })), whitelistSmsTab === "utf" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Characters outside the GSM-7 alphabet force UTF (UCS-2) — 70 chars per SMS part instead of 160" }, "Special character finder"), /* @__PURE__ */ React.createElement(WlSmsUtfCheckPanel, { wl, onChange: setWl })), whitelistSmsTab === "numbers" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Pick the test numbers to include in the output" }, "Test numbers"), /* @__PURE__ */ React.createElement(WlSmsNumbersPanel, { wl, onChange: setWl, sharedTestNumbers, onChangeSharedTestNumbers: setSharedTestNumbers, sharedReady: sharedTestNumbersReady })), whitelistSmsTab === "preview" && /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Same shape as the generated xlsx" }, "Preview"), /* @__PURE__ */ React.createElement(WlSmsPreview, { wl, sharedTestNumbers })), whitelistSmsTab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Free-form notes carried with the Whitelist SMS config" }, "Notes"), /* @__PURE__ */ React.createElement(
       Textarea,
       {
         rows: 12,
