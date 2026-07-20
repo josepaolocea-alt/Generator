@@ -7206,6 +7206,7 @@ https://bit.ly/4vrcu64`;
 
     function WlSmsUtfCheckPanel({ wl, onChange }) {
       const [adhoc, setAdhoc] = useState('');
+      const [copied, setCopied] = useState(null); // 'all' | 'adhoc' | null
       const contents = wl.contents || [];
       const analyses = contents.map(c => wlSmsAnalyzeUtf(c));
       const utfBlocks = analyses.filter(a => a.isUtf).length;
@@ -7218,6 +7219,16 @@ https://bit.ly/4vrcu64`;
       };
       const fixAll = () => onChange({ ...wl, contents: contents.map(wlSmsApplySafeFixes) });
       const anyFixable = contents.some(isFixable);
+      const copyText = async (text, which) => {
+        const ok = await copyTextToClipboard(text);
+        if (!ok) return;
+        setCopied(which);
+        setTimeout(() => setCopied(null), 1400);
+      };
+      const copyAll = () => copyText(contents.filter(s => s && s.trim()).join('\n\n'), 'all');
+      // Mirrors the Content tab's Clear all (drops parsed blocks + raw paste),
+      // and also empties the quick-check box.
+      const clearAll = () => { setAdhoc(''); onChange({ ...wl, rawPaste: '', contents: [] }); };
       return (
         <div className="space-y-4">
           <Card className="p-4">
@@ -7231,6 +7242,7 @@ https://bit.ly/4vrcu64`;
                   {adhocAnalysis.isUtf && isFixable(adhoc) && (
                     <Btn variant="ghost" size="sm" onClick={() => setAdhoc(wlSmsApplySafeFixes(adhoc))}>Apply safe replacements</Btn>
                   )}
+                  <Btn variant="ghost" size="sm" onClick={() => copyText(adhoc, 'adhoc')}>{copied === 'adhoc' ? 'Copied' : 'Copy text'}</Btn>
                 </div>
                 {adhocAnalysis.isUtf && <WlSmsUtfHighlight segments={adhocAnalysis.segments} />}
                 <WlSmsUtfOffenderChips offenders={adhocAnalysis.offenders} />
@@ -7250,6 +7262,12 @@ https://bit.ly/4vrcu64`;
               </span>
               {anyFixable && (
                 <Btn variant="ghost" size="sm" onClick={fixAll}>Fix all fixable</Btn>
+              )}
+              {contents.some(s => s && s.trim()) && (
+                <Btn variant="ghost" size="sm" onClick={copyAll}>{copied === 'all' ? 'Copied' : 'Copy all'}</Btn>
+              )}
+              {(contents.length > 0 || adhoc) && (
+                <Btn variant="ghost" size="sm" onClick={clearAll}>Clear all</Btn>
               )}
             </div>
             <div className="space-y-2">
