@@ -7089,6 +7089,15 @@ https://bit.ly/4vrcu64`;
       };
       const addBlock = () => onChange({ ...wl, contents: [...(wl.contents || []), ''] });
       const clearAll = () => { setPasteText(''); onChange({ ...wl, rawPaste: '', contents: [] }); };
+      // Live UTF check on whatever is in the paste box, mirroring the UTF Check
+      // tab so special characters are flagged the moment content is pasted.
+      const pasteAnalysis = wlSmsAnalyzeUtf(pasteText);
+      const pasteFixable = wlSmsApplySafeFixes(pasteText) !== pasteText;
+      const applyPasteFixes = () => {
+        const fixed = wlSmsApplySafeFixes(pasteText);
+        setPasteText(fixed);
+        loadText(fixed);
+      };
       const modeHint = mode === 'lines'
         ? 'Every non-empty line becomes one content'
         : 'Splits on ———— / === lines, or blank lines if no dashes';
@@ -7118,7 +7127,20 @@ https://bit.ly/4vrcu64`;
               <Btn variant="ghost" size="md" onClick={() => loadText(pasteText)} disabled={!pasteText}>Parse pasted text</Btn>
               <Btn variant="ghost" size="md" onClick={clearAll} disabled={!pasteText && !(wl.contents || []).length}>Clear all</Btn>
               <span className="text-[11px] text-neutral-500">{(wl.contents || []).length} content block{(wl.contents || []).length === 1 ? '' : 's'}</span>
+              {pasteText.trim() && <WlSmsUtfStatusPill analysis={pasteAnalysis} />}
             </div>
+            {pasteText.trim() && pasteAnalysis.isUtf && (
+              <div className="mt-3 space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-semibold text-red-300">Special characters detected — this will be sent as UTF (70 chars per SMS part).</span>
+                  {pasteFixable && (
+                    <Btn variant="ghost" size="sm" onClick={applyPasteFixes}>Apply safe replacements</Btn>
+                  )}
+                </div>
+                <WlSmsUtfHighlight segments={pasteAnalysis.segments} />
+                <WlSmsUtfOffenderChips offenders={pasteAnalysis.offenders} />
+              </div>
+            )}
           </Card>
 
           <Card className="p-4">
