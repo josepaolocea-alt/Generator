@@ -1684,7 +1684,7 @@
         .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
         .filter(entry => entry.client?.name);
       if (enabledTargetRules.length) {
-        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), 'Red Amnt Receivable count');
+        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), 'Colored Amnt Receivable count');
         const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
         for (let k = 0; k < slots.length; k++) {
           const amntCol = colLetter(3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
