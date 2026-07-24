@@ -1970,7 +1970,7 @@
         .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
         .filter(entry => entry.client?.name);
       if (overdraftEnabled || enabledTargetRules.length) {
-        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), `Red ${market.label} balance count`);
+        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), `Colored ${market.label} balance count`);
         const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
         for (let k = 0; k < slots.length; k++) {
           const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
