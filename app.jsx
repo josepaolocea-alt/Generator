@@ -2262,7 +2262,7 @@
       // Find-or-create the backup folder. Reuses a stored id when it still points
       // at a live (non-trashed) folder; otherwise creates a fresh one and returns
       // its id so the caller can persist it.
-      async function ensureFolder(name, existingId) {
+      async function ensureFolder(name, existingId, parentId) {
         const token = await getToken();
         if (existingId) {
           try {
@@ -2272,7 +2272,7 @@
             if (r.ok) { const b = await r.json(); if (b && b.id && !b.trashed) return b.id; }
           } catch { /* fall through to create */ }
         }
-        const metadata = { name, mimeType: 'application/vnd.google-apps.folder' };
+        const metadata = { name, mimeType: 'application/vnd.google-apps.folder', ...(parentId ? { parents: [parentId] } : {}) };
         const r = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -13491,6 +13491,7 @@ match /shared/whitelistSmsTestNumbers {
       }, []);
 
       const backupBusyRef = useRef(false);
+      const lastBackupAtRef = useRef(0);
       const lastSnapRef = useRef({ at: 0, counts: '' });
 
       // Manual/weekly Google Drive backup: writes a JSON data snapshot plus the
@@ -13505,21 +13506,36 @@ match /shared/whitelistSmsTestNumbers {
         // Automatic (non-manual) backups must never spawn a consent popup: only
         // proceed when a live token already exists. Manual backups may prompt.
         if (!manual && !googleSheetsSync.isConnected()) return;
+        // Throttle repeat triggers (double-clicks, or a manual click overlapping
+        // the Friday auto-run) within a short window, so one "backup" can't create
+        // several duplicate file sets in Drive. In-memory only — resets each load,
+        // so a legitimate backup in a new session is never blocked.
+        const nowMs = Date.now();
+        if (nowMs - (lastBackupAtRef.current || 0) < 90000) {
+          if (manual) showToast('ok', 'Just backed up moments ago — skipped to avoid duplicate files. Try again in a minute.');
+          return;
+        }
+        lastBackupAtRef.current = nowMs;
         const st = stateRef.current || DEFAULT_STATE;
         backupBusyRef.current = true;
         setGoogleConn(c => ({ ...c, busyModule: '__backup__', error: null }));
         try {
           await googleSheetsSync.getToken({ interactive: manual });
           const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || '';
-          const folderId = await googleSheetsSync.ensureFolder('Generator Backups', prevFolder);
-          if (folderId && folderId !== prevFolder) {
-            setState(s => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: folderId } }));
+          const rootId = await googleSheetsSync.ensureFolder('Generator Backups', prevFolder);
+          if (rootId && rootId !== prevFolder) {
+            setState(s => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: rootId } }));
           }
-          const stamp = backupStampString();
+          // Each backup gets its own dated subfolder ("2026-07-24 18-20") so
+          // repeat/weekly backups group together instead of piling identically
+          // named files into one folder.
+          const stamp = backupStampString(); // YYYY-MM-DD_HHMM
+          const runFolderName = stamp.slice(0, 10) + ' ' + stamp.slice(11, 13) + '-' + stamp.slice(13, 15);
+          const folderId = await googleSheetsSync.ensureFolder(runFolderName, '', rootId);
           // 1) JSON data backup — restores all clients/rules/config in-app.
           const { tab, ...persist } = st;
           const jsonBlob = new Blob([JSON.stringify(persist, null, 2)], { type: 'application/json' });
-          await googleSheetsSync.uploadRawFile(`Generator_Data_${stamp}.json`, 'application/json', jsonBlob, [folderId]);
+          await googleSheetsSync.uploadRawFile('Generator_Data.json', 'application/json', jsonBlob, [folderId]);
           // 2) The three generated workbooks (best-effort each).
           let xlsxFails = 0;
           for (const m of ['sip_fcs', 'bmr', 'bmr_sms']) {
@@ -13537,6 +13553,7 @@ match /shared/whitelistSmsTestNumbers {
           return folderId;
         } catch (e) {
           console.warn('Drive backup failed', e);
+          lastBackupAtRef.current = 0; // allow an immediate retry after a failure
           setGoogleConn(c => ({ ...c, busyModule: null, error: e.message || String(e) }));
           if (manual) showToast('err', 'Backup failed: ' + (e.message || e));
           throw e;

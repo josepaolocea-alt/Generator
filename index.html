@@ -2489,7 +2489,7 @@ const googleSheetsSync = (() => {
     if (!r.ok) throw await driveError(r);
   }
   const folderUrl = (id) => "https://drive.google.com/drive/folders/" + encodeURIComponent(id);
-  async function ensureFolder(name, existingId) {
+  async function ensureFolder(name, existingId, parentId) {
     const token = await getToken();
     if (existingId) {
       try {
@@ -2503,7 +2503,7 @@ const googleSheetsSync = (() => {
       } catch {
       }
     }
-    const metadata = { name, mimeType: "application/vnd.google-apps.folder" };
+    const metadata = { name, mimeType: "application/vnd.google-apps.folder", ...parentId ? { parents: [parentId] } : {} };
     const r = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
       method: "POST",
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
@@ -11321,6 +11321,7 @@ function App() {
     setTimeout(() => setToast(null), 4e3);
   }, []);
   const backupBusyRef = useRef(false);
+  const lastBackupAtRef = useRef(0);
   const lastSnapRef = useRef({ at: 0, counts: "" });
   const runDriveBackup = useCallback(async ({ manual = false } = {}) => {
     if (backupBusyRef.current) return;
@@ -11329,20 +11330,28 @@ function App() {
       return;
     }
     if (!manual && !googleSheetsSync.isConnected()) return;
+    const nowMs = Date.now();
+    if (nowMs - (lastBackupAtRef.current || 0) < 9e4) {
+      if (manual) showToast("ok", "Just backed up moments ago — skipped to avoid duplicate files. Try again in a minute.");
+      return;
+    }
+    lastBackupAtRef.current = nowMs;
     const st = stateRef.current || DEFAULT_STATE;
     backupBusyRef.current = true;
     setGoogleConn((c) => ({ ...c, busyModule: "__backup__", error: null }));
     try {
       await googleSheetsSync.getToken({ interactive: manual });
       const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || "";
-      const folderId = await googleSheetsSync.ensureFolder("Generator Backups", prevFolder);
-      if (folderId && folderId !== prevFolder) {
-        setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: folderId } }));
+      const rootId = await googleSheetsSync.ensureFolder("Generator Backups", prevFolder);
+      if (rootId && rootId !== prevFolder) {
+        setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: rootId } }));
       }
       const stamp = backupStampString();
+      const runFolderName = stamp.slice(0, 10) + " " + stamp.slice(11, 13) + "-" + stamp.slice(13, 15);
+      const folderId = await googleSheetsSync.ensureFolder(runFolderName, "", rootId);
       const { tab, ...persist } = st;
       const jsonBlob = new Blob([JSON.stringify(persist, null, 2)], { type: "application/json" });
-      await googleSheetsSync.uploadRawFile(`Generator_Data_${stamp}.json`, "application/json", jsonBlob, [folderId]);
+      await googleSheetsSync.uploadRawFile("Generator_Data.json", "application/json", jsonBlob, [folderId]);
       let xlsxFails = 0;
       for (const m of ["sip_fcs", "bmr", "bmr_sms"]) {
         try {
@@ -11360,6 +11369,7 @@ function App() {
       return folderId;
     } catch (e) {
       console.warn("Drive backup failed", e);
+      lastBackupAtRef.current = 0;
       setGoogleConn((c) => ({ ...c, busyModule: null, error: e.message || String(e) }));
       if (manual) showToast("err", "Backup failed: " + (e.message || e));
       throw e;
