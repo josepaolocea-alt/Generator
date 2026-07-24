@@ -2389,6 +2389,17 @@ const googleSheetsSync = (() => {
     await fetchEmail(token);
     return { email: grantedEmail };
   }
+  async function silentConnect() {
+    try {
+      const token = await requestToken(false);
+      if (token) {
+        await fetchEmail(token);
+        return { email: grantedEmail };
+      }
+    } catch {
+    }
+    return null;
+  }
   function disconnect() {
     if (accessToken && gisReady()) {
       try {
@@ -2477,8 +2488,147 @@ const googleSheetsSync = (() => {
     });
     if (!r.ok) throw await driveError(r);
   }
-  return { isConfigured, setClientId, gisReady, getToken, connect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl };
+  const folderUrl = (id) => "https://drive.google.com/drive/folders/" + encodeURIComponent(id);
+  async function ensureFolder(name, existingId) {
+    const token = await getToken();
+    if (existingId) {
+      try {
+        const r2 = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(existingId) + "?fields=id,trashed", {
+          headers: { Authorization: "Bearer " + token }
+        });
+        if (r2.ok) {
+          const b = await r2.json();
+          if (b && b.id && !b.trashed) return b.id;
+        }
+      } catch {
+      }
+    }
+    const metadata = { name, mimeType: "application/vnd.google-apps.folder" };
+    const r = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(metadata)
+    });
+    if (!r.ok) throw await driveError(r);
+    return (await r.json()).id;
+  }
+  async function uploadRawFile(name, mimeType, blob, parents) {
+    const token = await getToken();
+    const metadata = { name, mimeType, ...parents && parents.length ? { parents } : {} };
+    const form = new FormData();
+    form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+    form.append("file", blob, name);
+    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token },
+      body: form
+    });
+    if (!r.ok) throw await driveError(r);
+    return await r.json();
+  }
+  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
 })();
+const backupStore = /* @__PURE__ */ (() => {
+  const DB_NAME = "mrg_backups", STORE = "snapshots", MAX = 15;
+  let dbPromise = null;
+  function open() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      let req;
+      try {
+        req = indexedDB.open(DB_NAME, 1);
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: "ts" });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+  async function all() {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const rq = tx.objectStore(STORE).getAll();
+      rq.onsuccess = () => resolve((rq.result || []).sort((a, b) => b.ts - a.ts));
+      rq.onerror = () => reject(rq.error);
+    });
+  }
+  async function prune() {
+    const list = await all();
+    if (list.length <= MAX) return;
+    const db = await open();
+    const drop = list.slice(MAX);
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      drop.forEach((d) => tx.objectStore(STORE).delete(d.ts));
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function put(entry) {
+    const db = await open();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(entry);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    try {
+      await prune();
+    } catch {
+    }
+  }
+  async function get(ts) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const rq = tx.objectStore(STORE).get(ts);
+      rq.onsuccess = () => resolve(rq.result || null);
+      rq.onerror = () => reject(rq.error);
+    });
+  }
+  return { put, all, get };
+})();
+function clientCounts(st) {
+  const named = (arr) => (arr || []).filter((c) => String(c && c.name || "").trim() !== "").length;
+  return {
+    voip: named(st && st.bmr && st.bmr.clients),
+    whs: named(st && st.bmrSms && st.bmrSms.wholesaleClients),
+    retail: named(st && st.bmrSms && st.bmrSms.retailClients)
+  };
+}
+function countsTotal(c) {
+  return (c.voip || 0) + (c.whs || 0) + (c.retail || 0);
+}
+async function saveSnapshot(st, reason) {
+  try {
+    if (!st) return false;
+    const { tab, ...rest } = st;
+    await backupStore.put({ ts: Date.now(), reason: reason || "auto", counts: clientCounts(st), json: JSON.stringify(rest) });
+    return true;
+  } catch (e) {
+    console.warn("Local snapshot save failed", e);
+    return false;
+  }
+}
+function isoWeekKey(d) {
+  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((dt - yearStart) / 864e5 + 1) / 7);
+  return dt.getUTCFullYear() + "-W" + pad(week);
+}
+function backupStampString() {
+  const d = /* @__PURE__ */ new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
 const GOOGLE_SYNC_MODULES = {
   sip_fcs: { build: buildSipFcsBlob, sheetName: "SIP FCS — Hourly Record" },
   bmr: { build: buildBmrBlob, sheetName: "BMR VOIP — Balance Day & Night" },
@@ -3137,6 +3287,31 @@ function Card({ children, className = "" }) {
 function IconSheet() {
   return /* @__PURE__ */ React.createElement("svg", { className: "w-3.5 h-3.5 text-emerald-500 shrink-0", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }), /* @__PURE__ */ React.createElement("line", { x1: "3", y1: "9", x2: "21", y2: "9" }), /* @__PURE__ */ React.createElement("line", { x1: "3", y1: "15", x2: "21", y2: "15" }), /* @__PURE__ */ React.createElement("line", { x1: "9", y1: "3", x2: "9", y2: "21" }));
 }
+function BackupControls({ backup }) {
+  const [open, setOpen] = useState(false);
+  const [snaps, setSnaps] = useState(null);
+  const [loading, setLoading] = useState(false);
+  if (!backup) return null;
+  const load = async () => {
+    setLoading(true);
+    try {
+      setSnaps(await backupStore.all());
+    } catch {
+      setSnaps([]);
+    }
+    setLoading(false);
+  };
+  const toggle = () => {
+    const n = !open;
+    setOpen(n);
+    if (n) load();
+  };
+  const restore = async (ts) => {
+    await backup.onRestore(ts);
+    load();
+  };
+  return /* @__PURE__ */ React.createElement("div", { className: "pt-2 mt-1 border-t border-neutral-900 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Weekly backup"), /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : "never")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Auto-saves data + Excel to Google Drive ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Generator Backups"), " every Friday (or Sat/Sun)."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onBackupNow, disabled: backup.busy || !backup.connected, className: "flex-1" }, backup.busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Backing up…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Back up now")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: toggle }, open ? "Hide" : "Restore")), !backup.connected && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-amber-500/80" }, "Connect Google Drive above to enable Drive backups."), backup.folderUrl && /* @__PURE__ */ React.createElement("a", { href: backup.folderUrl, target: "_blank", rel: "noopener noreferrer", className: "block text-[10px] text-blue-400 hover:text-blue-300 transition-colors" }, "Open Drive backup folder ↗"), open && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1" }, loading && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "Loading…"), !loading && snaps && snaps.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "No local snapshots yet."), !loading && snaps && snaps.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.ts, className: "flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-neutral-300 truncate" }, new Date(s.ts).toLocaleString()), /* @__PURE__ */ React.createElement("div", { className: "text-neutral-600 truncate" }, s.reason, " · VoIP ", s.counts?.voip ?? "?", " · WHS ", s.counts?.whs ?? "?", " · Retail ", s.counts?.retail ?? "?")), /* @__PURE__ */ React.createElement("button", { onClick: () => restore(s.ts), className: "ml-auto text-blue-400 hover:text-blue-300 shrink-0" }, "Restore")))));
+}
 function GoogleSheetSync({ gsheets, moduleId, sheetId }) {
   const [draftId, setDraftId] = useState("");
   const [editing, setEditing] = useState(false);
@@ -3172,7 +3347,7 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId }) {
       setDraftId("");
     } }, "Cancel")));
   }
-  return /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2.5 space-y-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement(IconSheet, null), /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Google Sheets"), conn.connected ? /* @__PURE__ */ React.createElement("span", { className: "ml-auto inline-flex items-center gap-1 text-emerald-400" }, /* @__PURE__ */ React.createElement("span", { className: "w-1.5 h-1.5 rounded-full bg-emerald-400" }), "Connected") : /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, "Not connected")), conn.connected && conn.email && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-500 truncate", title: conn.email }, conn.email), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, confirmOverwrite: true }), disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Syncing…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Sync now")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2.5 space-y-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement(IconSheet, null), /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Google Sheets"), conn.connected ? /* @__PURE__ */ React.createElement("span", { className: "ml-auto inline-flex items-center gap-1 text-emerald-400" }, /* @__PURE__ */ React.createElement("span", { className: "w-1.5 h-1.5 rounded-full bg-emerald-400" }), "Connected") : /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, "Not connected")), conn.connected && conn.email && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-500 truncate", title: conn.email }, conn.email), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, confirmOverwrite: true }), disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Syncing…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Sync now")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -3809,7 +3984,17 @@ function ListEditor({ items, onChange, placeholder = "New item", label = "item",
     if (!rest.hidden && !itemDropdown(rest).length) return itemLabel(rest);
     return rest;
   }));
-  const remove = (i) => onChange(items.filter((_, j) => j !== i));
+  const remove = async (i) => {
+    const label2 = String(itemLabel(items[i]) || "").trim();
+    const ok = await confirmDialog({
+      title: "Delete item?",
+      message: label2 ? `"${label2}" will be removed. This can't be undone.` : "This item will be removed. This can't be undone.",
+      confirmText: "Delete",
+      tone: "danger"
+    });
+    if (!ok) return;
+    onChange(items.filter((_, j) => j !== i));
+  };
   const reorder = (from, to) => {
     if (from === to || to < 0 || to >= items.length) return;
     const arr = [...items];
@@ -5078,13 +5263,25 @@ function BmrAccountManagersEditor({ bmr, onChange }) {
       (manager) => manager.id === id ? { ...manager, ...patch } : manager
     )
   })), [onChange]);
-  const removeAccountManager = useCallback((id) => onChange((prev) => ({
-    ...prev,
-    accountManagers: (prev.accountManagers || []).filter((manager) => manager.id !== id),
-    clients: (prev.clients || []).map(
-      (client) => client.accountManagerId === id ? { ...client, accountManagerId: "" } : client
-    )
-  })), [onChange]);
+  const removeAccountManager = useCallback(async (id) => {
+    const mgr = (accountManagers || []).find((m) => m.id === id);
+    const label = String(mgr?.name || "").trim() || "this account manager";
+    const n = clientCountByManager[id] || 0;
+    const ok = await confirmDialog({
+      title: "Delete account manager?",
+      message: `"${label}" will be removed${n ? ` and unassigned from ${n} client${n === 1 ? "" : "s"}` : ""}. This can't be undone.`,
+      confirmText: "Delete",
+      tone: "danger"
+    });
+    if (!ok) return;
+    onChange((prev) => ({
+      ...prev,
+      accountManagers: (prev.accountManagers || []).filter((manager) => manager.id !== id),
+      clients: (prev.clients || []).map(
+        (client) => client.accountManagerId === id ? { ...client, accountManagerId: "" } : client
+      )
+    }));
+  }, [onChange, accountManagers, clientCountByManager]);
   const addAccountManager = () => {
     const name = draftName.trim();
     if (!name) return;
@@ -5247,9 +5444,18 @@ function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarr
   const updateClient = useCallback((id, patch) => setClients(
     (list) => list.map((c) => c.id === id ? { ...c, ...patch } : c)
   ), [setClients]);
-  const removeClient = useCallback((id) => setClients(
-    (list) => list.filter((c) => c.id !== id)
-  ), [setClients]);
+  const removeClient = useCallback(async (id) => {
+    const target = (clients || []).find((c) => c.id === id);
+    const label = String(target?.name || "").trim();
+    const ok = await confirmDialog({
+      title: "Delete client?",
+      message: label ? `"${label}" will be removed from this list. This can't be undone.` : "This client will be removed. This can't be undone.",
+      confirmText: "Delete",
+      tone: "danger"
+    });
+    if (!ok) return;
+    setClients((list) => list.filter((c) => c.id !== id));
+  }, [setClients, clients]);
   const addClient = (pos) => {
     const name = draftName.trim();
     if (!name) return;
@@ -8458,7 +8664,11 @@ const DEFAULT_STATE = {
   // durable file IDs of the app-owned sheets (one per module). No tokens
   // here — all non-secret, so it rides the normal localStorage + Firestore
   // sync. sheetIds are empty until the first sync creates them.
-  googleSheets: { clientId: "", sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "" } }
+  googleSheets: { clientId: "", backupFolderId: "", sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "" } },
+  // Weekly Google Drive backup bookkeeping. lastWeekKey is the ISO week of
+  // the last successful backup, stored in synced state so only one automatic
+  // backup runs per week even across multiple devices/day-opens.
+  backup: { enabled: true, lastWeekKey: "", lastRunAt: 0 }
 };
 function timestampMs(value) {
   if (!value) return 0;
@@ -8558,10 +8768,16 @@ function normalizeAppState(raw = {}, options = {}) {
   const recorder = recorderNormalizeState(merged.recorder);
   const googleSheets = {
     clientId: merged.googleSheets && typeof merged.googleSheets.clientId === "string" ? merged.googleSheets.clientId : DEFAULT_STATE.googleSheets.clientId || "",
+    backupFolderId: merged.googleSheets && typeof merged.googleSheets.backupFolderId === "string" ? merged.googleSheets.backupFolderId : DEFAULT_STATE.googleSheets.backupFolderId || "",
     sheetIds: {
       ...DEFAULT_STATE.googleSheets.sheetIds,
       ...merged.googleSheets && merged.googleSheets.sheetIds || {}
     }
+  };
+  const backup = {
+    enabled: !(merged.backup && merged.backup.enabled === false),
+    lastWeekKey: String(merged.backup && merged.backup.lastWeekKey || ""),
+    lastRunAt: Number(merged.backup && merged.backup.lastRunAt) || 0
   };
   const sheets = migrateLegacyLabels ? migrateSheets(merged.sheets) : Array.isArray(merged.sheets) && merged.sheets.length ? merged.sheets : DEFAULT_SHEETS;
   return {
@@ -8579,7 +8795,8 @@ function normalizeAppState(raw = {}, options = {}) {
     rcaCompany,
     imageEditor,
     recorder,
-    googleSheets
+    googleSheets,
+    backup
   };
 }
 const RECORDER_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -10680,6 +10897,23 @@ function App() {
           user
         );
         if (remote && Array.isArray(remote.sheets)) {
+          try {
+            const localNow = normalizeAppState(stateRef.current || {});
+            const localOwned = stateOwnerUid(localNow) === user.uid;
+            const willOverwrite = !(localOwned && stateEditedAt(localNow) > stateEditedAt(remote));
+            if (willOverwrite && localOwned) {
+              const drop = countsTotal(clientCounts(localNow)) - countsTotal(clientCounts(remote));
+              if (drop >= 1) {
+                saveSnapshot(localNow, "pre-sync-overwrite");
+                if (drop >= 2) {
+                  setToast({ type: "err", msg: `Cloud copy has ${drop} fewer clients than this device — a local backup was saved. Open the Backups panel to restore if this was unexpected.` });
+                  setTimeout(() => setToast(null), 1e4);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("Sync data-loss guard failed", e);
+          }
           setStateRaw((local) => {
             const current = normalizeAppState(local);
             const ownerUid = stateOwnerUid(current);
@@ -10749,6 +10983,16 @@ function App() {
     localSaveTimerRef.current = setTimeout(() => {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch {
+      }
+      try {
+        const key = JSON.stringify(clientCounts(state));
+        const now = Date.now();
+        const changed = key !== lastSnapRef.current.counts;
+        if (changed || now - lastSnapRef.current.at > 6e5) {
+          lastSnapRef.current = { at: now, counts: key };
+          saveSnapshot(state, changed ? "auto-change" : "auto");
+        }
       } catch {
       }
     }, 180);
@@ -11076,6 +11320,102 @@ function App() {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 4e3);
   }, []);
+  const backupBusyRef = useRef(false);
+  const lastSnapRef = useRef({ at: 0, counts: "" });
+  const runDriveBackup = useCallback(async ({ manual = false } = {}) => {
+    if (backupBusyRef.current) return;
+    if (!googleSheetsSync.isConfigured()) {
+      if (manual) showToast("err", "Set the Google OAuth Client ID first (in the Google Sheets sync panel).");
+      return;
+    }
+    if (!manual && !googleSheetsSync.isConnected()) return;
+    const st = stateRef.current || DEFAULT_STATE;
+    backupBusyRef.current = true;
+    setGoogleConn((c) => ({ ...c, busyModule: "__backup__", error: null }));
+    try {
+      await googleSheetsSync.getToken({ interactive: manual });
+      const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || "";
+      const folderId = await googleSheetsSync.ensureFolder("Generator Backups", prevFolder);
+      if (folderId && folderId !== prevFolder) {
+        setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: folderId } }));
+      }
+      const stamp = backupStampString();
+      const { tab, ...persist } = st;
+      const jsonBlob = new Blob([JSON.stringify(persist, null, 2)], { type: "application/json" });
+      await googleSheetsSync.uploadRawFile(`Generator_Data_${stamp}.json`, "application/json", jsonBlob, [folderId]);
+      let xlsxFails = 0;
+      for (const m of ["sip_fcs", "bmr", "bmr_sms"]) {
+        try {
+          const { blob, filename } = await GOOGLE_SYNC_MODULES[m].build(st);
+          await googleSheetsSync.uploadRawFile(filename, XLSX_MIME, blob, [folderId]);
+        } catch (e) {
+          xlsxFails++;
+          console.warn("Backup workbook failed for " + m, e);
+        }
+      }
+      await saveSnapshot(st, manual ? "manual-backup" : "weekly-backup");
+      setState((s) => ({ ...s, backup: { ...s.backup || {}, lastWeekKey: isoWeekKey(/* @__PURE__ */ new Date()), lastRunAt: Date.now() } }));
+      setGoogleConn((c) => ({ ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null }));
+      if (manual) showToast(xlsxFails ? "err" : "ok", xlsxFails ? `Backup saved to Drive, but ${xlsxFails} workbook(s) failed — the JSON data backup is complete.` : "Backup saved to Google Drive → Generator Backups.");
+      return folderId;
+    } catch (e) {
+      console.warn("Drive backup failed", e);
+      setGoogleConn((c) => ({ ...c, busyModule: null, error: e.message || String(e) }));
+      if (manual) showToast("err", "Backup failed: " + (e.message || e));
+      throw e;
+    } finally {
+      backupBusyRef.current = false;
+    }
+  }, [showToast]);
+  const restoreSnapshot = useCallback(async (ts) => {
+    try {
+      const snap = await backupStore.get(ts);
+      if (!snap || !snap.json) {
+        showToast("err", "That snapshot could not be found.");
+        return;
+      }
+      const c = snap.counts || {};
+      const ok = await confirmDialog({
+        title: "Restore this backup?",
+        message: `This replaces ALL current app data with the snapshot from ${new Date(ts).toLocaleString()} (VoIP ${c.voip ?? "?"}, Wholesale ${c.whs ?? "?"}, Retail ${c.retail ?? "?"} clients). A backup of the current data is saved first, so you can undo this.`,
+        confirmText: "Restore",
+        tone: "danger"
+      });
+      if (!ok) return;
+      await saveSnapshot(stateRef.current || {}, "pre-restore");
+      const parsed = JSON.parse(snap.json);
+      setState((s) => ({ ...normalizeAppState(parsed), tab: s.tab, module: s.module }));
+      showToast("ok", "Backup restored.");
+    } catch (e) {
+      console.warn("Restore failed", e);
+      showToast("err", "Restore failed: " + (e.message || e));
+    }
+  }, [showToast]);
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (state.backup?.enabled === false) return;
+    if (!googleSheetsSync.isConfigured()) return;
+    const now = /* @__PURE__ */ new Date();
+    const dow = now.getDay();
+    if (!(dow === 5 || dow === 6 || dow === 0)) return;
+    if ((state.backup?.lastWeekKey || "") === isoWeekKey(now)) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      if (cancelled) return;
+      if (!googleSheetsSync.isConnected()) {
+        const ok = await googleSheetsSync.silentConnect();
+        if (cancelled) return;
+        if (!ok) return;
+        setGoogleConn((c) => ({ ...c, connected: true, email: ok.email || c.email }));
+      }
+      if (!cancelled) runDriveBackup({ manual: false }).catch(() => {
+      });
+    }, 4e3);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [googleConn.connected, state.backup?.lastWeekKey, state.backup?.enabled, runDriveBackup]);
   const onGenerate = async () => {
     setBusy(true);
     try {
@@ -11125,7 +11465,16 @@ function App() {
     connect: connectGoogle,
     disconnect: disconnectGoogle,
     sync: syncModuleToSheets,
-    sheetUrl: googleSheetsSync.sheetUrl
+    sheetUrl: googleSheetsSync.sheetUrl,
+    backup: {
+      connected: googleConn.connected,
+      busy: googleConn.busyModule === "__backup__",
+      onBackupNow: () => runDriveBackup({ manual: true }).catch(() => {
+      }),
+      onRestore: restoreSnapshot,
+      lastRunAt: state.backup?.lastRunAt || 0,
+      folderUrl: state.googleSheets?.backupFolderId ? googleSheetsSync.folderUrl(state.googleSheets.backupFolderId) : ""
+    }
   };
   const TABS = [
     { id: "config", label: "Config" },

@@ -2143,6 +2143,18 @@
         return { email: grantedEmail };
       }
 
+      // Silent (no-popup) connect for the automatic weekly backup. Uses the
+      // prompt:'' grant path and NEVER escalates to an interactive consent
+      // window — if there's no live Google session or prior Drive grant it just
+      // returns null, so app load can't spawn an unexpected popup.
+      async function silentConnect() {
+        try {
+          const token = await requestToken(false);
+          if (token) { await fetchEmail(token); return { email: grantedEmail }; }
+        } catch { /* no session / not previously granted — stay disconnected */ }
+        return null;
+      }
+
       function disconnect() {
         if (accessToken && gisReady()) {
           try { window.google.accounts.oauth2.revoke(accessToken, () => {}); } catch {}
@@ -2240,8 +2252,159 @@
         if (!r.ok) throw await driveError(r);
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl };
+      // ── Weekly backup helpers ────────────────────────────────────────────
+      // Unlike createSheet (which converts the xlsx into a Google Sheet), these
+      // store files verbatim under the drive.file scope — no extra consent. Used
+      // for the "Generator Backups" folder that holds the JSON data snapshot and
+      // the three generated .xlsx workbooks each week.
+      const folderUrl = (id) => 'https://drive.google.com/drive/folders/' + encodeURIComponent(id);
+
+      // Find-or-create the backup folder. Reuses a stored id when it still points
+      // at a live (non-trashed) folder; otherwise creates a fresh one and returns
+      // its id so the caller can persist it.
+      async function ensureFolder(name, existingId) {
+        const token = await getToken();
+        if (existingId) {
+          try {
+            const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(existingId) + '?fields=id,trashed', {
+              headers: { Authorization: 'Bearer ' + token },
+            });
+            if (r.ok) { const b = await r.json(); if (b && b.id && !b.trashed) return b.id; }
+          } catch { /* fall through to create */ }
+        }
+        const metadata = { name, mimeType: 'application/vnd.google-apps.folder' };
+        const r = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(metadata),
+        });
+        if (!r.ok) throw await driveError(r);
+        return (await r.json()).id;
+      }
+
+      // Upload a blob as a real file (no Sheets conversion) into parents[].
+      async function uploadRawFile(name, mimeType, blob, parents) {
+        const token = await getToken();
+        const metadata = { name, mimeType, ...(parents && parents.length ? { parents } : {}) };
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+        form.append('file', blob, name);
+        const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token },
+          body: form,
+        });
+        if (!r.ok) throw await driveError(r);
+        return await r.json();
+      }
+
+      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
     })();
+
+    /* ============================================================
+       Local backup safety-net (IndexedDB) + backup helpers
+       ------------------------------------------------------------
+       Rolling full-state snapshots kept locally so an accidental delete or a
+       last-write-wins sync overwrite is always recoverable. IndexedDB (not
+       localStorage) so the ~150–250KB snapshots don't compete with the live
+       state's localStorage budget. Only the last MAX snapshots are retained.
+       ============================================================ */
+    const backupStore = (() => {
+      const DB_NAME = 'mrg_backups', STORE = 'snapshots', MAX = 15;
+      let dbPromise = null;
+      function open() {
+        if (dbPromise) return dbPromise;
+        dbPromise = new Promise((resolve, reject) => {
+          let req;
+          try { req = indexedDB.open(DB_NAME, 1); } catch (e) { reject(e); return; }
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'ts' });
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        return dbPromise;
+      }
+      async function all() {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readonly');
+          const rq = tx.objectStore(STORE).getAll();
+          rq.onsuccess = () => resolve((rq.result || []).sort((a, b) => b.ts - a.ts));
+          rq.onerror = () => reject(rq.error);
+        });
+      }
+      async function prune() {
+        const list = await all();
+        if (list.length <= MAX) return;
+        const db = await open();
+        const drop = list.slice(MAX);
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readwrite');
+          drop.forEach(d => tx.objectStore(STORE).delete(d.ts));
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+      async function put(entry) {
+        const db = await open();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readwrite');
+          tx.objectStore(STORE).put(entry);
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+        });
+        try { await prune(); } catch { /* pruning is best-effort */ }
+      }
+      async function get(ts) {
+        const db = await open();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readonly');
+          const rq = tx.objectStore(STORE).get(ts);
+          rq.onsuccess = () => resolve(rq.result || null);
+          rq.onerror = () => reject(rq.error);
+        });
+      }
+      return { put, all, get };
+    })();
+
+    // Count clients with a real (non-blank) name — blank rows are filler and are
+    // dropped from generated output, so they don't count as data.
+    function clientCounts(st) {
+      const named = (arr) => (arr || []).filter(c => String(c && c.name || '').trim() !== '').length;
+      return {
+        voip: named(st && st.bmr && st.bmr.clients),
+        whs: named(st && st.bmrSms && st.bmrSms.wholesaleClients),
+        retail: named(st && st.bmrSms && st.bmrSms.retailClients),
+      };
+    }
+    function countsTotal(c) { return (c.voip || 0) + (c.whs || 0) + (c.retail || 0); }
+
+    // Persist a full-state snapshot to IndexedDB. `tab` is dropped (view-only).
+    async function saveSnapshot(st, reason) {
+      try {
+        if (!st) return false;
+        const { tab, ...rest } = st;
+        await backupStore.put({ ts: Date.now(), reason: reason || 'auto', counts: clientCounts(st), json: JSON.stringify(rest) });
+        return true;
+      } catch (e) { console.warn('Local snapshot save failed', e); return false; }
+    }
+
+    // ISO-8601 week key (e.g. "2026-W30"). Fri/Sat/Sun of one weekend share a
+    // key, so "back up Friday, else Sat/Sun" maps to exactly one weekly backup.
+    function isoWeekKey(d) {
+      const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const day = dt.getUTCDay() || 7;
+      dt.setUTCDate(dt.getUTCDate() + 4 - day);
+      const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+      const week = Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
+      return dt.getUTCFullYear() + '-W' + pad(week);
+    }
+    function backupStampString() {
+      const d = new Date();
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+    }
 
     // Modules that support Google Sheets sync → the in-memory workbook builder
     // and the (static) name used when the app first creates that module's sheet.
@@ -2981,6 +3144,60 @@ https://bit.ly/4vrcu64`;
       return <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
     }
 
+    // Backups & Restore — weekly Google Drive backup status + local snapshot
+    // restore. Snapshots are the IndexedDB safety net, so Restore works even
+    // offline. Rendered inside GoogleSheetSync so it shows in the SIP/FCS, BMR
+    // VOIP and BMR SMS sidebars.
+    function BackupControls({ backup }) {
+      const [open, setOpen] = useState(false);
+      const [snaps, setSnaps] = useState(null);
+      const [loading, setLoading] = useState(false);
+      if (!backup) return null;
+      const load = async () => {
+        setLoading(true);
+        try { setSnaps(await backupStore.all()); } catch { setSnaps([]); }
+        setLoading(false);
+      };
+      const toggle = () => { const n = !open; setOpen(n); if (n) load(); };
+      const restore = async (ts) => { await backup.onRestore(ts); load(); };
+      return (
+        <div className="pt-2 mt-1 border-t border-neutral-900 space-y-1.5">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="font-medium text-neutral-300">Weekly backup</span>
+            <span className="ml-auto text-neutral-500">{backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : 'never'}</span>
+          </div>
+          <p className="text-[10px] text-neutral-600 leading-relaxed">
+            Auto-saves data + Excel to Google Drive <span className="text-neutral-400">Generator Backups</span> every Friday (or Sat/Sun).
+          </p>
+          <div className="flex items-center gap-1.5">
+            <Btn variant="ghost" size="sm" onClick={backup.onBackupNow} disabled={backup.busy || !backup.connected} className="flex-1">
+              {backup.busy ? <><span className="loader"></span> Backing up…</> : <>Back up now</>}
+            </Btn>
+            <Btn variant="ghost" size="sm" onClick={toggle}>{open ? 'Hide' : 'Restore'}</Btn>
+          </div>
+          {!backup.connected && <p className="text-[10px] text-amber-500/80">Connect Google Drive above to enable Drive backups.</p>}
+          {backup.folderUrl && (
+            <a href={backup.folderUrl} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-blue-400 hover:text-blue-300 transition-colors">Open Drive backup folder ↗</a>
+          )}
+          {open && (
+            <div className="space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1">
+              {loading && <div className="text-[10px] text-neutral-600 px-1 py-2">Loading…</div>}
+              {!loading && snaps && snaps.length === 0 && <div className="text-[10px] text-neutral-600 px-1 py-2">No local snapshots yet.</div>}
+              {!loading && snaps && snaps.map(s => (
+                <div key={s.ts} className="flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50">
+                  <div className="min-w-0">
+                    <div className="text-neutral-300 truncate">{new Date(s.ts).toLocaleString()}</div>
+                    <div className="text-neutral-600 truncate">{s.reason} · VoIP {s.counts?.voip ?? '?'} · WHS {s.counts?.whs ?? '?'} · Retail {s.counts?.retail ?? '?'}</div>
+                  </div>
+                  <button onClick={() => restore(s.ts)} className="ml-auto text-blue-400 hover:text-blue-300 shrink-0">Restore</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // Compact Google Sheets sync panel shown above the Generate button in the
     // SIP/FCS, BMR VOIP and BMR SMS sidebars. Connect once, then Generate (or
     // "Sync now") pushes the generated workbook into that module's Google Sheet.
@@ -3053,6 +3270,8 @@ https://bit.ly/4vrcu64`;
               )}
             </div>
           )}
+
+          <BackupControls backup={gsheets.backup} />
 
           <button onClick={() => { setDraftId(clientId || ''); setEditing(true); }}
             className="text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors">Change Client ID</button>
@@ -3731,7 +3950,19 @@ https://bit.ly/4vrcu64`;
         if (!rest.hidden && !itemDropdown(rest).length) return itemLabel(rest);
         return rest;
       }));
-      const remove = (i) => onChange(items.filter((_, j) => j !== i));
+      const remove = async (i) => {
+        const label = String(itemLabel(items[i]) || '').trim();
+        const ok = await confirmDialog({
+          title: 'Delete item?',
+          message: label
+            ? `"${label}" will be removed. This can't be undone.`
+            : "This item will be removed. This can't be undone.",
+          confirmText: 'Delete',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        onChange(items.filter((_, j) => j !== i));
+      };
       const reorder = (from, to) => {
         if (from === to || to < 0 || to >= items.length) return;
         const arr = [...items];
@@ -5270,13 +5501,25 @@ https://bit.ly/4vrcu64`;
           manager.id === id ? { ...manager, ...patch } : manager
         ),
       })), [onChange]);
-      const removeAccountManager = useCallback((id) => onChange((prev) => ({
-        ...prev,
-        accountManagers: (prev.accountManagers || []).filter(manager => manager.id !== id),
-        clients: (prev.clients || []).map(client =>
-          client.accountManagerId === id ? { ...client, accountManagerId: '' } : client
-        ),
-      })), [onChange]);
+      const removeAccountManager = useCallback(async (id) => {
+        const mgr = (accountManagers || []).find(m => m.id === id);
+        const label = String(mgr?.name || '').trim() || 'this account manager';
+        const n = clientCountByManager[id] || 0;
+        const ok = await confirmDialog({
+          title: 'Delete account manager?',
+          message: `"${label}" will be removed${n ? ` and unassigned from ${n} client${n === 1 ? '' : 's'}` : ''}. This can't be undone.`,
+          confirmText: 'Delete',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        onChange((prev) => ({
+          ...prev,
+          accountManagers: (prev.accountManagers || []).filter(manager => manager.id !== id),
+          clients: (prev.clients || []).map(client =>
+            client.accountManagerId === id ? { ...client, accountManagerId: '' } : client
+          ),
+        }));
+      }, [onChange, accountManagers, clientCountByManager]);
       const addAccountManager = () => {
         const name = draftName.trim();
         if (!name) return;
@@ -5425,9 +5668,20 @@ https://bit.ly/4vrcu64`;
       const updateClient = useCallback((id, patch) => setClients((list) =>
         list.map((c) => c.id === id ? { ...c, ...patch } : c)
       ), [setClients]);
-      const removeClient = useCallback((id) => setClients((list) =>
-        list.filter((c) => c.id !== id)
-      ), [setClients]);
+      const removeClient = useCallback(async (id) => {
+        const target = (clients || []).find((c) => c.id === id);
+        const label = String(target?.name || '').trim();
+        const ok = await confirmDialog({
+          title: 'Delete client?',
+          message: label
+            ? `"${label}" will be removed from this list. This can't be undone.`
+            : "This client will be removed. This can't be undone.",
+          confirmText: 'Delete',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setClients((list) => list.filter((c) => c.id !== id));
+      }, [setClients, clients]);
       const addClient = (pos) => {
         const name = draftName.trim();
         if (!name) return;
@@ -10065,7 +10319,11 @@ https://bit.ly/4vrcu64`;
       // durable file IDs of the app-owned sheets (one per module). No tokens
       // here — all non-secret, so it rides the normal localStorage + Firestore
       // sync. sheetIds are empty until the first sync creates them.
-      googleSheets: { clientId: '', sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' } },
+      googleSheets: { clientId: '', backupFolderId: '', sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' } },
+      // Weekly Google Drive backup bookkeeping. lastWeekKey is the ISO week of
+      // the last successful backup, stored in synced state so only one automatic
+      // backup runs per week even across multiple devices/day-opens.
+      backup: { enabled: true, lastWeekKey: '', lastRunAt: 0 },
     };
 
     function timestampMs(value) {
@@ -10185,10 +10443,18 @@ https://bit.ly/4vrcu64`;
         clientId: (merged.googleSheets && typeof merged.googleSheets.clientId === 'string')
           ? merged.googleSheets.clientId
           : (DEFAULT_STATE.googleSheets.clientId || ''),
+        backupFolderId: (merged.googleSheets && typeof merged.googleSheets.backupFolderId === 'string')
+          ? merged.googleSheets.backupFolderId
+          : (DEFAULT_STATE.googleSheets.backupFolderId || ''),
         sheetIds: {
           ...DEFAULT_STATE.googleSheets.sheetIds,
           ...((merged.googleSheets && merged.googleSheets.sheetIds) || {}),
         },
+      };
+      const backup = {
+        enabled: !(merged.backup && merged.backup.enabled === false),
+        lastWeekKey: String((merged.backup && merged.backup.lastWeekKey) || ''),
+        lastRunAt: Number(merged.backup && merged.backup.lastRunAt) || 0,
       };
       const sheets = migrateLegacyLabels
         ? migrateSheets(merged.sheets)
@@ -10209,6 +10475,7 @@ https://bit.ly/4vrcu64`;
         imageEditor,
         recorder,
         googleSheets,
+        backup,
       };
     }
 
@@ -12749,6 +13016,26 @@ match /shared/whitelistSmsTestNumbers {
               user
             );
             if (remote && Array.isArray(remote.sheets)) {
+              // Data-loss guard: if the incoming cloud copy is this user's own
+              // state but has FEWER named clients than what's on this device, the
+              // whole-doc last-write-wins overwrite would drop them. Snapshot the
+              // local data first (recoverable from Backups) and warn on a
+              // meaningful drop so a silent wipe can't happen unnoticed.
+              try {
+                const localNow = normalizeAppState(stateRef.current || {});
+                const localOwned = stateOwnerUid(localNow) === user.uid;
+                const willOverwrite = !(localOwned && stateEditedAt(localNow) > stateEditedAt(remote));
+                if (willOverwrite && localOwned) {
+                  const drop = countsTotal(clientCounts(localNow)) - countsTotal(clientCounts(remote));
+                  if (drop >= 1) {
+                    saveSnapshot(localNow, 'pre-sync-overwrite');
+                    if (drop >= 2) {
+                      setToast({ type: 'err', msg: `Cloud copy has ${drop} fewer clients than this device — a local backup was saved. Open the Backups panel to restore if this was unexpected.` });
+                      setTimeout(() => setToast(null), 10000);
+                    }
+                  }
+                }
+              } catch (e) { console.warn('Sync data-loss guard failed', e); }
               setStateRaw(local => {
                 const current = normalizeAppState(local);
                 const ownerUid = stateOwnerUid(current);
@@ -12820,6 +13107,18 @@ match /shared/whitelistSmsTestNumbers {
         if (localSaveTimerRef.current) clearTimeout(localSaveTimerRef.current);
         localSaveTimerRef.current = setTimeout(() => {
           try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+          // Rolling local safety snapshot: whenever the client count changes, or
+          // at most once every 10 min otherwise, so accidental deletes/overwrites
+          // stay recoverable from the Backups panel.
+          try {
+            const key = JSON.stringify(clientCounts(state));
+            const now = Date.now();
+            const changed = key !== lastSnapRef.current.counts;
+            if (changed || now - lastSnapRef.current.at > 600000) {
+              lastSnapRef.current = { at: now, counts: key };
+              saveSnapshot(state, changed ? 'auto-change' : 'auto');
+            }
+          } catch {}
         }, 180);
         return () => { if (localSaveTimerRef.current) clearTimeout(localSaveTimerRef.current); };
       }, [state]);
@@ -13191,6 +13490,108 @@ match /shared/whitelistSmsTestNumbers {
         setTimeout(() => setToast(null), 4000);
       }, []);
 
+      const backupBusyRef = useRef(false);
+      const lastSnapRef = useRef({ at: 0, counts: '' });
+
+      // Manual/weekly Google Drive backup: writes a JSON data snapshot plus the
+      // SIP/FCS, BMR VOIP and BMR SMS workbooks into a "Generator Backups" Drive
+      // folder, and drops a local IndexedDB snapshot too.
+      const runDriveBackup = useCallback(async ({ manual = false } = {}) => {
+        if (backupBusyRef.current) return;
+        if (!googleSheetsSync.isConfigured()) {
+          if (manual) showToast('err', 'Set the Google OAuth Client ID first (in the Google Sheets sync panel).');
+          return;
+        }
+        // Automatic (non-manual) backups must never spawn a consent popup: only
+        // proceed when a live token already exists. Manual backups may prompt.
+        if (!manual && !googleSheetsSync.isConnected()) return;
+        const st = stateRef.current || DEFAULT_STATE;
+        backupBusyRef.current = true;
+        setGoogleConn(c => ({ ...c, busyModule: '__backup__', error: null }));
+        try {
+          await googleSheetsSync.getToken({ interactive: manual });
+          const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || '';
+          const folderId = await googleSheetsSync.ensureFolder('Generator Backups', prevFolder);
+          if (folderId && folderId !== prevFolder) {
+            setState(s => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: folderId } }));
+          }
+          const stamp = backupStampString();
+          // 1) JSON data backup — restores all clients/rules/config in-app.
+          const { tab, ...persist } = st;
+          const jsonBlob = new Blob([JSON.stringify(persist, null, 2)], { type: 'application/json' });
+          await googleSheetsSync.uploadRawFile(`Generator_Data_${stamp}.json`, 'application/json', jsonBlob, [folderId]);
+          // 2) The three generated workbooks (best-effort each).
+          let xlsxFails = 0;
+          for (const m of ['sip_fcs', 'bmr', 'bmr_sms']) {
+            try {
+              const { blob, filename } = await GOOGLE_SYNC_MODULES[m].build(st);
+              await googleSheetsSync.uploadRawFile(filename, XLSX_MIME, blob, [folderId]);
+            } catch (e) { xlsxFails++; console.warn('Backup workbook failed for ' + m, e); }
+          }
+          await saveSnapshot(st, manual ? 'manual-backup' : 'weekly-backup');
+          setState(s => ({ ...s, backup: { ...(s.backup || {}), lastWeekKey: isoWeekKey(new Date()), lastRunAt: Date.now() } }));
+          setGoogleConn(c => ({ ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null }));
+          if (manual) showToast(xlsxFails ? 'err' : 'ok', xlsxFails
+            ? `Backup saved to Drive, but ${xlsxFails} workbook(s) failed — the JSON data backup is complete.`
+            : 'Backup saved to Google Drive → Generator Backups.');
+          return folderId;
+        } catch (e) {
+          console.warn('Drive backup failed', e);
+          setGoogleConn(c => ({ ...c, busyModule: null, error: e.message || String(e) }));
+          if (manual) showToast('err', 'Backup failed: ' + (e.message || e));
+          throw e;
+        } finally {
+          backupBusyRef.current = false;
+        }
+      }, [showToast]);
+
+      // Restore a local snapshot over the current state (a safety snapshot of the
+      // current data is taken first, so a restore is itself undoable).
+      const restoreSnapshot = useCallback(async (ts) => {
+        try {
+          const snap = await backupStore.get(ts);
+          if (!snap || !snap.json) { showToast('err', 'That snapshot could not be found.'); return; }
+          const c = snap.counts || {};
+          const ok = await confirmDialog({
+            title: 'Restore this backup?',
+            message: `This replaces ALL current app data with the snapshot from ${new Date(ts).toLocaleString()} (VoIP ${c.voip ?? '?'}, Wholesale ${c.whs ?? '?'}, Retail ${c.retail ?? '?'} clients). A backup of the current data is saved first, so you can undo this.`,
+            confirmText: 'Restore',
+            tone: 'danger',
+          });
+          if (!ok) return;
+          await saveSnapshot(stateRef.current || {}, 'pre-restore');
+          const parsed = JSON.parse(snap.json);
+          setState(s => ({ ...normalizeAppState(parsed), tab: s.tab, module: s.module }));
+          showToast('ok', 'Backup restored.');
+        } catch (e) { console.warn('Restore failed', e); showToast('err', 'Restore failed: ' + (e.message || e)); }
+      }, [showToast]);
+
+      // Weekly Drive backup scheduler: on Fri/Sat/Sun, if this ISO week hasn't
+      // been backed up yet, run one automatically. If Drive isn't connected this
+      // session it tries a SILENT reconnect first (no popup); if that fails it
+      // just waits — the manual "Back up now" button and next open still work.
+      useEffect(() => {
+        if (!hydratedRef.current) return;
+        if (state.backup?.enabled === false) return;
+        if (!googleSheetsSync.isConfigured()) return;
+        const now = new Date();
+        const dow = now.getDay(); // 0 Sun, 5 Fri, 6 Sat
+        if (!(dow === 5 || dow === 6 || dow === 0)) return;
+        if ((state.backup?.lastWeekKey || '') === isoWeekKey(now)) return;
+        let cancelled = false;
+        const t = setTimeout(async () => {
+          if (cancelled) return;
+          if (!googleSheetsSync.isConnected()) {
+            const ok = await googleSheetsSync.silentConnect();
+            if (cancelled) return;
+            if (!ok) return; // no live grant — skip quietly, no popup
+            setGoogleConn(c => ({ ...c, connected: true, email: ok.email || c.email }));
+          }
+          if (!cancelled) runDriveBackup({ manual: false }).catch(() => {});
+        }, 4000);
+        return () => { cancelled = true; clearTimeout(t); };
+      }, [googleConn.connected, state.backup?.lastWeekKey, state.backup?.enabled, runDriveBackup]);
+
       const onGenerate = async () => {
         setBusy(true);
         try {
@@ -13242,6 +13643,14 @@ match /shared/whitelistSmsTestNumbers {
         onSetClientId: setGoogleClientId,
         connect: connectGoogle, disconnect: disconnectGoogle, sync: syncModuleToSheets,
         sheetUrl: googleSheetsSync.sheetUrl,
+        backup: {
+          connected: googleConn.connected,
+          busy: googleConn.busyModule === '__backup__',
+          onBackupNow: () => runDriveBackup({ manual: true }).catch(() => {}),
+          onRestore: restoreSnapshot,
+          lastRunAt: state.backup?.lastRunAt || 0,
+          folderUrl: state.googleSheets?.backupFolderId ? googleSheetsSync.folderUrl(state.googleSheets.backupFolderId) : '',
+        },
       };
 
       const TABS = [
