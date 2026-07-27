@@ -6244,6 +6244,7 @@ https://bit.ly/4vrcu64`;
             <AccountChip sync={sync} />
           </div>
 
+          <div className="flex-1 overflow-y-auto min-h-0">
           <div className="p-5 border-b border-neutral-900">
             <SectionLabel>Today</SectionLabel>
             <div className="text-2xl font-bold tracking-tight">{bmrTodayString()}</div>
@@ -6281,7 +6282,7 @@ https://bit.ly/4vrcu64`;
             <BmrHiddenColInput bmr={bmr} setBmr={setBmr} />
           </div>
 
-          <div className="p-5 flex-1 overflow-y-auto min-h-0">
+          <div className="p-5">
             <SectionLabel hint={`${(bmr.clients || []).filter(c => !c.hidden).length}/${(bmr.clients || []).length} visible`}>Clients quick view</SectionLabel>
             <div className="space-y-0.5">
               {(bmr.clients || []).map((c, i) => (
@@ -6291,6 +6292,8 @@ https://bit.ly/4vrcu64`;
                 </div>
               ))}
             </div>
+          </div>
+
           </div>
 
           <div className="p-5 border-t border-neutral-900 space-y-3">
@@ -6603,6 +6606,7 @@ https://bit.ly/4vrcu64`;
             <AccountChip sync={sync} />
           </div>
 
+          <div className="flex-1 overflow-y-auto min-h-0">
           <div className="p-5 border-b border-neutral-900">
             <SectionLabel>Today</SectionLabel>
             <div className="text-2xl font-bold tracking-tight">{bmrTodayString()}</div>
@@ -6625,9 +6629,9 @@ https://bit.ly/4vrcu64`;
             </label>
           </div>
 
-          <div className="p-5 flex-1 overflow-y-auto min-h-0">
+          <div className="p-5">
             <SectionLabel hint={`${visibleRetail} RES / ${visibleWholesale} WHS visible`}>Clients quick view</SectionLabel>
-            <div className="space-y-0.5 max-h-[44vh] overflow-y-auto">
+            <div className="space-y-0.5">
               {quickClients.map((client, index) => {
                 const color = bmrClientColor(sms, client, accountManagersById);
                 return (
@@ -6639,6 +6643,8 @@ https://bit.ly/4vrcu64`;
                 );
               })}
             </div>
+          </div>
+
           </div>
 
           <div className="p-5 border-t border-neutral-900 space-y-3">
