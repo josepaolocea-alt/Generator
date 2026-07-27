@@ -6283,7 +6283,7 @@ https://bit.ly/4vrcu64`;
 
           <div className="p-5 flex-1 overflow-y-auto min-h-0">
             <SectionLabel hint={`${(bmr.clients || []).filter(c => !c.hidden).length}/${(bmr.clients || []).length} visible`}>Clients quick view</SectionLabel>
-            <div className="space-y-0.5 max-h-[40vh] overflow-y-auto">
+            <div className="space-y-0.5">
               {(bmr.clients || []).map((c, i) => (
                 <div key={c.id} className={`flex items-center gap-2 rounded px-1.5 py-1 ${c.hidden ? 'opacity-40' : ''}`}>
                   <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={bmrClientColor(bmr, c, accountManagersById) ? { background: bmrClientColor(bmr, c, accountManagersById) } : {}}></span>
