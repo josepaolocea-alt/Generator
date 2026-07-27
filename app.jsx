@@ -6224,7 +6224,6 @@ https://bit.ly/4vrcu64`;
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const bmr = state.bmr || DEFAULT_BMR_STATE;
-      const accountManagersById = bmrAccountManagersById(bmr);
       const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
 
       return (
@@ -6280,18 +6279,6 @@ https://bit.ly/4vrcu64`;
               ))}
             </div>
             <BmrHiddenColInput bmr={bmr} setBmr={setBmr} />
-          </div>
-
-          <div className="p-5">
-            <SectionLabel hint={`${(bmr.clients || []).filter(c => !c.hidden).length}/${(bmr.clients || []).length} visible`}>Clients quick view</SectionLabel>
-            <div className="space-y-0.5">
-              {(bmr.clients || []).map((c, i) => (
-                <div key={c.id} className={`flex items-center gap-2 rounded px-1.5 py-1 ${c.hidden ? 'opacity-40' : ''}`}>
-                  <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={bmrClientColor(bmr, c, accountManagersById) ? { background: bmrClientColor(bmr, c, accountManagersById) } : {}}></span>
-                  <span className="text-[11px] text-neutral-300 truncate flex-1">{c.name}</span>
-                </div>
-              ))}
-            </div>
           </div>
 
           </div>
@@ -6577,17 +6564,10 @@ https://bit.ly/4vrcu64`;
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
-      const accountManagersById = bmrAccountManagersById(sms);
       const setSms = (next) => setState(s => {
         const prevSms = s.bmrSms || DEFAULT_BMR_SMS_STATE;
         return { ...s, bmrSms: typeof next === 'function' ? next(prevSms) : next };
       });
-      const visibleRetail = (sms.retailClients || []).filter(c => !c.hidden).length;
-      const visibleWholesale = (sms.wholesaleClients || []).filter(c => !c.hidden).length;
-      const quickClients = [
-        ...(sms.retailClients || []).slice(0, 8).map(client => ({ ...client, market: 'RES' })),
-        ...(sms.wholesaleClients || []).slice(0, 8).map(client => ({ ...client, market: 'WHS' })),
-      ];
 
       return (
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
@@ -6627,22 +6607,6 @@ https://bit.ly/4vrcu64`;
                 className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
               <span>7PM-7AM (Night)</span>
             </label>
-          </div>
-
-          <div className="p-5">
-            <SectionLabel hint={`${visibleRetail} RES / ${visibleWholesale} WHS visible`}>Clients quick view</SectionLabel>
-            <div className="space-y-0.5">
-              {quickClients.map((client, index) => {
-                const color = bmrClientColor(sms, client, accountManagersById);
-                return (
-                  <div key={`${client.market}-${client.id}-${index}`} className={`flex items-center gap-2 rounded px-1.5 py-1 ${client.hidden ? 'opacity-40' : ''}`}>
-                    <span className="w-8 text-[10px] text-neutral-600 font-mono">{client.market}</span>
-                    <span className="w-3 h-3 rounded border border-neutral-800 shrink-0" style={color ? { background: color } : {}}></span>
-                    <span className="text-[11px] text-neutral-300 truncate flex-1">{client.name}</span>
-                  </div>
-                );
-              })}
-            </div>
           </div>
 
           </div>
