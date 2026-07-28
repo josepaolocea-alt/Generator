@@ -2868,6 +2868,33 @@ https://bit.ly/4vrcu64`;
       + '^{}\\[~]|€'
     );
 
+    // GSM-7 extension-table characters. These are still GSM-7 (they never force
+    // UTF), but each one costs 2 septets instead of 1, so they eat into the
+    // 160-char budget twice as fast.
+    const WL_SMS_GSM7_EXT_SET = new Set('^{}\\[~]|€');
+
+    // SMS part limits per encoding. A single SMS carries `single` characters;
+    // the moment it spills past that it becomes concatenated (multipart) and
+    // each part gives up room to a user-data header, dropping the per-part
+    // payload to `multi`.
+    const WL_SMS_PART_LIMITS = {
+      gsm: { single: 160, multi: 153 },
+      utf: { single: 70,  multi: 67  },
+    };
+
+    // Given the encoding decision and the two running counts, work out how many
+    // SMS parts the message needs and how much room is left in the current
+    // budget. `units` is the billable length (GSM septets, or UCS-2 code units
+    // where astral chars / emoji count as 2).
+    function wlSmsMeasureLength(isUtf, gsmSeptets, ucs2Units) {
+      const encoding = isUtf ? 'utf' : 'gsm';
+      const units = isUtf ? ucs2Units : gsmSeptets;
+      const { single, multi } = WL_SMS_PART_LIMITS[encoding];
+      const parts = units === 0 ? 0 : (units <= single ? 1 : Math.ceil(units / multi));
+      const capacity = parts <= 1 ? single : parts * multi; // room before the next part
+      return { encoding, units, single, multi, parts, capacity };
+    }
+
     // Friendly names + GSM-safe replacements for the special characters that
     // most often sneak in from Word / Google Docs copy-paste. fix: '' means
     // "safe to remove"; entries without fix are flagged but never auto-fixed.
@@ -2927,14 +2954,20 @@ https://bit.ly/4vrcu64`;
     function wlSmsAnalyzeUtf(text) {
       const segments = []; // [{ text, special }] — consecutive runs, in order
       const offenders = new Map(); // char -> count
+      let gsmSeptets = 0; // billable length if the message stays GSM-7
+      let ucs2Units = 0;  // billable length if the message is forced to UCS-2
       for (const ch of String(text ?? '')) {
         const special = !WL_SMS_GSM7_SET.has(ch);
         if (special) offenders.set(ch, (offenders.get(ch) || 0) + 1);
+        gsmSeptets += WL_SMS_GSM7_EXT_SET.has(ch) ? 2 : 1;
+        ucs2Units += ch.codePointAt(0) > 0xFFFF ? 2 : 1; // surrogate pair = 2 units
         const last = segments[segments.length - 1];
         if (last && last.special === special) last.text += ch;
         else segments.push({ text: ch, special });
       }
-      return { segments, offenders, isUtf: offenders.size > 0 };
+      const isUtf = offenders.size > 0;
+      const length = wlSmsMeasureLength(isUtf, gsmSeptets, ucs2Units);
+      return { segments, offenders, isUtf, length };
     }
 
     function wlSmsApplySafeFixes(text) {
@@ -7352,7 +7385,11 @@ https://bit.ly/4vrcu64`;
               <Btn variant="ghost" size="md" onClick={clearAll} disabled={!pasteText && !(wl.contents || []).length}>Clear all</Btn>
               <span className="text-[11px] text-neutral-500">{(wl.contents || []).length} content block{(wl.contents || []).length === 1 ? '' : 's'}</span>
               {pasteText.trim() && <WlSmsUtfStatusPill analysis={pasteAnalysis} />}
+              {pasteText.trim() && <WlSmsLengthPill length={pasteAnalysis.length} />}
             </div>
+            {pasteText.trim() && pasteAnalysis.length.parts > 1 && (
+              <div className="mt-3"><WlSmsLengthWarning length={pasteAnalysis.length} /></div>
+            )}
             {pasteText.trim() && pasteAnalysis.isUtf && (
               <div className="mt-3 space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -7450,12 +7487,46 @@ https://bit.ly/4vrcu64`;
       );
     }
 
+    // Compact badge: encoded length vs. the current-part budget + part count.
+    // Neutral while it fits in a single SMS, amber once it splits into 2+ parts.
+    function WlSmsLengthPill({ length }) {
+      if (!length || length.units === 0) return null;
+      const { units, capacity, parts, single, multi, encoding } = length;
+      const multipart = parts > 1;
+      const tone = multipart
+        ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+        : 'border-neutral-700 bg-neutral-800/50 text-neutral-300';
+      const encName = encoding === 'utf' ? 'UCS-2' : 'GSM-7';
+      return (
+        <span
+          title={`${units} encoded ${encName} character${units === 1 ? '' : 's'} — ${single} fit in a single SMS, then ${multi} per part once it splits`}
+          className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${tone}`}>
+          {units}/{capacity} chars · {parts} part{parts === 1 ? '' : 's'}
+        </span>
+      );
+    }
+
+    // Amber callout shown only when a message spills into 2+ SMS parts. This is
+    // orthogonal to the UTF warning: a plain GSM-7 message that is simply too
+    // long still trips this.
+    function WlSmsLengthWarning({ length }) {
+      if (!length || length.parts <= 1) return null;
+      const encName = length.encoding === 'utf' ? 'UTF (UCS-2)' : 'GSM-7';
+      return (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-300">
+          <span className="font-semibold">{length.units} characters — sends as {length.parts} SMS parts.</span>
+          <span className="opacity-80">{encName} holds {length.single} in a single SMS, then {length.multi} per part once concatenated.</span>
+        </div>
+      );
+    }
+
     function WlSmsUtfCheckPanel({ wl, onChange }) {
       const [adhoc, setAdhoc] = useState('');
       const [copied, setCopied] = useState(null); // 'all' | 'adhoc' | null
       const contents = wl.contents || [];
       const analyses = contents.map(c => wlSmsAnalyzeUtf(c));
       const utfBlocks = analyses.filter(a => a.isUtf).length;
+      const multipartBlocks = analyses.filter(a => a.length.parts > 1).length;
       const adhocAnalysis = wlSmsAnalyzeUtf(adhoc);
       const isFixable = (text) => wlSmsApplySafeFixes(text) !== text;
       const fixBlock = (i) => {
@@ -7485,11 +7556,13 @@ https://bit.ly/4vrcu64`;
               <div className="mt-2 space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <WlSmsUtfStatusPill analysis={adhocAnalysis} />
+                  <WlSmsLengthPill length={adhocAnalysis.length} />
                   {adhocAnalysis.isUtf && isFixable(adhoc) && (
                     <Btn variant="ghost" size="sm" onClick={() => setAdhoc(wlSmsApplySafeFixes(adhoc))}>Apply safe replacements</Btn>
                   )}
                   <Btn variant="ghost" size="sm" onClick={() => copyText(adhoc, 'adhoc')}>{copied === 'adhoc' ? 'Copied' : 'Copy text'}</Btn>
                 </div>
+                <WlSmsLengthWarning length={adhocAnalysis.length} />
                 {adhocAnalysis.isUtf && <WlSmsUtfHighlight segments={adhocAnalysis.segments} />}
                 <WlSmsUtfOffenderChips offenders={adhocAnalysis.offenders} />
               </div>
@@ -7506,6 +7579,11 @@ https://bit.ly/4vrcu64`;
                     ? `All ${contents.length} content block${contents.length === 1 ? '' : 's'} are GSM-7 safe.`
                     : `${utfBlocks} of ${contents.length} content block${contents.length === 1 ? '' : 's'} will be sent as UTF.`}
               </span>
+              {multipartBlocks > 0 && (
+                <span className="text-[11px] font-semibold text-amber-300">
+                  {multipartBlocks} block{multipartBlocks === 1 ? '' : 's'} exceed one SMS part.
+                </span>
+              )}
               {anyFixable && (
                 <Btn variant="ghost" size="sm" onClick={fixAll}>Fix all fixable</Btn>
               )}
@@ -7525,9 +7603,10 @@ https://bit.ly/4vrcu64`;
                 return (
                   <div key={i} className="rounded-md border border-neutral-900 bg-neutral-950 p-2">
                     <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[10px] uppercase tracking-wide text-neutral-500">Content {i + 1}</span>
                         <WlSmsUtfStatusPill analysis={a} />
+                        <WlSmsLengthPill length={a.length} />
                       </div>
                       {a.isUtf && isFixable(block) && (
                         <button onClick={() => fixBlock(i)} className="text-[10px] text-neutral-500 hover:text-blue-300">Fix this block</button>
@@ -7535,6 +7614,7 @@ https://bit.ly/4vrcu64`;
                     </div>
                     <WlSmsUtfHighlight segments={a.segments} />
                     <WlSmsUtfOffenderChips offenders={a.offenders} />
+                    {a.length.parts > 1 && <div className="mt-2"><WlSmsLengthWarning length={a.length} /></div>}
                   </div>
                 );
               })}
@@ -14100,7 +14180,7 @@ match /shared/whitelistSmsTestNumbers {
                   )}
                   {whitelistSmsTab === 'utf' && (
                     <div className="space-y-6">
-                      <SectionLabel hint="Characters outside the GSM-7 alphabet force UTF (UCS-2) — 70 chars per SMS part instead of 160">Special character finder</SectionLabel>
+                      <SectionLabel hint="Flags non-GSM-7 characters (force UTF — 70 chars/part vs 160) and counts how many SMS parts each message uses">Special character &amp; length checker</SectionLabel>
                       <WlSmsUtfCheckPanel wl={wl} onChange={setWl} />
                     </div>
                   )}
