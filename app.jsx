@@ -2046,10 +2046,11 @@
       // so users configure sync without editing source.
       let clientId = GOOGLE_OAUTH_CLIENT_ID || '';
 
-      // We also request openid+email (non-sensitive) so the panel can show
-      // which Google account is connected. drive.file is the only sensitive
-      // scope and keeps the app limited to sheets it creates.
-      const REQUEST_SCOPE = 'openid email ' + GOOGLE_DRIVE_SCOPE;
+      // We also request openid+email so the panel can show which Google account
+      // must be given Editor access. drive.file covers app-created workbooks;
+      // spreadsheets lets a pasted, user-shared destination be edited too.
+      const GOOGLE_SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+      const REQUEST_SCOPE = 'openid email ' + GOOGLE_DRIVE_SCOPE + ' ' + GOOGLE_SHEETS_SCOPE;
 
       const isConfigured = () => !!clientId;
       const gisReady = () => !!(window.google && window.google.accounts && window.google.accounts.oauth2);
@@ -2094,10 +2095,11 @@
             // A token can come back without the Drive permission if the user
             // left its checkbox unticked (or a prior grant lacked it). Treat
             // that as a distinct failure so getToken() can force re-consent.
-            if (!hasDriveScope()) {
+            const hasSheetsScope = grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE);
+            if (!hasDriveScope() || !hasSheetsScope) {
               accessToken = null; tokenExpiry = 0;
-              const err = new Error('DRIVE_SCOPE_NOT_GRANTED');
-              err.code = 'DRIVE_SCOPE_NOT_GRANTED';
+              const err = new Error('GOOGLE_SYNC_SCOPES_NOT_GRANTED');
+              err.code = 'GOOGLE_SYNC_SCOPES_NOT_GRANTED';
               reject(err);
               return;
             }
@@ -2109,10 +2111,10 @@
         });
       }
 
-      const SCOPE_HELP = 'Drive access wasn\'t granted. Click Connect again, and in the Google window keep the checkbox for "See, edit, create and delete only the specific Google Drive files you use with this app" ticked before continuing.';
+      const SCOPE_HELP = 'Google Sheets access wasn\'t granted. Click Connect again and approve both requested Drive and Google Sheets permissions.';
 
       async function getToken({ interactive = false } = {}) {
-        if (accessToken && Date.now() < tokenExpiry && hasDriveScope()) return accessToken;
+        if (accessToken && Date.now() < tokenExpiry && hasDriveScope() && grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE)) return accessToken;
         try {
           return await requestToken(interactive);
         } catch (e) {
@@ -2120,9 +2122,9 @@
           // interactive consent prompt once so the user can grant Drive access.
           if (!interactive) {
             try { return await requestToken(true); }
-            catch (e2) { throw (e2.code === 'DRIVE_SCOPE_NOT_GRANTED' ? new Error(SCOPE_HELP) : e2); }
+            catch (e2) { throw (e2.code === 'GOOGLE_SYNC_SCOPES_NOT_GRANTED' ? new Error(SCOPE_HELP) : e2); }
           }
-          throw (e.code === 'DRIVE_SCOPE_NOT_GRANTED' ? new Error(SCOPE_HELP) : e);
+          throw (e.code === 'GOOGLE_SYNC_SCOPES_NOT_GRANTED' ? new Error(SCOPE_HELP) : e);
         }
       }
 
@@ -2162,14 +2164,14 @@
         accessToken = null; tokenExpiry = 0; grantedEmail = ''; grantedScopes = '';
       }
 
-      const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasDriveScope();
+      const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasDriveScope() && grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE);
       const email = () => grantedEmail;
       const sheetUrl = (fileId) => 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(fileId) + '/edit';
 
       async function driveError(r) {
         let detail = '';
         try { const body = await r.json(); detail = body?.error?.message || ''; } catch {}
-        const err = new Error('Google Drive error ' + r.status + (detail ? ': ' + detail : ''));
+        const err = new Error('Google API error ' + r.status + (detail ? ': ' + detail : ''));
         err.status = r.status;
         return err;
       }
@@ -2191,18 +2193,95 @@
         return (await r.json()).id;
       }
 
-      // Replace an existing sheet's content with new xlsx bytes. The file keeps
-      // its Google Sheets type (so the same id/url stays valid) and Drive
-      // converts the uploaded xlsx into it.
-      async function updateSheet(fileId, blob) {
+      // Read only the tab identities needed by append-only sync. Existing tab
+      // contents are deliberately never fetched, cleared or updated.
+      async function getSheetTabs(fileId) {
         const token = await getToken();
-        const r = await fetch('https://www.googleapis.com/upload/drive/v3/files/' + encodeURIComponent(fileId) + '?uploadType=media&fields=id', {
-          method: 'PATCH',
-          headers: { Authorization: 'Bearer ' + token, 'Content-Type': XLSX_MIME },
-          body: blob,
-        });
+        const r = await fetch(
+          'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + '?fields=sheets.properties(sheetId,title)',
+          { headers: { Authorization: 'Bearer ' + token } },
+        );
         if (!r.ok) throw await driveError(r);
-        return fileId;
+        const body = await r.json();
+        return (body.sheets || []).map(s => s.properties).filter(p => p && Number.isInteger(p.sheetId) && p.title);
+      }
+
+      // Copy one converted tab into an existing spreadsheet, then restore its
+      // intended title (Google may initially name cross-file copies "Copy of …").
+      async function copySheetTab(sourceFileId, sourceSheetId, destinationFileId, title) {
+        const token = await getToken();
+        const copyResp = await fetch(
+          'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(sourceFileId) + '/sheets/' + encodeURIComponent(sourceSheetId) + ':copyTo',
+          {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ destinationSpreadsheetId: destinationFileId }),
+          },
+        );
+        if (!copyResp.ok) throw await driveError(copyResp);
+        const copied = await copyResp.json();
+        if (copied.title !== title) {
+          const renameResp = await fetch(
+            'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(destinationFileId) + ':batchUpdate',
+            {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requests: [{
+                updateSheetProperties: {
+                  properties: { sheetId: copied.sheetId, title },
+                  fields: 'title',
+                },
+              }] }),
+            },
+          );
+          if (!renameResp.ok) throw await driveError(renameResp);
+        }
+        return { ...copied, title };
+      }
+
+      // Temporary conversion files exist only long enough to supply formatted
+      // tabs for copyTo. They contain generated data, not the user's existing
+      // Google Sheet data, so clean them up immediately after the copy attempt.
+      async function deleteFile(fileId) {
+        if (!fileId) return;
+        const token = await getToken();
+        const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId), {
+          method: 'DELETE',
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!r.ok && r.status !== 404) throw await driveError(r);
+      }
+
+      // Append only tabs whose titles do not already exist in the destination.
+      // The generated workbook is converted in a temporary spreadsheet so its
+      // values, formulas and formatting can be copied without touching any
+      // existing destination tab.
+      async function appendMissingTabs(fileId, blob, dims, tempName) {
+        const wanted = (dims || []).filter(d => d && d.title);
+        const destinationTabs = await getSheetTabs(fileId);
+        const existingTitles = new Set(destinationTabs.map(p => p.title));
+        const missing = wanted.filter(d => !existingTitles.has(d.title));
+        if (!missing.length) return { added: [], existing: wanted.map(d => d.title) };
+
+        let tempId = '';
+        const added = [];
+        try {
+          tempId = await createSheet((tempName || 'Generator') + ' — sync staging', blob);
+          const sourceTabs = await getSheetTabs(tempId);
+          const sourceByTitle = new Map(sourceTabs.map(p => [p.title, p]));
+          for (const want of missing) {
+            const source = sourceByTitle.get(want.title);
+            if (!source) throw new Error('Generated tab "' + want.title + '" was not found in the converted workbook.');
+            await copySheetTab(tempId, source.sheetId, fileId, want.title);
+            added.push(want.title);
+          }
+          return { added, existing: wanted.filter(d => existingTitles.has(d.title)).map(d => d.title) };
+        } finally {
+          if (tempId) {
+            try { await deleteFile(tempId); }
+            catch (e) { console.warn('Could not delete temporary Google Sheet', e); }
+          }
+        }
       }
 
       // After Drive converts an uploaded xlsx into a Google Sheet it pads every
@@ -2298,7 +2377,7 @@
         return await r.json();
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
     })();
 
     /* ============================================================
@@ -2417,6 +2496,14 @@
       // Recorder module code further down this file.
       recorder: { build: buildRecorderBlob, sheetName: 'Recorder — VOS Hourly Record' },
     };
+
+    function googleSpreadsheetId(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const fromUrl = raw.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/i);
+      if (fromUrl) return fromUrl[1];
+      return /^[A-Za-z0-9_-]{20,}$/.test(raw) ? raw : '';
+    }
 
     /* ============================================================
        Editor module - pasted table editor
@@ -3233,16 +3320,22 @@ https://bit.ly/4vrcu64`;
 
     // Compact Google Sheets sync panel shown above the Generate button in the
     // SIP/FCS, BMR VOIP and BMR SMS sidebars. Connect once, then Generate (or
-    // "Sync now") pushes the generated workbook into that module's Google Sheet.
-    function GoogleSheetSync({ gsheets, moduleId, sheetId }) {
+    // "Add new tabs") copies only missing tabs into that module's Google Sheet.
+    function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = '', selectedTabTitle = '', selectedTabLabel = '' }) {
       const [draftId, setDraftId] = useState('');
       const [editing, setEditing] = useState(false);
+      const [targetDraft, setTargetDraft] = useState('');
+      useEffect(() => {
+        setTargetDraft(targetSheetId ? `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit` : '');
+      }, [targetSheetId]);
       if (!gsheets) return null;
-      const { conn, connect, disconnect, sync, sheetUrl, configured, clientId, onSetClientId } = gsheets;
+      const { conn, connect, disconnect, sync, sheetUrl, configured, clientId, onSetClientId, onSetTargetSheet } = gsheets;
       const busy = conn.busyModule === moduleId;
       const connecting = conn.busyModule === '__connect__';
       const last = conn.lastSync?.[moduleId];
-      const url = sheetId ? sheetUrl(sheetId) : null;
+      const destinationId = targetSheetId || sheetId;
+      const url = destinationId ? sheetUrl(destinationId) : null;
+      const selectedUnavailable = !!selectedTabLabel && !selectedTabTitle;
 
       const saveId = () => { if (draftId.trim()) { onSetClientId(draftId); setEditing(false); } };
 
@@ -3283,15 +3376,33 @@ https://bit.ly/4vrcu64`;
             <div className="text-[10px] text-neutral-500 truncate" title={conn.email}>{conn.email}</div>
           )}
 
+          <div className="space-y-1.5 pt-1 border-t border-neutral-900">
+            <label className="block text-[10px] text-neutral-500">Destination Google Sheet link</label>
+            <Input value={targetDraft} onChange={e => setTargetDraft(e.target.value)}
+              placeholder="Paste the shared Google Sheet link"
+              className="text-[10px] py-1.5 font-mono" />
+            <div className="flex items-center gap-1.5">
+              <Btn variant="ghost" size="sm" onClick={() => onSetTargetSheet(moduleId, targetDraft)} disabled={!targetDraft.trim()} className="flex-1">Use this sheet</Btn>
+              {targetSheetId && <Btn variant="ghost" size="sm" onClick={() => { setTargetDraft(''); onSetTargetSheet(moduleId, ''); }}>Clear</Btn>}
+            </div>
+            <p className="text-[10px] text-neutral-600 leading-relaxed">
+              {conn.email
+                ? <>The owner must share it with <span className="text-neutral-400">{conn.email}</span> as Editor.</>
+                : <>Connect first to see which email needs Editor access.</>}
+            </p>
+          </div>
+
           {!conn.connected ? (
             <Btn variant="ghost" size="sm" onClick={connect} disabled={connecting} className="w-full">
               {connecting ? <><span className="loader"></span> Connecting…</> : <>Connect Google Drive</>}
             </Btn>
           ) : (
             <div className="space-y-1.5">
-              <Btn variant="ghost" size="sm" onClick={() => sync(moduleId, { interactive: true, confirmOverwrite: true })} disabled={busy} className="w-full">
-                {busy ? <><span className="loader"></span> Syncing…</> : <>Sync now</>}
+              {selectedTabLabel && <p className="text-[10px] text-neutral-500 truncate" title={selectedTabLabel}>Selected tab: <span className="text-neutral-300">{selectedTabLabel}</span></p>}
+              <Btn variant="ghost" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || '' })} disabled={busy || selectedUnavailable} className="w-full">
+                {busy ? <><span className="loader"></span> Checking tabs…</> : <>{selectedUnavailable ? 'Activate selected tab first' : url ? (selectedTabTitle ? 'Add selected tab' : 'Add new tabs') : 'Create Google Sheet'}</>}
               </Btn>
+              {url && <p className="text-[10px] text-neutral-600 leading-relaxed">Existing tabs and data are never overwritten. A matching tab name is skipped.</p>}
               <div className="flex items-center justify-between text-[10px]">
                 {url
                   ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">Open sheet ↗</a>
@@ -3782,6 +3893,7 @@ https://bit.ly/4vrcu64`;
 
     function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
       const { year, month, sheets, selectedSheetId } = state;
+      const selectedSyncSheet = sheets.find(s => s.id === selectedSheetId) || null;
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
 
@@ -3908,7 +4020,11 @@ https://bit.ly/4vrcu64`;
                 className="w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
               Include INDEX tab
             </label>
-            <GoogleSheetSync gsheets={gsheets} moduleId="sip_fcs" sheetId={state.googleSheets?.sheetIds?.sip_fcs} />
+            <GoogleSheetSync gsheets={gsheets} moduleId="sip_fcs"
+              sheetId={state.googleSheets?.sheetIds?.sip_fcs}
+              targetSheetId={state.googleSheets?.targetSheetIds?.sip_fcs}
+              selectedTabTitle={selectedSyncSheet?.active ? safeSheetName(selectedSyncSheet.name) : ''}
+              selectedTabLabel={selectedSyncSheet?.name || ''} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate {MONTHS[month]} {year}</>}
             </Btn>
@@ -6316,7 +6432,7 @@ https://bit.ly/4vrcu64`;
           </div>
 
           <div className="p-5 border-t border-neutral-900 space-y-3">
-            <GoogleSheetSync gsheets={gsheets} moduleId="bmr" sheetId={state.googleSheets?.sheetIds?.bmr} />
+            <GoogleSheetSync gsheets={gsheets} moduleId="bmr" sheetId={state.googleSheets?.sheetIds?.bmr} targetSheetId={state.googleSheets?.targetSheetIds?.bmr} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR VOIP</>}
             </Btn>
@@ -6644,7 +6760,7 @@ https://bit.ly/4vrcu64`;
           </div>
 
           <div className="p-5 border-t border-neutral-900 space-y-3">
-            <GoogleSheetSync gsheets={gsheets} moduleId="bmr_sms" sheetId={state.googleSheets?.sheetIds?.bmr_sms} />
+            <GoogleSheetSync gsheets={gsheets} moduleId="bmr_sms" sheetId={state.googleSheets?.sheetIds?.bmr_sms} targetSheetId={state.googleSheets?.targetSheetIds?.bmr_sms} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating...</> : <><IconDownload /> Generate BMR SMS</>}
             </Btn>
@@ -10364,11 +10480,13 @@ https://bit.ly/4vrcu64`;
       // Image Editor: tool preferences only. The image itself is never stored
       // here — see the Image Editor module note.
       imageEditor: { ...DEFAULT_IMAGE_STATE },
-      // Google Sheets sync: the OAuth Client ID (set in-app, non-secret) plus
-      // durable file IDs of the app-owned sheets (one per module). No tokens
-      // here — all non-secret, so it rides the normal localStorage + Firestore
-      // sync. sheetIds are empty until the first sync creates them.
-      googleSheets: { clientId: '', backupFolderId: '', sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' } },
+      // Google Sheets sync: durable IDs for app-created sheets plus optional
+      // pasted destinations owned by another account. No tokens are persisted.
+      googleSheets: {
+        clientId: '', backupFolderId: '',
+        sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' },
+        targetSheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' },
+      },
       // Weekly Google Drive backup bookkeeping. lastWeekKey is the ISO week of
       // the last successful backup, stored in synced state so only one automatic
       // backup runs per week even across multiple devices/day-opens.
@@ -10498,6 +10616,10 @@ https://bit.ly/4vrcu64`;
         sheetIds: {
           ...DEFAULT_STATE.googleSheets.sheetIds,
           ...((merged.googleSheets && merged.googleSheets.sheetIds) || {}),
+        },
+        targetSheetIds: {
+          ...DEFAULT_STATE.googleSheets.targetSheetIds,
+          ...((merged.googleSheets && merged.googleSheets.targetSheetIds) || {}),
         },
       };
       const backup = {
@@ -12054,7 +12176,7 @@ https://bit.ly/4vrcu64`;
             </div>
           </div>
           <div className="p-5 border-t border-neutral-900 space-y-3">
-            <GoogleSheetSync gsheets={gsheets} moduleId="recorder" sheetId={state.googleSheets?.sheetIds?.recorder} />
+            <GoogleSheetSync gsheets={gsheets} moduleId="recorder" sheetId={state.googleSheets?.sheetIds?.recorder} targetSheetId={state.googleSheets?.targetSheetIds?.recorder} />
             <div>
               <label className="mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500">Export month</label>
               <div className="flex gap-2">
@@ -13435,6 +13557,35 @@ match /shared/whitelistSmsTestNumbers {
         setState(s => ({ ...s, googleSheets: { ...(s.googleSheets || {}), clientId: v } }));
       }, []);
 
+      const setGoogleTargetSheet = useCallback((moduleId, value) => {
+        const raw = String(value || '').trim();
+        const id = googleSpreadsheetId(raw);
+        if (raw && !id) {
+          setToast({ type: 'err', msg: 'Paste a valid Google Sheets link.' });
+          setTimeout(() => setToast(null), 4000);
+          return false;
+        }
+        setState(s => ({
+          ...s,
+          googleSheets: {
+            ...(s.googleSheets || {}),
+            targetSheetIds: {
+              ...DEFAULT_STATE.googleSheets.targetSheetIds,
+              ...((s.googleSheets && s.googleSheets.targetSheetIds) || {}),
+              [moduleId]: id,
+            },
+          },
+        }));
+        setToast({
+          type: 'ok',
+          msg: id
+            ? 'Destination saved. Make sure its owner shared it with the connected account as Editor.'
+            : 'Pasted destination cleared.',
+        });
+        setTimeout(() => setToast(null), 5000);
+        return true;
+      }, []);
+
       // Connect Google Drive (interactive account/consent popup).
       const connectGoogle = useCallback(async () => {
         if (!googleSheetsSync.isConfigured()) {
@@ -13459,10 +13610,10 @@ match /shared/whitelistSmsTestNumbers {
         setGoogleConn(c => ({ ...c, connected: false, email: '', busyModule: null, error: null }));
       }, []);
 
-      // Build the module's workbook and push it into its Google Sheet, creating
-      // the sheet on first sync and updating it (same id/url) afterwards. On a
-      // deleted/inaccessible sheet (404/403) it recreates and re-stores the id.
-      const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, confirmOverwrite = false } = {}) => {
+      // Build the module's workbook and create its Google Sheet on first sync.
+      // Later syncs are append-only: only generated tabs whose titles are not
+      // already present are copied in, so existing Google data stays untouched.
+      const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = '' } = {}) => {
         const conf = GOOGLE_SYNC_MODULES[moduleId];
         if (!conf) return;
         if (!googleSheetsSync.isConfigured()) {
@@ -13470,59 +13621,72 @@ match /shared/whitelistSmsTestNumbers {
           setTimeout(() => setToast(null), 5000);
           return;
         }
-        // One-way sync: the app is the master, so every sync REPLACES the whole
-        // sheet. Confirm before overwriting an existing sheet (skipped on the
-        // first sync, and on the silent Generate-triggered sync).
-        const preId = (stateRef.current || DEFAULT_STATE).googleSheets?.sheetIds?.[moduleId] || '';
-        if (confirmOverwrite && preId) {
-          const ok = await confirmDialog({
-            title: 'Overwrite Google Sheet?',
-            message: 'This replaces the entire contents of the linked Google Sheet with the current app data. Any changes made directly in the sheet will be lost — the app is the source of truth.',
-            confirmText: 'Overwrite & sync',
-            tone: 'danger',
-          });
-          if (!ok) return;
-        }
         setGoogleConn(c => ({ ...c, busyModule: moduleId, error: null }));
         try {
           await googleSheetsSync.getToken({ interactive });
           const latest = stateRef.current || DEFAULT_STATE;
           const { blob, sheets } = await conf.build(latest);
-          const existingId = latest.googleSheets?.sheetIds?.[moduleId] || '';
+          const requestedSheets = onlyTabTitle
+            ? (sheets || []).filter(s => s.title === onlyTabTitle)
+            : (sheets || []);
+          if (onlyTabTitle && !requestedSheets.length) {
+            throw new Error(`The selected tab "${onlyTabTitle}" is not included in the generated workbook. Make sure it is active.`);
+          }
+          const targetId = latest.googleSheets?.targetSheetIds?.[moduleId] || '';
+          const ownedId = latest.googleSheets?.sheetIds?.[moduleId] || '';
+          const existingId = targetId || ownedId;
           let fileId = existingId;
+          let created = false;
+          let addedTabs = [];
           if (existingId) {
             try {
-              await googleSheetsSync.updateSheet(existingId, blob);
+              const result = await googleSheetsSync.appendMissingTabs(existingId, blob, requestedSheets, conf.sheetName);
+              addedTabs = result.added;
             } catch (e) {
-              if (e && (e.status === 404 || e.status === 403)) {
+              // A deleted linked file can safely be recreated. A 403 is not
+              // treated the same way: it may mean the Sheets API is disabled,
+              // and creating a second file would hide that actionable problem.
+              if (!targetId && e && e.status === 404) {
                 fileId = await googleSheetsSync.createSheet(conf.sheetName, blob);
+                created = true;
+                addedTabs = (sheets || []).map(s => s.title).filter(Boolean);
               } else { throw e; }
             }
           } else {
             fileId = await googleSheetsSync.createSheet(conf.sheetName, blob);
+            created = true;
+            addedTabs = (sheets || []).map(s => s.title).filter(Boolean);
           }
           if (fileId && fileId !== existingId) {
             setState(s => ({ ...s, googleSheets: { ...s.googleSheets, sheetIds: { ...s.googleSheets.sheetIds, [moduleId]: fileId } } }));
           }
-          // Drive re-pads the converted sheet to a 1000-row grid on every upload,
-          // so trim the empty tail back to the totals row after each sync. This
-          // is best-effort: the data is already synced, so a trim failure must
-          // not fail the sync — only surface the one actionable case (the Sheets
-          // API isn't enabled for the OAuth project).
+          // Only trim tabs created by this sync. Never resize a pre-existing tab,
+          // because it may contain user data beyond the generated range.
           let trimHint = '';
-          try {
-            await googleSheetsSync.trimSheetGrids(fileId, sheets);
-          } catch (e) {
-            console.warn('Trimming synced sheet grids failed', e);
-            if (/Google Sheets API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(e.message || '')) {
-              trimHint = 'Synced, but empty rows below the totals row could not be trimmed — enable the Google Sheets API for your OAuth project, then sync again.';
+          const addedSet = new Set(addedTabs);
+          const newTabDims = created ? sheets : requestedSheets.filter(s => addedSet.has(s.title));
+          if (newTabDims.length) {
+            try {
+              await googleSheetsSync.trimSheetGrids(fileId, newTabDims);
+            } catch (e) {
+              console.warn('Trimming newly added sheet grids failed', e);
+              if (/Google Sheets API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(e.message || '')) {
+                trimHint = 'New tabs were added, but empty rows could not be trimmed — enable the Google Sheets API, then try again.';
+              }
             }
           }
           setGoogleConn(c => ({
             ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null,
-            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId } },
+            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs } },
           }));
-          setToast({ type: trimHint ? 'err' : 'ok', msg: trimHint || 'Synced to Google Sheets' });
+          const successMsg = created
+            ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? '' : 's'}`
+            : addedTabs.length
+              ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? '' : 's'}; existing data was left unchanged`
+              : onlyTabTitle
+                ? `Tab "${onlyTabTitle}" already exists; no data was changed`
+                : 'No new tabs to add; existing Google Sheet data was left unchanged';
+          setToast({ type: trimHint ? 'err' : 'ok', msg: trimHint || successMsg });
           setTimeout(() => setToast(null), trimHint ? 8000 : 4000);
           return fileId;
         } catch (e) {
@@ -13684,8 +13848,17 @@ match /shared/whitelistSmsTestNumbers {
           // connected (SIP/FCS, BMR VOIP, BMR SMS only). Silent — never opens a
           // popup here, and a sync error can't undo the successful download.
           if (googleConn.connected && GOOGLE_SYNC_MODULES[state.module]) {
-            try { await syncModuleToSheets(state.module, { interactive: false }); }
-            catch { /* toast already surfaced by syncModuleToSheets */ }
+            const pastedTarget = state.googleSheets?.targetSheetIds?.[state.module] || '';
+            const selectedForTarget = state.module === 'sip_fcs'
+              ? state.sheets.find(s => s.id === state.selectedSheetId && s.active)
+              : null;
+            const onlyTabTitle = pastedTarget && selectedForTarget ? safeSheetName(selectedForTarget.name) : '';
+            // A pasted SIP/FCS destination is intentionally single-tab only.
+            // If the selected tab is inactive, leave the external file alone.
+            if (!(pastedTarget && state.module === 'sip_fcs' && !selectedForTarget)) {
+              try { await syncModuleToSheets(state.module, { interactive: false, onlyTabTitle }); }
+              catch { /* toast already surfaced by syncModuleToSheets */ }
+            }
           }
         } catch (e) {
           console.error(e);
@@ -13706,7 +13879,7 @@ match /shared/whitelistSmsTestNumbers {
       const googleConfigured = !!(googleClientId.trim() || GOOGLE_OAUTH_CLIENT_ID);
       const googleSyncProps = {
         conn: googleConn, configured: googleConfigured, clientId: googleClientId,
-        onSetClientId: setGoogleClientId,
+        onSetClientId: setGoogleClientId, onSetTargetSheet: setGoogleTargetSheet,
         connect: connectGoogle, disconnect: disconnectGoogle, sync: syncModuleToSheets,
         sheetUrl: googleSheetsSync.sheetUrl,
         backup: {

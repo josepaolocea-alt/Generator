@@ -2296,7 +2296,8 @@ const googleSheetsSync = (() => {
   let grantedScopes = "";
   const hasDriveScope = () => /https:\/\/www\.googleapis\.com\/auth\/drive(\.file)?/.test(grantedScopes);
   let clientId = GOOGLE_OAUTH_CLIENT_ID || "";
-  const REQUEST_SCOPE = "openid email " + GOOGLE_DRIVE_SCOPE;
+  const GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+  const REQUEST_SCOPE = "openid email " + GOOGLE_DRIVE_SCOPE + " " + GOOGLE_SHEETS_SCOPE;
   const isConfigured = () => !!clientId;
   const gisReady = () => !!(window.google && window.google.accounts && window.google.accounts.oauth2);
   function setClientId(id) {
@@ -2338,11 +2339,12 @@ const googleSheetsSync = (() => {
         grantedScopes = resp.scope || "";
         const ttlMs = (Number(resp.expires_in) || 3600) * 1e3;
         tokenExpiry = Date.now() + ttlMs - 6e4;
-        if (!hasDriveScope()) {
+        const hasSheetsScope = grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE);
+        if (!hasDriveScope() || !hasSheetsScope) {
           accessToken = null;
           tokenExpiry = 0;
-          const err = new Error("DRIVE_SCOPE_NOT_GRANTED");
-          err.code = "DRIVE_SCOPE_NOT_GRANTED";
+          const err = new Error("GOOGLE_SYNC_SCOPES_NOT_GRANTED");
+          err.code = "GOOGLE_SYNC_SCOPES_NOT_GRANTED";
           reject(err);
           return;
         }
@@ -2355,9 +2357,9 @@ const googleSheetsSync = (() => {
       }
     });
   }
-  const SCOPE_HELP = `Drive access wasn't granted. Click Connect again, and in the Google window keep the checkbox for "See, edit, create and delete only the specific Google Drive files you use with this app" ticked before continuing.`;
+  const SCOPE_HELP = "Google Sheets access wasn't granted. Click Connect again and approve both requested Drive and Google Sheets permissions.";
   async function getToken({ interactive = false } = {}) {
-    if (accessToken && Date.now() < tokenExpiry && hasDriveScope()) return accessToken;
+    if (accessToken && Date.now() < tokenExpiry && hasDriveScope() && grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE)) return accessToken;
     try {
       return await requestToken(interactive);
     } catch (e) {
@@ -2365,10 +2367,10 @@ const googleSheetsSync = (() => {
         try {
           return await requestToken(true);
         } catch (e2) {
-          throw e2.code === "DRIVE_SCOPE_NOT_GRANTED" ? new Error(SCOPE_HELP) : e2;
+          throw e2.code === "GOOGLE_SYNC_SCOPES_NOT_GRANTED" ? new Error(SCOPE_HELP) : e2;
         }
       }
-      throw e.code === "DRIVE_SCOPE_NOT_GRANTED" ? new Error(SCOPE_HELP) : e;
+      throw e.code === "GOOGLE_SYNC_SCOPES_NOT_GRANTED" ? new Error(SCOPE_HELP) : e;
     }
   }
   async function fetchEmail(token) {
@@ -2413,7 +2415,7 @@ const googleSheetsSync = (() => {
     grantedEmail = "";
     grantedScopes = "";
   }
-  const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasDriveScope();
+  const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasDriveScope() && grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE);
   const email = () => grantedEmail;
   const sheetUrl = (fileId) => "https://docs.google.com/spreadsheets/d/" + encodeURIComponent(fileId) + "/edit";
   async function driveError(r) {
@@ -2423,7 +2425,7 @@ const googleSheetsSync = (() => {
       detail = body?.error?.message || "";
     } catch {
     }
-    const err = new Error("Google Drive error " + r.status + (detail ? ": " + detail : ""));
+    const err = new Error("Google API error " + r.status + (detail ? ": " + detail : ""));
     err.status = r.status;
     return err;
   }
@@ -2441,15 +2443,83 @@ const googleSheetsSync = (() => {
     if (!r.ok) throw await driveError(r);
     return (await r.json()).id;
   }
-  async function updateSheet(fileId, blob) {
+  async function getSheetTabs(fileId) {
     const token = await getToken();
-    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files/" + encodeURIComponent(fileId) + "?uploadType=media&fields=id", {
-      method: "PATCH",
-      headers: { Authorization: "Bearer " + token, "Content-Type": XLSX_MIME },
-      body: blob
-    });
+    const r = await fetch(
+      "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?fields=sheets.properties(sheetId,title)",
+      { headers: { Authorization: "Bearer " + token } }
+    );
     if (!r.ok) throw await driveError(r);
-    return fileId;
+    const body = await r.json();
+    return (body.sheets || []).map((s) => s.properties).filter((p) => p && Number.isInteger(p.sheetId) && p.title);
+  }
+  async function copySheetTab(sourceFileId, sourceSheetId, destinationFileId, title) {
+    const token = await getToken();
+    const copyResp = await fetch(
+      "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(sourceFileId) + "/sheets/" + encodeURIComponent(sourceSheetId) + ":copyTo",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ destinationSpreadsheetId: destinationFileId })
+      }
+    );
+    if (!copyResp.ok) throw await driveError(copyResp);
+    const copied = await copyResp.json();
+    if (copied.title !== title) {
+      const renameResp = await fetch(
+        "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(destinationFileId) + ":batchUpdate",
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+          body: JSON.stringify({ requests: [{
+            updateSheetProperties: {
+              properties: { sheetId: copied.sheetId, title },
+              fields: "title"
+            }
+          }] })
+        }
+      );
+      if (!renameResp.ok) throw await driveError(renameResp);
+    }
+    return { ...copied, title };
+  }
+  async function deleteFile(fileId) {
+    if (!fileId) return;
+    const token = await getToken();
+    const r = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId), {
+      method: "DELETE",
+      headers: { Authorization: "Bearer " + token }
+    });
+    if (!r.ok && r.status !== 404) throw await driveError(r);
+  }
+  async function appendMissingTabs(fileId, blob, dims, tempName) {
+    const wanted = (dims || []).filter((d) => d && d.title);
+    const destinationTabs = await getSheetTabs(fileId);
+    const existingTitles = new Set(destinationTabs.map((p) => p.title));
+    const missing = wanted.filter((d) => !existingTitles.has(d.title));
+    if (!missing.length) return { added: [], existing: wanted.map((d) => d.title) };
+    let tempId = "";
+    const added = [];
+    try {
+      tempId = await createSheet((tempName || "Generator") + " — sync staging", blob);
+      const sourceTabs = await getSheetTabs(tempId);
+      const sourceByTitle = new Map(sourceTabs.map((p) => [p.title, p]));
+      for (const want of missing) {
+        const source = sourceByTitle.get(want.title);
+        if (!source) throw new Error('Generated tab "' + want.title + '" was not found in the converted workbook.');
+        await copySheetTab(tempId, source.sheetId, fileId, want.title);
+        added.push(want.title);
+      }
+      return { added, existing: wanted.filter((d) => existingTitles.has(d.title)).map((d) => d.title) };
+    } finally {
+      if (tempId) {
+        try {
+          await deleteFile(tempId);
+        } catch (e) {
+          console.warn("Could not delete temporary Google Sheet", e);
+        }
+      }
+    }
   }
   async function trimSheetGrids(fileId, dims) {
     const wanted = (dims || []).filter((d) => d && d.title && d.rows > 0 && d.cols > 0);
@@ -2526,7 +2596,7 @@ const googleSheetsSync = (() => {
     if (!r.ok) throw await driveError(r);
     return await r.json();
   }
-  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, updateSheet, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
 })();
 const backupStore = /* @__PURE__ */ (() => {
   const DB_NAME = "mrg_backups", STORE = "snapshots", MAX = 15;
@@ -2637,6 +2707,13 @@ const GOOGLE_SYNC_MODULES = {
   // Recorder module code further down this file.
   recorder: { build: buildRecorderBlob, sheetName: "Recorder — VOS Hourly Record" }
 };
+function googleSpreadsheetId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const fromUrl = raw.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/i);
+  if (fromUrl) return fromUrl[1];
+  return /^[A-Za-z0-9_-]{20,}$/.test(raw) ? raw : "";
+}
 const editorRuleId = () => "er_" + Math.random().toString(36).slice(2, 9);
 const DEFAULT_EDITOR_STATE = {
   name: "Pasted Table",
@@ -3331,15 +3408,21 @@ function BackupControls({ backup }) {
   };
   return /* @__PURE__ */ React.createElement("div", { className: "pt-2 mt-1 border-t border-neutral-900 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Weekly backup"), /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : "never")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Auto-saves data + Excel to Google Drive ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Generator Backups"), " every Friday (or Sat/Sun)."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onBackupNow, disabled: backup.busy || !backup.connected, className: "flex-1" }, backup.busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Backing up…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Back up now")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: toggle }, open ? "Hide" : "Restore")), !backup.connected && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-amber-500/80" }, "Connect Google Drive above to enable Drive backups."), backup.folderUrl && /* @__PURE__ */ React.createElement("a", { href: backup.folderUrl, target: "_blank", rel: "noopener noreferrer", className: "block text-[10px] text-blue-400 hover:text-blue-300 transition-colors" }, "Open Drive backup folder ↗"), open && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1" }, loading && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "Loading…"), !loading && snaps && snaps.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "No local snapshots yet."), !loading && snaps && snaps.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.ts, className: "flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-neutral-300 truncate" }, new Date(s.ts).toLocaleString()), /* @__PURE__ */ React.createElement("div", { className: "text-neutral-600 truncate" }, s.reason, " · VoIP ", s.counts?.voip ?? "?", " · WHS ", s.counts?.whs ?? "?", " · Retail ", s.counts?.retail ?? "?")), /* @__PURE__ */ React.createElement("button", { onClick: () => restore(s.ts), className: "ml-auto text-blue-400 hover:text-blue-300 shrink-0" }, "Restore")))));
 }
-function GoogleSheetSync({ gsheets, moduleId, sheetId }) {
+function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selectedTabTitle = "", selectedTabLabel = "" }) {
   const [draftId, setDraftId] = useState("");
   const [editing, setEditing] = useState(false);
+  const [targetDraft, setTargetDraft] = useState("");
+  useEffect(() => {
+    setTargetDraft(targetSheetId ? `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit` : "");
+  }, [targetSheetId]);
   if (!gsheets) return null;
-  const { conn, connect, disconnect, sync, sheetUrl, configured, clientId, onSetClientId } = gsheets;
+  const { conn, connect, disconnect, sync, sheetUrl, configured, clientId, onSetClientId, onSetTargetSheet } = gsheets;
   const busy = conn.busyModule === moduleId;
   const connecting = conn.busyModule === "__connect__";
   const last = conn.lastSync?.[moduleId];
-  const url = sheetId ? sheetUrl(sheetId) : null;
+  const destinationId = targetSheetId || sheetId;
+  const url = destinationId ? sheetUrl(destinationId) : null;
+  const selectedUnavailable = !!selectedTabLabel && !selectedTabTitle;
   const saveId = () => {
     if (draftId.trim()) {
       onSetClientId(draftId);
@@ -3366,7 +3449,18 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId }) {
       setDraftId("");
     } }, "Cancel")));
   }
-  return /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2.5 space-y-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement(IconSheet, null), /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Google Sheets"), conn.connected ? /* @__PURE__ */ React.createElement("span", { className: "ml-auto inline-flex items-center gap-1 text-emerald-400" }, /* @__PURE__ */ React.createElement("span", { className: "w-1.5 h-1.5 rounded-full bg-emerald-400" }), "Connected") : /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, "Not connected")), conn.connected && conn.email && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-500 truncate", title: conn.email }, conn.email), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, confirmOverwrite: true }), disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Syncing…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Sync now")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2.5 space-y-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement(IconSheet, null), /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Google Sheets"), conn.connected ? /* @__PURE__ */ React.createElement("span", { className: "ml-auto inline-flex items-center gap-1 text-emerald-400" }, /* @__PURE__ */ React.createElement("span", { className: "w-1.5 h-1.5 rounded-full bg-emerald-400" }), "Connected") : /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, "Not connected")), conn.connected && conn.email && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-500 truncate", title: conn.email }, conn.email), /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5 pt-1 border-t border-neutral-900" }, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] text-neutral-500" }, "Destination Google Sheet link"), /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      value: targetDraft,
+      onChange: (e) => setTargetDraft(e.target.value),
+      placeholder: "Paste the shared Google Sheet link",
+      className: "text-[10px] py-1.5 font-mono"
+    }
+  ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onSetTargetSheet(moduleId, targetDraft), disabled: !targetDraft.trim(), className: "flex-1" }, "Use this sheet"), targetSheetId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => {
+    setTargetDraft("");
+    onSetTargetSheet(moduleId, "");
+  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Existing tabs and data are never overwritten. A matching tab name is skipped."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -3809,6 +3903,7 @@ function UploadedSidebar({ state, setState }) {
 }
 function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
   const { year, month, sheets, selectedSheetId } = state;
+  const selectedSyncSheet = sheets.find((s) => s.id === selectedSheetId) || null;
   const theme = state.theme || "dark";
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const updateSheet = (id, patch) => setState((s) => ({ ...s, sheets: s.sheets.map((x) => x.id === id ? { ...x, ...patch } : x) }));
@@ -3940,7 +4035,17 @@ function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets
       onChange: (e) => setState((s) => ({ ...s, includeIndex: e.target.checked })),
       className: "w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer"
     }
-  ), "Include INDEX tab"), /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "sip_fcs", sheetId: state.googleSheets?.sheetIds?.sip_fcs }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate ", MONTHS[month], " ", year)), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  ), "Include INDEX tab"), /* @__PURE__ */ React.createElement(
+    GoogleSheetSync,
+    {
+      gsheets,
+      moduleId: "sip_fcs",
+      sheetId: state.googleSheets?.sheetIds?.sip_fcs,
+      targetSheetId: state.googleSheets?.targetSheetIds?.sip_fcs,
+      selectedTabTitle: selectedSyncSheet?.active ? safeSheetName(selectedSyncSheet.name) : "",
+      selectedTabLabel: selectedSyncSheet?.name || ""
+    }
+  ), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate ", MONTHS[month], " ", year)), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function ListEditor({ items, onChange, placeholder = "New item", label = "item", withDropdown = false, withColor = false }) {
   const [draft, setDraft] = useState("");
@@ -5784,7 +5889,7 @@ function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gshe
       className: "text-neutral-500 hover:text-red-400 p-0.5"
     },
     /* @__PURE__ */ React.createElement(IconX, null)
-  )))), /* @__PURE__ */ React.createElement(BmrHiddenColInput, { bmr, setBmr }))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr", sheetId: state.googleSheets?.sheetIds?.bmr }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR VOIP")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  )))), /* @__PURE__ */ React.createElement(BmrHiddenColInput, { bmr, setBmr }))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr", sheetId: state.googleSheets?.sheetIds?.bmr, targetSheetId: state.googleSheets?.targetSheetIds?.bmr }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR VOIP")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function BmrHiddenColInput({ bmr, setBmr }) {
   const [v, setV] = useState("");
@@ -5983,7 +6088,7 @@ function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, g
       onChange: (e) => setSms({ ...sms, includeNight: e.target.checked }),
       className: "w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500"
     }
-  ), /* @__PURE__ */ React.createElement("span", null, "7PM-7AM (Night)")))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr_sms", sheetId: state.googleSheets?.sheetIds?.bmr_sms }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR SMS")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  ), /* @__PURE__ */ React.createElement("span", null, "7PM-7AM (Night)")))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr_sms", sheetId: state.googleSheets?.sheetIds?.bmr_sms, targetSheetId: state.googleSheets?.targetSheetIds?.bmr_sms }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR SMS")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function EditorColorSwatch({ value, onChange, title = "Choose color", allowClear = true, fallback = "#FFFFFF" }) {
   return /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(
@@ -8695,11 +8800,14 @@ const DEFAULT_STATE = {
   // Image Editor: tool preferences only. The image itself is never stored
   // here — see the Image Editor module note.
   imageEditor: { ...DEFAULT_IMAGE_STATE },
-  // Google Sheets sync: the OAuth Client ID (set in-app, non-secret) plus
-  // durable file IDs of the app-owned sheets (one per module). No tokens
-  // here — all non-secret, so it rides the normal localStorage + Firestore
-  // sync. sheetIds are empty until the first sync creates them.
-  googleSheets: { clientId: "", backupFolderId: "", sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "" } },
+  // Google Sheets sync: durable IDs for app-created sheets plus optional
+  // pasted destinations owned by another account. No tokens are persisted.
+  googleSheets: {
+    clientId: "",
+    backupFolderId: "",
+    sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "" },
+    targetSheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "" }
+  },
   // Weekly Google Drive backup bookkeeping. lastWeekKey is the ISO week of
   // the last successful backup, stored in synced state so only one automatic
   // backup runs per week even across multiple devices/day-opens.
@@ -8807,6 +8915,10 @@ function normalizeAppState(raw = {}, options = {}) {
     sheetIds: {
       ...DEFAULT_STATE.googleSheets.sheetIds,
       ...merged.googleSheets && merged.googleSheets.sheetIds || {}
+    },
+    targetSheetIds: {
+      ...DEFAULT_STATE.googleSheets.targetSheetIds,
+      ...merged.googleSheets && merged.googleSheets.targetSheetIds || {}
     }
   };
   const backup = {
@@ -10062,7 +10174,7 @@ function RecorderSidebar({ state, setState, rec, sync, onRetrySync, target, setT
   )), /* @__PURE__ */ React.createElement("h1", { className: "text-[17px] font-bold tracking-tight leading-tight mt-2" }, "Recorder"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500 mt-1" }, "Screenshots → hourly record workbook"), /* @__PURE__ */ React.createElement(AccountChip, { sync })), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto min-h-0 space-y-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "every capture saves here" }, "Recording slot"), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-2" }, /* @__PURE__ */ React.createElement(Input, { type: "date", value: target.date, onChange: (e) => {
     const v = e.target.value;
     if (v) setTarget((t) => ({ ...t, date: v }));
-  } }), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: target.hour, onChange: (e) => setTarget((t) => ({ ...t, hour: Number(e.target.value) })) }, HOURS_24.map((h, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, h))), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setTarget({ date: recorderTodayIso(), hour: (/* @__PURE__ */ new Date()).getHours() }) }, "Now")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "saved values at this slot" }, "Coverage"), /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, slotStats.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-center justify-between gap-2 text-xs" }, /* @__PURE__ */ React.createElement("span", { className: "min-w-0 truncate text-neutral-400" }, s.name), /* @__PURE__ */ React.createElement(Pill, { tone: s.filled >= s.total && s.total > 0 ? "success" : s.filled ? "accent" : "default" }, s.filled, "/", s.total))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "everyone signed in sees the same data" }, "Team sync"), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: shared.status === "live" ? "success" : shared.status === "loading" ? "accent" : "muted" }, shared.status === "live" ? "Shared — live" : shared.status === "loading" ? "Refreshing…" : shared.status === "error" ? "Sync error" : "Local only"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: onRefreshShared, disabled: shared.status === "loading" || !sync.uid }, /* @__PURE__ */ React.createElement(IconReset, null), " Refresh")), shared.status === "live" && shared.at > 0 && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-neutral-600" }, "Team data pulled ", new Date(shared.at).toLocaleTimeString(), " — refreshes every minute and before each export."), shared.message && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-amber-300" }, shared.message)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: engine.status === "ready" ? "loaded" : "loads on first capture" }, "OCR engine"), /* @__PURE__ */ React.createElement(Pill, { tone: engine.status === "ready" ? "success" : engine.status === "idle" ? "default" : "accent" }, engine.status === "ready" ? "Ready" : engine.status === "idle" ? "Not loaded" : engine.label || "Loading…"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "Screenshots are read in this browser only — images are never stored in the app state or synced to the cloud."))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "recorder", sheetId: state.googleSheets?.sheetIds?.recorder }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Export month"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: exportSel.month, onChange: (e) => setExportSel((x) => ({ ...x, month: Number(e.target.value) })) }, RECORDER_MONTHS.map((m, i) => /* @__PURE__ */ React.createElement("option", { key: m, value: i }, m))), /* @__PURE__ */ React.createElement(Input, { type: "number", value: exportSel.year, onChange: (e) => setExportSel((x) => ({ ...x, year: e.target.value })), className: "!w-24" }))), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busyExport, className: "w-full" }, busyExport ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Building") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Download workbook")), /* @__PURE__ */ React.createElement("p", { className: "truncate text-center font-mono text-[10px] text-neutral-600", title: recorderFileName(rec.filePattern, exportYear, exportSel.month) }, recorderFileName(rec.filePattern, exportYear, exportSel.month))));
+  } }), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: target.hour, onChange: (e) => setTarget((t) => ({ ...t, hour: Number(e.target.value) })) }, HOURS_24.map((h, i) => /* @__PURE__ */ React.createElement("option", { key: i, value: i }, h))), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setTarget({ date: recorderTodayIso(), hour: (/* @__PURE__ */ new Date()).getHours() }) }, "Now")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "saved values at this slot" }, "Coverage"), /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, slotStats.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-center justify-between gap-2 text-xs" }, /* @__PURE__ */ React.createElement("span", { className: "min-w-0 truncate text-neutral-400" }, s.name), /* @__PURE__ */ React.createElement(Pill, { tone: s.filled >= s.total && s.total > 0 ? "success" : s.filled ? "accent" : "default" }, s.filled, "/", s.total))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "everyone signed in sees the same data" }, "Team sync"), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(Pill, { tone: shared.status === "live" ? "success" : shared.status === "loading" ? "accent" : "muted" }, shared.status === "live" ? "Shared — live" : shared.status === "loading" ? "Refreshing…" : shared.status === "error" ? "Sync error" : "Local only"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: onRefreshShared, disabled: shared.status === "loading" || !sync.uid }, /* @__PURE__ */ React.createElement(IconReset, null), " Refresh")), shared.status === "live" && shared.at > 0 && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-neutral-600" }, "Team data pulled ", new Date(shared.at).toLocaleTimeString(), " — refreshes every minute and before each export."), shared.message && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-amber-300" }, shared.message)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: engine.status === "ready" ? "loaded" : "loads on first capture" }, "OCR engine"), /* @__PURE__ */ React.createElement(Pill, { tone: engine.status === "ready" ? "success" : engine.status === "idle" ? "default" : "accent" }, engine.status === "ready" ? "Ready" : engine.status === "idle" ? "Not loaded" : engine.label || "Loading…"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "Screenshots are read in this browser only — images are never stored in the app state or synced to the cloud."))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "recorder", sheetId: state.googleSheets?.sheetIds?.recorder, targetSheetId: state.googleSheets?.targetSheetIds?.recorder }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "mb-1.5 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Export month"), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Select, { value: exportSel.month, onChange: (e) => setExportSel((x) => ({ ...x, month: Number(e.target.value) })) }, RECORDER_MONTHS.map((m, i) => /* @__PURE__ */ React.createElement("option", { key: m, value: i }, m))), /* @__PURE__ */ React.createElement(Input, { type: "number", value: exportSel.year, onChange: (e) => setExportSel((x) => ({ ...x, year: e.target.value })), className: "!w-24" }))), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busyExport, className: "w-full" }, busyExport ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Building") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Download workbook")), /* @__PURE__ */ React.createElement("p", { className: "truncate text-center font-mono text-[10px] text-neutral-600", title: recorderFileName(rec.filePattern, exportYear, exportSel.month) }, recorderFileName(rec.filePattern, exportYear, exportSel.month))));
 }
 function RecorderModule({ state, setState, sync, onRetrySync, moduleSwitch, onToast, confirmDialog: confirmDialog2, gsheets }) {
   const rec = useMemo(() => recorderNormalizeState(state.recorder), [state.recorder]);
@@ -11262,6 +11374,32 @@ function App() {
     setGoogleConn((c) => ({ ...c, connected: false, email: "", busyModule: null, error: null }));
     setState((s) => ({ ...s, googleSheets: { ...s.googleSheets || {}, clientId: v } }));
   }, []);
+  const setGoogleTargetSheet = useCallback((moduleId, value) => {
+    const raw = String(value || "").trim();
+    const id = googleSpreadsheetId(raw);
+    if (raw && !id) {
+      setToast({ type: "err", msg: "Paste a valid Google Sheets link." });
+      setTimeout(() => setToast(null), 4e3);
+      return false;
+    }
+    setState((s) => ({
+      ...s,
+      googleSheets: {
+        ...s.googleSheets || {},
+        targetSheetIds: {
+          ...DEFAULT_STATE.googleSheets.targetSheetIds,
+          ...s.googleSheets && s.googleSheets.targetSheetIds || {},
+          [moduleId]: id
+        }
+      }
+    }));
+    setToast({
+      type: "ok",
+      msg: id ? "Destination saved. Make sure its owner shared it with the connected account as Editor." : "Pasted destination cleared."
+    });
+    setTimeout(() => setToast(null), 5e3);
+    return true;
+  }, []);
   const connectGoogle = useCallback(async () => {
     if (!googleSheetsSync.isConfigured()) {
       setToast({ type: "err", msg: "Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync." });
@@ -11283,7 +11421,7 @@ function App() {
     googleSheetsSync.disconnect();
     setGoogleConn((c) => ({ ...c, connected: false, email: "", busyModule: null, error: null }));
   }, []);
-  const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, confirmOverwrite = false } = {}) => {
+  const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = "" } = {}) => {
     const conf = GOOGLE_SYNC_MODULES[moduleId];
     if (!conf) return;
     if (!googleSheetsSync.isConfigured()) {
@@ -11291,46 +11429,53 @@ function App() {
       setTimeout(() => setToast(null), 5e3);
       return;
     }
-    const preId = (stateRef.current || DEFAULT_STATE).googleSheets?.sheetIds?.[moduleId] || "";
-    if (confirmOverwrite && preId) {
-      const ok = await confirmDialog({
-        title: "Overwrite Google Sheet?",
-        message: "This replaces the entire contents of the linked Google Sheet with the current app data. Any changes made directly in the sheet will be lost — the app is the source of truth.",
-        confirmText: "Overwrite & sync",
-        tone: "danger"
-      });
-      if (!ok) return;
-    }
     setGoogleConn((c) => ({ ...c, busyModule: moduleId, error: null }));
     try {
       await googleSheetsSync.getToken({ interactive });
       const latest = stateRef.current || DEFAULT_STATE;
       const { blob, sheets } = await conf.build(latest);
-      const existingId = latest.googleSheets?.sheetIds?.[moduleId] || "";
+      const requestedSheets = onlyTabTitle ? (sheets || []).filter((s) => s.title === onlyTabTitle) : sheets || [];
+      if (onlyTabTitle && !requestedSheets.length) {
+        throw new Error(`The selected tab "${onlyTabTitle}" is not included in the generated workbook. Make sure it is active.`);
+      }
+      const targetId = latest.googleSheets?.targetSheetIds?.[moduleId] || "";
+      const ownedId = latest.googleSheets?.sheetIds?.[moduleId] || "";
+      const existingId = targetId || ownedId;
       let fileId = existingId;
+      let created = false;
+      let addedTabs = [];
       if (existingId) {
         try {
-          await googleSheetsSync.updateSheet(existingId, blob);
+          const result = await googleSheetsSync.appendMissingTabs(existingId, blob, requestedSheets, conf.sheetName);
+          addedTabs = result.added;
         } catch (e) {
-          if (e && (e.status === 404 || e.status === 403)) {
+          if (!targetId && e && e.status === 404) {
             fileId = await googleSheetsSync.createSheet(conf.sheetName, blob);
+            created = true;
+            addedTabs = (sheets || []).map((s) => s.title).filter(Boolean);
           } else {
             throw e;
           }
         }
       } else {
         fileId = await googleSheetsSync.createSheet(conf.sheetName, blob);
+        created = true;
+        addedTabs = (sheets || []).map((s) => s.title).filter(Boolean);
       }
       if (fileId && fileId !== existingId) {
         setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, sheetIds: { ...s.googleSheets.sheetIds, [moduleId]: fileId } } }));
       }
       let trimHint = "";
-      try {
-        await googleSheetsSync.trimSheetGrids(fileId, sheets);
-      } catch (e) {
-        console.warn("Trimming synced sheet grids failed", e);
-        if (/Google Sheets API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(e.message || "")) {
-          trimHint = "Synced, but empty rows below the totals row could not be trimmed — enable the Google Sheets API for your OAuth project, then sync again.";
+      const addedSet = new Set(addedTabs);
+      const newTabDims = created ? sheets : requestedSheets.filter((s) => addedSet.has(s.title));
+      if (newTabDims.length) {
+        try {
+          await googleSheetsSync.trimSheetGrids(fileId, newTabDims);
+        } catch (e) {
+          console.warn("Trimming newly added sheet grids failed", e);
+          if (/Google Sheets API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(e.message || "")) {
+            trimHint = "New tabs were added, but empty rows could not be trimmed — enable the Google Sheets API, then try again.";
+          }
         }
       }
       setGoogleConn((c) => ({
@@ -11338,9 +11483,10 @@ function App() {
         connected: true,
         email: googleSheetsSync.email() || c.email,
         busyModule: null,
-        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId } }
+        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs } }
       }));
-      setToast({ type: trimHint ? "err" : "ok", msg: trimHint || "Synced to Google Sheets" });
+      const successMsg = created ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}` : addedTabs.length ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? "" : "s"}; existing data was left unchanged` : onlyTabTitle ? `Tab "${onlyTabTitle}" already exists; no data was changed` : "No new tabs to add; existing Google Sheet data was left unchanged";
+      setToast({ type: trimHint ? "err" : "ok", msg: trimHint || successMsg });
       setTimeout(() => setToast(null), trimHint ? 8e3 : 4e3);
       return fileId;
     } catch (e) {
@@ -11484,9 +11630,14 @@ function App() {
         setToast({ type: "ok", msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
       }
       if (googleConn.connected && GOOGLE_SYNC_MODULES[state.module]) {
-        try {
-          await syncModuleToSheets(state.module, { interactive: false });
-        } catch {
+        const pastedTarget = state.googleSheets?.targetSheetIds?.[state.module] || "";
+        const selectedForTarget = state.module === "sip_fcs" ? state.sheets.find((s) => s.id === state.selectedSheetId && s.active) : null;
+        const onlyTabTitle = pastedTarget && selectedForTarget ? safeSheetName(selectedForTarget.name) : "";
+        if (!(pastedTarget && state.module === "sip_fcs" && !selectedForTarget)) {
+          try {
+            await syncModuleToSheets(state.module, { interactive: false, onlyTabTitle });
+          } catch {
+          }
         }
       }
     } catch (e) {
@@ -11507,6 +11658,7 @@ function App() {
     configured: googleConfigured,
     clientId: googleClientId,
     onSetClientId: setGoogleClientId,
+    onSetTargetSheet: setGoogleTargetSheet,
     connect: connectGoogle,
     disconnect: disconnectGoogle,
     sync: syncModuleToSheets,
