@@ -2525,60 +2525,67 @@ const googleSheetsSync = (() => {
       }
     }
   }
-  async function replaceExistingTab(fileId, blob, dim, tempName) {
-    const title = dim && dim.title;
-    if (!fileId || !title) throw new Error("Choose a valid tab to update.");
+  async function replaceExistingTabs(fileId, blob, dims, tempName) {
+    const wanted = (dims || []).filter((d) => d && d.title);
+    if (!fileId || !wanted.length) throw new Error("Check at least one sheet to update.");
     const destinationTabs = await getSheetTabs(fileId);
-    const existing = destinationTabs.find((p) => p.title === title);
-    if (!existing) return { updated: false, missing: true, title };
+    const destinationByTitle = new Map(destinationTabs.map((p) => [p.title, p]));
+    const replaceable = wanted.map((dim) => ({ dim, existing: destinationByTitle.get(dim.title) })).filter((item) => item.existing);
+    const missing = wanted.filter((dim) => !destinationByTitle.has(dim.title)).map((dim) => dim.title);
+    if (!replaceable.length) return { updated: [], missing };
     let tempId = "";
-    let copied = null;
+    const staged = [];
     try {
       tempId = await createSheet((tempName || "Generator") + " — update staging", blob);
       const sourceTabs = await getSheetTabs(tempId);
-      const source = sourceTabs.find((p) => p.title === title);
-      if (!source) throw new Error('Generated tab "' + title + '" was not found in the converted workbook.');
-      copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
+      const sourceByTitle = new Map(sourceTabs.map((p) => [p.title, p]));
+      for (const item of replaceable) {
+        const source = sourceByTitle.get(item.dim.title);
+        if (!source) throw new Error('Generated tab "' + item.dim.title + '" was not found in the converted workbook.');
+        const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
+        staged.push({ ...item, copied });
+      }
+      const stamp = Date.now();
+      const renameOld = staged.map((item) => ({
+        updateSheetProperties: {
+          properties: { sheetId: item.existing.sheetId, title: "__mrg_old_" + stamp + "_" + item.existing.sheetId },
+          fields: "title"
+        }
+      }));
+      const deleteOld = [...staged].sort((a, b) => (b.existing.index || 0) - (a.existing.index || 0)).map((item) => ({ deleteSheet: { sheetId: item.existing.sheetId } }));
+      const installNew = [...staged].sort((a, b) => (a.existing.index || 0) - (b.existing.index || 0)).map((item) => ({
+        updateSheetProperties: {
+          properties: { sheetId: item.copied.sheetId, title: item.dim.title, index: item.existing.index || 0 },
+          fields: "title,index"
+        }
+      }));
       const token = await getToken();
-      const backupTitle = "__mrg_old_" + Date.now() + "_" + existing.sheetId;
       const replaceResp = await fetch(
         "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + ":batchUpdate",
         {
           method: "POST",
           headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-          body: JSON.stringify({ requests: [
-            {
-              updateSheetProperties: {
-                properties: { sheetId: existing.sheetId, title: backupTitle },
-                fields: "title"
-              }
-            },
-            {
-              updateSheetProperties: {
-                properties: { sheetId: copied.sheetId, title, index: existing.index || 0 },
-                fields: "title,index"
-              }
-            },
-            { deleteSheet: { sheetId: existing.sheetId } }
-          ] })
+          body: JSON.stringify({ requests: [...renameOld, ...deleteOld, ...installNew] })
         }
       );
       if (!replaceResp.ok) throw await driveError(replaceResp);
-      return { updated: true, missing: false, title };
+      return { updated: staged.map((item) => item.dim.title), missing };
     } catch (e) {
-      if (copied && copied.sheetId) {
+      if (staged.length) {
         try {
           const currentTabs = await getSheetTabs(fileId);
-          const originalStillExists = currentTabs.some((p) => p.sheetId === existing.sheetId);
-          const replacementExists = currentTabs.some((p) => p.sheetId === copied.sheetId && p.title === title);
-          if (!originalStillExists && replacementExists) return { updated: true, missing: false, title };
-          const stagingStillExists = currentTabs.some((p) => p.sheetId === copied.sheetId);
-          if (originalStillExists && stagingStillExists) {
+          const completed = staged.every(
+            (item) => !currentTabs.some((p) => p.sheetId === item.existing.sheetId) && currentTabs.some((p) => p.sheetId === item.copied.sheetId && p.title === item.dim.title)
+          );
+          if (completed) return { updated: staged.map((item) => item.dim.title), missing };
+          const originalsIntact = staged.every((item) => currentTabs.some((p) => p.sheetId === item.existing.sheetId));
+          const stagingIds = staged.filter((item) => currentTabs.some((p) => p.sheetId === item.copied.sheetId)).map((item) => item.copied.sheetId);
+          if (originalsIntact && stagingIds.length) {
             const token = await getToken();
             await fetch("https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + ":batchUpdate", {
               method: "POST",
               headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-              body: JSON.stringify({ requests: [{ deleteSheet: { sheetId: copied.sheetId } }] })
+              body: JSON.stringify({ requests: stagingIds.map((sheetId) => ({ deleteSheet: { sheetId } })) })
             });
           }
         } catch {
@@ -2670,7 +2677,7 @@ const googleSheetsSync = (() => {
     if (!r.ok) throw await driveError(r);
     return await r.json();
   }
-  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTab, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
 })();
 const backupStore = /* @__PURE__ */ (() => {
   const DB_NAME = "mrg_backups", STORE = "snapshots", MAX = 15;
@@ -3577,7 +3584,7 @@ function BackupControls({ backup }) {
   };
   return /* @__PURE__ */ React.createElement("div", { className: "pt-2 mt-1 border-t border-neutral-900 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Weekly backup"), /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : "never")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Auto-saves data + Excel to Google Drive ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Generator Backups"), " every Friday (or Sat/Sun)."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onBackupNow, disabled: backup.busy || !backup.connected, className: "flex-1" }, backup.busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Backing up…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Back up now")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: toggle }, open ? "Hide" : "Restore")), !backup.connected && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-amber-500/80" }, "Connect Google Drive above to enable Drive backups."), backup.folderUrl && /* @__PURE__ */ React.createElement("a", { href: backup.folderUrl, target: "_blank", rel: "noopener noreferrer", className: "block text-[10px] text-blue-400 hover:text-blue-300 transition-colors" }, "Open Drive backup folder ↗"), open && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1" }, loading && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "Loading…"), !loading && snaps && snaps.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "No local snapshots yet."), !loading && snaps && snaps.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.ts, className: "flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-neutral-300 truncate" }, new Date(s.ts).toLocaleString()), /* @__PURE__ */ React.createElement("div", { className: "text-neutral-600 truncate" }, s.reason, " · VoIP ", s.counts?.voip ?? "?", " · WHS ", s.counts?.whs ?? "?", " · Retail ", s.counts?.retail ?? "?")), /* @__PURE__ */ React.createElement("button", { onClick: () => restore(s.ts), className: "ml-auto text-blue-400 hover:text-blue-300 shrink-0" }, "Restore")))));
 }
-function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selectedTabTitle = "", selectedTabLabel = "" }) {
+function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selectedTabTitle = "", selectedTabLabel = "", checkedTabTitles = [] }) {
   const [draftId, setDraftId] = useState("");
   const [editing, setEditing] = useState(false);
   const [targetDraft, setTargetDraft] = useState("");
@@ -3592,6 +3599,7 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
   const destinationId = targetSheetId || sheetId;
   const url = destinationId ? sheetUrl(destinationId) : null;
   const selectedUnavailable = !!selectedTabLabel && !selectedTabTitle;
+  const checkedTitles = Array.isArray(checkedTabTitles) ? checkedTabTitles.filter(Boolean) : [];
   const saveId = () => {
     if (draftId.trim()) {
       onSetClientId(draftId);
@@ -3629,7 +3637,7 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
   ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onSetTargetSheet(moduleId, targetDraft), disabled: !targetDraft.trim(), className: "flex-1" }, "Use this sheet"), targetSheetId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => {
     setTargetDraft("");
     onSetTargetSheet(moduleId, "");
-  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && selectedTabTitle && /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle, replaceExisting: true }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? "Updating…" : "Update selected tab"), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add"), " skips a matching name. ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Update"), " replaces only the selected tab after confirmation."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
+  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Updating…" : `Update checked sheets (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add"), " uses the selected row. ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Update"), " uses every checked sheet and ignores the selected row."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -4213,7 +4221,8 @@ function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets
       sheetId: state.googleSheets?.sheetIds?.sip_fcs,
       targetSheetId: state.googleSheets?.targetSheetIds?.sip_fcs,
       selectedTabTitle: selectedSyncSheet?.active ? safeSheetName(selectedSyncSheet.name) : "",
-      selectedTabLabel: selectedSyncSheet?.name || ""
+      selectedTabLabel: selectedSyncSheet?.name || "",
+      checkedTabTitles: sheets.filter((s) => s.active).map((s) => safeSheetName(s.name))
     }
   ), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate ", MONTHS[month], " ", year)), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
@@ -11593,7 +11602,7 @@ function App() {
     googleSheetsSync.disconnect();
     setGoogleConn((c) => ({ ...c, connected: false, email: "", busyModule: null, error: null }));
   }, []);
-  const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = "", replaceExisting = false } = {}) => {
+  const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = "", onlyTabTitles = [], replaceExisting = false } = {}) => {
     const conf = GOOGLE_SYNC_MODULES[moduleId];
     if (!conf) return;
     if (!googleSheetsSync.isConfigured()) {
@@ -11602,15 +11611,16 @@ function App() {
       return;
     }
     if (replaceExisting) {
-      if (!onlyTabTitle) {
-        setToast({ type: "err", msg: "Select the tab you want to update first." });
+      const checkedCount = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean).length : 0;
+      if (!checkedCount) {
+        setToast({ type: "err", msg: "Check at least one sheet to update." });
         setTimeout(() => setToast(null), 4e3);
         return;
       }
       const ok = await confirmDialog({
-        title: `Update "${onlyTabTitle}"?`,
-        message: `Only the existing "${onlyTabTitle}" tab will be replaced with the current app version. Every other Google Sheet tab will remain unchanged.`,
-        confirmText: "Update selected tab",
+        title: `Update ${checkedCount} checked sheet${checkedCount === 1 ? "" : "s"}?`,
+        message: `The ${checkedCount} checked sheet${checkedCount === 1 ? "" : "s"} will replace matching tabs in Google Sheets. Unchecked sheets and all unrelated tabs will remain unchanged.`,
+        confirmText: "Update checked sheets",
         tone: "danger"
       });
       if (!ok) return;
@@ -11620,9 +11630,13 @@ function App() {
       await googleSheetsSync.getToken({ interactive });
       const latest = stateRef.current || DEFAULT_STATE;
       const { blob, sheets } = await conf.build(latest);
-      const requestedSheets = onlyTabTitle ? (sheets || []).filter((s) => s.title === onlyTabTitle) : sheets || [];
+      const checkedTitleSet = new Set(Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean) : []);
+      const requestedSheets = replaceExisting ? (sheets || []).filter((s) => checkedTitleSet.has(s.title)) : onlyTabTitle ? (sheets || []).filter((s) => s.title === onlyTabTitle) : sheets || [];
       if (onlyTabTitle && !requestedSheets.length) {
         throw new Error(`The selected tab "${onlyTabTitle}" is not included in the generated workbook. Make sure it is active.`);
+      }
+      if (replaceExisting && requestedSheets.length !== checkedTitleSet.size) {
+        throw new Error("One or more checked sheets are not included in the generated workbook. Refresh the app and try again.");
       }
       const targetId = latest.googleSheets?.targetSheetIds?.[moduleId] || "";
       const ownedId = latest.googleSheets?.sheetIds?.[moduleId] || "";
@@ -11631,11 +11645,15 @@ function App() {
       let created = false;
       let addedTabs = [];
       let updatedTabs = [];
+      let missingUpdateTabs = [];
       if (replaceExisting) {
-        if (!existingId) throw new Error("Set or create a destination Google Sheet before updating a tab.");
-        const result = await googleSheetsSync.replaceExistingTab(existingId, blob, requestedSheets[0], conf.sheetName);
-        if (result.missing) throw new Error(`Tab "${onlyTabTitle}" does not exist yet. Use Add selected tab first.`);
-        updatedTabs = [onlyTabTitle];
+        if (!existingId) throw new Error("Set or create a destination Google Sheet before updating checked sheets.");
+        const result = await googleSheetsSync.replaceExistingTabs(existingId, blob, requestedSheets, conf.sheetName);
+        updatedTabs = result.updated;
+        missingUpdateTabs = result.missing;
+        if (!updatedTabs.length) {
+          throw new Error("None of the checked sheets exist in the destination yet. Add each new tab with Add selected tab first.");
+        }
       } else if (existingId) {
         try {
           const result = await googleSheetsSync.appendMissingTabs(existingId, blob, requestedSheets, conf.sheetName);
@@ -11665,9 +11683,9 @@ function App() {
         try {
           await googleSheetsSync.trimSheetGrids(fileId, newTabDims);
         } catch (e) {
-          console.warn("Trimming newly added sheet grids failed", e);
+          console.warn("Trimming synced sheet grids failed", e);
           if (/Google Sheets API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(e.message || "")) {
-            trimHint = "New tabs were added, but empty rows could not be trimmed — enable the Google Sheets API, then try again.";
+            trimHint = "Sheets were synced, but empty rows could not be trimmed — enable the Google Sheets API, then try again.";
           }
         }
       }
@@ -11676,9 +11694,9 @@ function App() {
         connected: true,
         email: googleSheetsSync.email() || c.email,
         busyModule: null,
-        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs } }
+        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs } }
       }));
-      const successMsg = updatedTabs.length ? `Updated only "${updatedTabs[0]}"; every other tab was left unchanged` : created ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}` : addedTabs.length ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? "" : "s"}; existing data was left unchanged` : onlyTabTitle ? `Tab "${onlyTabTitle}" already exists; no data was changed` : "No new tabs to add; existing Google Sheet data was left unchanged";
+      const successMsg = updatedTabs.length ? `Updated ${updatedTabs.length} checked sheet${updatedTabs.length === 1 ? "" : "s"}${missingUpdateTabs.length ? `; ${missingUpdateTabs.length} new tab${missingUpdateTabs.length === 1 ? "" : "s"} skipped — use Add selected tab` : ""}. Unchecked tabs were unchanged` : created ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}` : addedTabs.length ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? "" : "s"}; existing data was left unchanged` : onlyTabTitle ? `Tab "${onlyTabTitle}" already exists; no data was changed` : "No new tabs to add; existing Google Sheet data was left unchanged";
       setToast({ type: trimHint ? "err" : "ok", msg: trimHint || successMsg });
       setTimeout(() => setToast(null), trimHint ? 8e3 : 4e3);
       return fileId;
