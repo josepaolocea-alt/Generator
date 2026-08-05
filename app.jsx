@@ -3833,21 +3833,20 @@ https://bit.ly/4vrcu64`;
             <AccountChip sync={sync} />
           </div>
 
-          {/* Period */}
-          <div className="p-5 border-b border-neutral-900">
-            <SectionLabel>Period</SectionLabel>
+          {/* Period and sheet list share one scroll area so the sheets remain
+              reachable on short displays. */}
+          <div className="p-5 flex-1 overflow-y-auto min-h-0">
+            <SectionLabel>Period & sheets</SectionLabel>
             <div className="grid grid-cols-3 gap-2">
               <Select value={month} onChange={e => setState(s => ({ ...s, month: Number(e.target.value) }))} className="col-span-2">
                 {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
               </Select>
               <Input type="number" value={year} onChange={e => setState(s => ({ ...s, year: Number(e.target.value) }))} />
             </div>
-            <p className="text-[11px] text-neutral-500 mt-2 font-mono">{daysInMonth(year, month)} days · 24h cycle</p>
-          </div>
-
-          {/* Sheet list */}
-          <div className="p-5 flex-1 overflow-y-auto min-h-0">
-            <SectionLabel hint={`${sheets.filter(s => s.active).length}/${sheets.length} active`}>Sheets</SectionLabel>
+            <div className="flex items-center justify-between gap-3 mt-2 mb-3 text-[10px] text-neutral-500 font-mono">
+              <span>{daysInMonth(year, month)} days · 24h cycle</span>
+              <span>{sheets.filter(s => s.active).length}/{sheets.length} active</span>
+            </div>
             <div className="space-y-0.5">
               {sheets.map((s, i) => {
                 const isDragging = dragIndex === i;
