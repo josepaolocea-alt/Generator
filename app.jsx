@@ -2198,7 +2198,7 @@
       async function getSheetTabs(fileId) {
         const token = await getToken();
         const r = await fetch(
-          'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + '?fields=sheets.properties(sheetId,title)',
+          'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + '?fields=sheets.properties(sheetId,title,index)',
           { headers: { Authorization: 'Bearer ' + token } },
         );
         if (!r.ok) throw await driveError(r);
@@ -2206,9 +2206,7 @@
         return (body.sheets || []).map(s => s.properties).filter(p => p && Number.isInteger(p.sheetId) && p.title);
       }
 
-      // Copy one converted tab into an existing spreadsheet, then restore its
-      // intended title (Google may initially name cross-file copies "Copy of …").
-      async function copySheetTab(sourceFileId, sourceSheetId, destinationFileId, title) {
+      async function copySheetTabRaw(sourceFileId, sourceSheetId, destinationFileId) {
         const token = await getToken();
         const copyResp = await fetch(
           'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(sourceFileId) + '/sheets/' + encodeURIComponent(sourceSheetId) + ':copyTo',
@@ -2219,7 +2217,14 @@
           },
         );
         if (!copyResp.ok) throw await driveError(copyResp);
-        const copied = await copyResp.json();
+        return await copyResp.json();
+      }
+
+      // Copy one converted tab into an existing spreadsheet, then restore its
+      // intended title (Google may initially name cross-file copies "Copy of …").
+      async function copySheetTab(sourceFileId, sourceSheetId, destinationFileId, title) {
+        const token = await getToken();
+        const copied = await copySheetTabRaw(sourceFileId, sourceSheetId, destinationFileId);
         if (copied.title !== title) {
           const renameResp = await fetch(
             'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(destinationFileId) + ':batchUpdate',
@@ -2276,6 +2281,80 @@
             added.push(want.title);
           }
           return { added, existing: wanted.filter(d => existingTitles.has(d.title)).map(d => d.title) };
+        } finally {
+          if (tempId) {
+            try { await deleteFile(tempId); }
+            catch (e) { console.warn('Could not delete temporary Google Sheet', e); }
+          }
+        }
+      }
+
+      // Replace exactly one existing destination tab. The replacement is copied
+      // in first under a temporary title; only after that succeeds do we atomically
+      // rename it into place and delete the old tab. Other tabs are untouched.
+      async function replaceExistingTab(fileId, blob, dim, tempName) {
+        const title = dim && dim.title;
+        if (!fileId || !title) throw new Error('Choose a valid tab to update.');
+        const destinationTabs = await getSheetTabs(fileId);
+        const existing = destinationTabs.find(p => p.title === title);
+        if (!existing) return { updated: false, missing: true, title };
+
+        let tempId = '';
+        let copied = null;
+        try {
+          tempId = await createSheet((tempName || 'Generator') + ' — update staging', blob);
+          const sourceTabs = await getSheetTabs(tempId);
+          const source = sourceTabs.find(p => p.title === title);
+          if (!source) throw new Error('Generated tab "' + title + '" was not found in the converted workbook.');
+          copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
+
+          const token = await getToken();
+          const backupTitle = '__mrg_old_' + Date.now() + '_' + existing.sheetId;
+          const replaceResp = await fetch(
+            'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + ':batchUpdate',
+            {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requests: [
+                {
+                  updateSheetProperties: {
+                    properties: { sheetId: existing.sheetId, title: backupTitle },
+                    fields: 'title',
+                  },
+                },
+                {
+                  updateSheetProperties: {
+                    properties: { sheetId: copied.sheetId, title, index: existing.index || 0 },
+                    fields: 'title,index',
+                  },
+                },
+                { deleteSheet: { sheetId: existing.sheetId } },
+              ] }),
+            },
+          );
+          if (!replaceResp.ok) throw await driveError(replaceResp);
+          return { updated: true, missing: false, title };
+        } catch (e) {
+          // If the response was interrupted, verify the final state before any
+          // cleanup. This avoids deleting a replacement that actually succeeded.
+          if (copied && copied.sheetId) {
+            try {
+              const currentTabs = await getSheetTabs(fileId);
+              const originalStillExists = currentTabs.some(p => p.sheetId === existing.sheetId);
+              const replacementExists = currentTabs.some(p => p.sheetId === copied.sheetId && p.title === title);
+              if (!originalStillExists && replacementExists) return { updated: true, missing: false, title };
+              const stagingStillExists = currentTabs.some(p => p.sheetId === copied.sheetId);
+              if (originalStillExists && stagingStillExists) {
+                const token = await getToken();
+                await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + ':batchUpdate', {
+                  method: 'POST',
+                  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ requests: [{ deleteSheet: { sheetId: copied.sheetId } }] }),
+                });
+              }
+            } catch { /* preserve both tabs when the state cannot be verified */ }
+          }
+          throw e;
         } finally {
           if (tempId) {
             try { await deleteFile(tempId); }
@@ -2377,7 +2456,7 @@
         return await r.json();
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTab, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
     })();
 
     /* ============================================================
@@ -3504,7 +3583,12 @@ https://bit.ly/4vrcu64`;
               <Btn variant="ghost" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || '' })} disabled={busy || selectedUnavailable} className="w-full">
                 {busy ? <><span className="loader"></span> Checking tabs…</> : <>{selectedUnavailable ? 'Activate selected tab first' : url ? (selectedTabTitle ? 'Add selected tab' : 'Add new tabs') : 'Create Google Sheet'}</>}
               </Btn>
-              {url && <p className="text-[10px] text-neutral-600 leading-relaxed">Existing tabs and data are never overwritten. A matching tab name is skipped.</p>}
+              {url && selectedTabTitle && (
+                <Btn variant="danger" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle, replaceExisting: true })} disabled={busy || selectedUnavailable} className="w-full">
+                  {busy ? 'Updating…' : 'Update selected tab'}
+                </Btn>
+              )}
+              {url && <p className="text-[10px] text-neutral-600 leading-relaxed"><span className="text-neutral-400">Add</span> skips a matching name. <span className="text-neutral-400">Update</span> replaces only the selected tab after confirmation.</p>}
               <div className="flex items-center justify-between text-[10px]">
                 {url
                   ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">Open sheet ↗</a>
@@ -13722,15 +13806,29 @@ match /shared/whitelistSmsTestNumbers {
       }, []);
 
       // Build the module's workbook and create its Google Sheet on first sync.
-      // Later syncs are append-only: only generated tabs whose titles are not
-      // already present are copied in, so existing Google data stays untouched.
-      const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = '' } = {}) => {
+      // Later the caller can either append a missing tab or explicitly replace
+      // one selected existing tab after confirmation; other tabs stay untouched.
+      const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = '', replaceExisting = false } = {}) => {
         const conf = GOOGLE_SYNC_MODULES[moduleId];
         if (!conf) return;
         if (!googleSheetsSync.isConfigured()) {
           setToast({ type: 'err', msg: 'Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync.' });
           setTimeout(() => setToast(null), 5000);
           return;
+        }
+        if (replaceExisting) {
+          if (!onlyTabTitle) {
+            setToast({ type: 'err', msg: 'Select the tab you want to update first.' });
+            setTimeout(() => setToast(null), 4000);
+            return;
+          }
+          const ok = await confirmDialog({
+            title: `Update "${onlyTabTitle}"?`,
+            message: `Only the existing "${onlyTabTitle}" tab will be replaced with the current app version. Every other Google Sheet tab will remain unchanged.`,
+            confirmText: 'Update selected tab',
+            tone: 'danger',
+          });
+          if (!ok) return;
         }
         setGoogleConn(c => ({ ...c, busyModule: moduleId, error: null }));
         try {
@@ -13749,7 +13847,13 @@ match /shared/whitelistSmsTestNumbers {
           let fileId = existingId;
           let created = false;
           let addedTabs = [];
-          if (existingId) {
+          let updatedTabs = [];
+          if (replaceExisting) {
+            if (!existingId) throw new Error('Set or create a destination Google Sheet before updating a tab.');
+            const result = await googleSheetsSync.replaceExistingTab(existingId, blob, requestedSheets[0], conf.sheetName);
+            if (result.missing) throw new Error(`Tab "${onlyTabTitle}" does not exist yet. Use Add selected tab first.`);
+            updatedTabs = [onlyTabTitle];
+          } else if (existingId) {
             try {
               const result = await googleSheetsSync.appendMissingTabs(existingId, blob, requestedSheets, conf.sheetName);
               addedTabs = result.added;
@@ -13768,14 +13872,17 @@ match /shared/whitelistSmsTestNumbers {
             created = true;
             addedTabs = (sheets || []).map(s => s.title).filter(Boolean);
           }
-          if (fileId && fileId !== existingId) {
+          if (!replaceExisting && fileId && fileId !== existingId) {
             setState(s => ({ ...s, googleSheets: { ...s.googleSheets, sheetIds: { ...s.googleSheets.sheetIds, [moduleId]: fileId } } }));
           }
           // Only trim tabs created by this sync. Never resize a pre-existing tab,
           // because it may contain user data beyond the generated range.
           let trimHint = '';
           const addedSet = new Set(addedTabs);
-          const newTabDims = created ? sheets : requestedSheets.filter(s => addedSet.has(s.title));
+          const updatedSet = new Set(updatedTabs);
+          const newTabDims = created
+            ? sheets
+            : requestedSheets.filter(s => addedSet.has(s.title) || updatedSet.has(s.title));
           if (newTabDims.length) {
             try {
               await googleSheetsSync.trimSheetGrids(fileId, newTabDims);
@@ -13788,9 +13895,11 @@ match /shared/whitelistSmsTestNumbers {
           }
           setGoogleConn(c => ({
             ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null,
-            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs } },
+            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs } },
           }));
-          const successMsg = created
+          const successMsg = updatedTabs.length
+            ? `Updated only "${updatedTabs[0]}"; every other tab was left unchanged`
+            : created
             ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? '' : 's'}`
             : addedTabs.length
               ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? '' : 's'}; existing data was left unchanged`
