@@ -3325,6 +3325,101 @@ function Btn({ children, onClick, variant = "primary", size = "md", disabled, cl
 function SectionLabel({ children, hint }) {
   return /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline justify-between mb-3 gap-4" }, /* @__PURE__ */ React.createElement("h3", { className: "text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-500" }, children), hint && /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, hint));
 }
+const SIDEBAR_SPLIT_STORAGE_KEY = "mrg_sidebar_splits_v1";
+function sidebarSplitStoredHeight(splitId, fallback) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIDEBAR_SPLIT_STORAGE_KEY) || "{}");
+    const value = Number(saved && saved[splitId]);
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function sidebarSplitSaveHeight(splitId, height) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIDEBAR_SPLIT_STORAGE_KEY) || "{}");
+    localStorage.setItem(SIDEBAR_SPLIT_STORAGE_KEY, JSON.stringify({ ...saved, [splitId]: Math.round(height) }));
+  } catch {
+  }
+}
+function useResizableSidebarFooter(splitId, defaultHeight = 330) {
+  const asideRef = useRef(null);
+  const heightRef = useRef(defaultHeight);
+  const [height, setHeight] = useState(() => sidebarSplitStoredHeight(splitId, defaultHeight));
+  const clampHeight = useCallback((next) => {
+    const total = asideRef.current?.clientHeight || window.innerHeight || 700;
+    const max = Math.max(150, total - 220);
+    return Math.max(120, Math.min(max, Number(next) || defaultHeight));
+  }, [defaultHeight]);
+  const applyHeight = useCallback((next, persist = false) => {
+    const value = clampHeight(next);
+    heightRef.current = value;
+    setHeight(value);
+    if (persist) sidebarSplitSaveHeight(splitId, value);
+  }, [clampHeight, splitId]);
+  useLayoutEffect(() => {
+    applyHeight(heightRef.current === defaultHeight ? height : heightRef.current, false);
+  }, []);
+  useEffect(() => {
+    const onResize = () => applyHeight(heightRef.current, true);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [applyHeight]);
+  const onPointerDown = useCallback((e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = heightRef.current;
+    const oldCursor = document.body.style.cursor;
+    const oldSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (event) => applyHeight(startHeight + startY - event.clientY, false);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = oldCursor;
+      document.body.style.userSelect = oldSelect;
+      sidebarSplitSaveHeight(splitId, heightRef.current);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, [applyHeight, splitId]);
+  const onKeyDown = useCallback((e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Home") return;
+    e.preventDefault();
+    if (e.key === "Home") applyHeight(defaultHeight, true);
+    else applyHeight(heightRef.current + (e.key === "ArrowUp" ? 16 : -16), true);
+  }, [applyHeight, defaultHeight]);
+  return {
+    asideRef,
+    footerHeight: height,
+    splitHandleProps: {
+      onPointerDown,
+      onKeyDown,
+      onDoubleClick: () => applyHeight(defaultHeight, true)
+    }
+  };
+}
+function SidebarSplitHandle({ height, handleProps }) {
+  return /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      role: "separator",
+      "aria-label": "Resize upper and lower sidebar panels",
+      "aria-orientation": "horizontal",
+      "aria-valuemin": 120,
+      "aria-valuenow": Math.round(height),
+      tabIndex: 0,
+      title: "Drag to resize · Up/Down to adjust · Double-click to reset",
+      ...handleProps,
+      className: "group relative h-2 shrink-0 cursor-row-resize border-y border-neutral-900 bg-[#17171a] outline-none focus:border-blue-500/70"
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "absolute left-1/2 top-1/2 h-0.5 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-neutral-700 transition-colors group-hover:bg-blue-400 group-focus:bg-blue-400" })
+  );
+}
 const UI_PREFS_KEY = "mrg_ui_v1";
 function readUiPrefs() {
   try {
@@ -3904,6 +3999,7 @@ function UploadedSidebar({ state, setState }) {
 function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
   const { year, month, sheets, selectedSheetId } = state;
   const selectedSyncSheet = sheets.find((s) => s.id === selectedSheetId) || null;
+  const sipSplit = useResizableSidebarFooter("sip_fcs", 350);
   const theme = state.theme || "dark";
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const updateSheet = (id, patch) => setState((s) => ({ ...s, sheets: s.sheets.map((x) => x.id === id ? { ...x, ...patch } : x) }));
@@ -3935,7 +4031,7 @@ function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets
   const [dragIndex, setDragIndex] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
   const [dragRow, setDragRow] = useState(null);
-  return /* @__PURE__ */ React.createElement("aside", { className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("aside", { ref: sipSplit.asideRef, className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: toggleTheme,
@@ -4027,7 +4123,7 @@ function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets
         /* @__PURE__ */ React.createElement(IconX, null)
       )
     );
-  })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addSheet, className: "w-full mt-3" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add sheet")), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement("label", { className: "flex items-center gap-2 text-xs text-neutral-400 cursor-pointer" }, /* @__PURE__ */ React.createElement(
+  })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addSheet, className: "w-full mt-3" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add sheet")), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: sipSplit.footerHeight, handleProps: sipSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: sipSplit.footerHeight } }, /* @__PURE__ */ React.createElement("label", { className: "flex items-center gap-2 text-xs text-neutral-400 cursor-pointer" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "checkbox",
@@ -5854,10 +5950,11 @@ function BmrPreview({ bmr }) {
 }
 function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
   const theme = state.theme || "dark";
+  const bmrSplit = useResizableSidebarFooter("bmr_voip", 350);
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const bmr = state.bmr || DEFAULT_BMR_STATE;
   const setBmr = (next) => setState((s) => ({ ...s, bmr: next }));
-  return /* @__PURE__ */ React.createElement("aside", { className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("aside", { ref: bmrSplit.asideRef, className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: toggleTheme,
@@ -5889,7 +5986,7 @@ function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gshe
       className: "text-neutral-500 hover:text-red-400 p-0.5"
     },
     /* @__PURE__ */ React.createElement(IconX, null)
-  )))), /* @__PURE__ */ React.createElement(BmrHiddenColInput, { bmr, setBmr }))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr", sheetId: state.googleSheets?.sheetIds?.bmr, targetSheetId: state.googleSheets?.targetSheetIds?.bmr }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR VOIP")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  )))), /* @__PURE__ */ React.createElement(BmrHiddenColInput, { bmr, setBmr }))), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: bmrSplit.footerHeight, handleProps: bmrSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: bmrSplit.footerHeight } }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr", sheetId: state.googleSheets?.sheetIds?.bmr, targetSheetId: state.googleSheets?.targetSheetIds?.bmr }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR VOIP")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function BmrHiddenColInput({ bmr, setBmr }) {
   const [v, setV] = useState("");
@@ -6057,13 +6154,14 @@ function BmrSmsPreview({ sms }) {
 }
 function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
   const theme = state.theme || "dark";
+  const bmrSmsSplit = useResizableSidebarFooter("bmr_sms", 350);
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
   const setSms = (next) => setState((s) => {
     const prevSms = s.bmrSms || DEFAULT_BMR_SMS_STATE;
     return { ...s, bmrSms: typeof next === "function" ? next(prevSms) : next };
   });
-  return /* @__PURE__ */ React.createElement("aside", { className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("aside", { ref: bmrSmsSplit.asideRef, className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: toggleTheme,
@@ -6088,7 +6186,7 @@ function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, g
       onChange: (e) => setSms({ ...sms, includeNight: e.target.checked }),
       className: "w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500"
     }
-  ), /* @__PURE__ */ React.createElement("span", null, "7PM-7AM (Night)")))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-3" }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr_sms", sheetId: state.googleSheets?.sheetIds?.bmr_sms, targetSheetId: state.googleSheets?.targetSheetIds?.bmr_sms }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR SMS")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  ), /* @__PURE__ */ React.createElement("span", null, "7PM-7AM (Night)")))), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: bmrSmsSplit.footerHeight, handleProps: bmrSmsSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: bmrSmsSplit.footerHeight } }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr_sms", sheetId: state.googleSheets?.sheetIds?.bmr_sms, targetSheetId: state.googleSheets?.targetSheetIds?.bmr_sms }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR SMS")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function EditorColorSwatch({ value, onChange, title = "Choose color", allowClear = true, fallback = "#FFFFFF" }) {
   return /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(

@@ -3213,6 +3213,108 @@ https://bit.ly/4vrcu64`;
       );
     }
 
+    const SIDEBAR_SPLIT_STORAGE_KEY = 'mrg_sidebar_splits_v1';
+
+    function sidebarSplitStoredHeight(splitId, fallback) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(SIDEBAR_SPLIT_STORAGE_KEY) || '{}');
+        const value = Number(saved && saved[splitId]);
+        return Number.isFinite(value) ? value : fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    function sidebarSplitSaveHeight(splitId, height) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(SIDEBAR_SPLIT_STORAGE_KEY) || '{}');
+        localStorage.setItem(SIDEBAR_SPLIT_STORAGE_KEY, JSON.stringify({ ...saved, [splitId]: Math.round(height) }));
+      } catch {}
+    }
+
+    function useResizableSidebarFooter(splitId, defaultHeight = 330) {
+      const asideRef = useRef(null);
+      const heightRef = useRef(defaultHeight);
+      const [height, setHeight] = useState(() => sidebarSplitStoredHeight(splitId, defaultHeight));
+
+      const clampHeight = useCallback((next) => {
+        const total = asideRef.current?.clientHeight || window.innerHeight || 700;
+        // Preserve room for the fixed brand and at least a small upper panel.
+        const max = Math.max(150, total - 220);
+        return Math.max(120, Math.min(max, Number(next) || defaultHeight));
+      }, [defaultHeight]);
+
+      const applyHeight = useCallback((next, persist = false) => {
+        const value = clampHeight(next);
+        heightRef.current = value;
+        setHeight(value);
+        if (persist) sidebarSplitSaveHeight(splitId, value);
+      }, [clampHeight, splitId]);
+
+      useLayoutEffect(() => {
+        applyHeight(heightRef.current === defaultHeight ? height : heightRef.current, false);
+      }, []);
+
+      useEffect(() => {
+        const onResize = () => applyHeight(heightRef.current, true);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+      }, [applyHeight]);
+
+      const onPointerDown = useCallback((e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const startY = e.clientY;
+        const startHeight = heightRef.current;
+        const oldCursor = document.body.style.cursor;
+        const oldSelect = document.body.style.userSelect;
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMove = (event) => applyHeight(startHeight + startY - event.clientY, false);
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', onUp);
+          document.body.style.cursor = oldCursor;
+          document.body.style.userSelect = oldSelect;
+          sidebarSplitSaveHeight(splitId, heightRef.current);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+      }, [applyHeight, splitId]);
+
+      const onKeyDown = useCallback((e) => {
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Home') return;
+        e.preventDefault();
+        if (e.key === 'Home') applyHeight(defaultHeight, true);
+        else applyHeight(heightRef.current + (e.key === 'ArrowUp' ? 16 : -16), true);
+      }, [applyHeight, defaultHeight]);
+
+      return {
+        asideRef,
+        footerHeight: height,
+        splitHandleProps: {
+          onPointerDown,
+          onKeyDown,
+          onDoubleClick: () => applyHeight(defaultHeight, true),
+        },
+      };
+    }
+
+    function SidebarSplitHandle({ height, handleProps }) {
+      return (
+        <div role="separator" aria-label="Resize upper and lower sidebar panels" aria-orientation="horizontal"
+          aria-valuemin={120} aria-valuenow={Math.round(height)} tabIndex={0}
+          title="Drag to resize · Up/Down to adjust · Double-click to reset"
+          {...handleProps}
+          className="group relative h-2 shrink-0 cursor-row-resize border-y border-neutral-900 bg-[#17171a] outline-none focus:border-blue-500/70">
+          <span className="absolute left-1/2 top-1/2 h-0.5 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-neutral-700 transition-colors group-hover:bg-blue-400 group-focus:bg-blue-400"></span>
+        </div>
+      );
+    }
+
     // UI-only preferences (which editor sections are collapsed). Stored under a
     // SEPARATE localStorage key so it never touches app data (mrg_state_v1),
     // templates, or Firestore sync — collapsing a section can't affect saves.
@@ -3894,6 +3996,7 @@ https://bit.ly/4vrcu64`;
     function Sidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
       const { year, month, sheets, selectedSheetId } = state;
       const selectedSyncSheet = sheets.find(s => s.id === selectedSheetId) || null;
+      const sipSplit = useResizableSidebarFooter('sip_fcs', 350);
       const theme = state.theme || 'dark';
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
 
@@ -3928,7 +4031,7 @@ https://bit.ly/4vrcu64`;
       const [dragRow, setDragRow] = useState(null);
 
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
+        <aside ref={sipSplit.asideRef} className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           {/* Brand */}
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
@@ -4012,8 +4115,10 @@ https://bit.ly/4vrcu64`;
             <Btn variant="ghost" size="sm" onClick={addSheet} className="w-full mt-3"><IconPlus /> Add sheet</Btn>
           </div>
 
+          <SidebarSplitHandle height={sipSplit.footerHeight} handleProps={sipSplit.splitHandleProps} />
+
           {/* Generate */}
-          <div className="p-5 border-t border-neutral-900 space-y-3">
+          <div className="p-5 shrink-0 overflow-y-auto space-y-3" style={{ height: sipSplit.footerHeight }}>
             <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
               <input type="checkbox" checked={state.includeIndex}
                 onChange={e => setState(s => ({ ...s, includeIndex: e.target.checked }))}
@@ -6370,12 +6475,13 @@ https://bit.ly/4vrcu64`;
 
     function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
       const theme = state.theme || 'dark';
+      const bmrSplit = useResizableSidebarFooter('bmr_voip', 350);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const bmr = state.bmr || DEFAULT_BMR_STATE;
       const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
 
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
+        <aside ref={bmrSplit.asideRef} className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -6431,7 +6537,9 @@ https://bit.ly/4vrcu64`;
 
           </div>
 
-          <div className="p-5 border-t border-neutral-900 space-y-3">
+          <SidebarSplitHandle height={bmrSplit.footerHeight} handleProps={bmrSplit.splitHandleProps} />
+
+          <div className="p-5 shrink-0 overflow-y-auto space-y-3" style={{ height: bmrSplit.footerHeight }}>
             <GoogleSheetSync gsheets={gsheets} moduleId="bmr" sheetId={state.googleSheets?.sheetIds?.bmr} targetSheetId={state.googleSheets?.targetSheetIds?.bmr} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR VOIP</>}
@@ -6710,6 +6818,7 @@ https://bit.ly/4vrcu64`;
 
     function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gsheets }) {
       const theme = state.theme || 'dark';
+      const bmrSmsSplit = useResizableSidebarFooter('bmr_sms', 350);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
       const setSms = (next) => setState(s => {
@@ -6718,7 +6827,7 @@ https://bit.ly/4vrcu64`;
       });
 
       return (
-        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
+        <aside ref={bmrSmsSplit.asideRef} className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SyncBadge sync={sync} onRetry={onRetrySync} />
@@ -6759,7 +6868,9 @@ https://bit.ly/4vrcu64`;
 
           </div>
 
-          <div className="p-5 border-t border-neutral-900 space-y-3">
+          <SidebarSplitHandle height={bmrSmsSplit.footerHeight} handleProps={bmrSmsSplit.splitHandleProps} />
+
+          <div className="p-5 shrink-0 overflow-y-auto space-y-3" style={{ height: bmrSmsSplit.footerHeight }}>
             <GoogleSheetSync gsheets={gsheets} moduleId="bmr_sms" sheetId={state.googleSheets?.sheetIds?.bmr_sms} targetSheetId={state.googleSheets?.targetSheetIds?.bmr_sms} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating...</> : <><IconDownload /> Generate BMR SMS</>}
