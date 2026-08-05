@@ -3637,7 +3637,7 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
   ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onSetTargetSheet(moduleId, targetDraft), disabled: !targetDraft.trim(), className: "flex-1" }, "Use this sheet"), targetSheetId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => {
     setTargetDraft("");
     onSetTargetSheet(moduleId, "");
-  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Updating…" : `Update checked sheets (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add"), " uses the selected row. ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Update"), " uses every checked sheet and ignores the selected row."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
+  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Updating…" : `Update checked sheets (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add"), " ", selectedTabLabel ? "uses the selected row." : "copies new tabs without replacing existing ones.", " ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Update"), " uses every checked sheet", selectedTabLabel ? " and ignores the selected row." : "."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString())), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -6036,6 +6036,10 @@ function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gshe
   const bmrSplit = useResizableSidebarFooter("bmr_voip", 350);
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const bmr = state.bmr || DEFAULT_BMR_STATE;
+  const checkedBmrTabs = [
+    ...bmr.includeDay !== false ? ["7AM-7PM"] : [],
+    ...bmr.includeNight !== false ? ["7PM-7AM"] : []
+  ];
   const setBmr = (next) => setState((s) => ({ ...s, bmr: next }));
   return /* @__PURE__ */ React.createElement("aside", { ref: bmrSplit.asideRef, className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
     "button",
@@ -6069,7 +6073,16 @@ function BmrSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, gshe
       className: "text-neutral-500 hover:text-red-400 p-0.5"
     },
     /* @__PURE__ */ React.createElement(IconX, null)
-  )))), /* @__PURE__ */ React.createElement(BmrHiddenColInput, { bmr, setBmr }))), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: bmrSplit.footerHeight, handleProps: bmrSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: bmrSplit.footerHeight } }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr", sheetId: state.googleSheets?.sheetIds?.bmr, targetSheetId: state.googleSheets?.targetSheetIds?.bmr }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR VOIP")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  )))), /* @__PURE__ */ React.createElement(BmrHiddenColInput, { bmr, setBmr }))), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: bmrSplit.footerHeight, handleProps: bmrSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: bmrSplit.footerHeight } }, /* @__PURE__ */ React.createElement(
+    GoogleSheetSync,
+    {
+      gsheets,
+      moduleId: "bmr",
+      sheetId: state.googleSheets?.sheetIds?.bmr,
+      targetSheetId: state.googleSheets?.targetSheetIds?.bmr,
+      checkedTabTitles: checkedBmrTabs
+    }
+  ), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating…") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR VOIP")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function BmrHiddenColInput({ bmr, setBmr }) {
   const [v, setV] = useState("");
@@ -6240,6 +6253,19 @@ function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, g
   const bmrSmsSplit = useResizableSidebarFooter("bmr_sms", 350);
   const toggleTheme = () => setState((s) => ({ ...s, theme: (s.theme || "dark") === "dark" ? "light" : "dark" }));
   const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
+  const checkedBmrSmsTabs = [];
+  if (sms.includeDay !== false) {
+    checkedBmrSmsTabs.push(
+      bmrSmsSheetName(BMR_SMS_MARKETS.retail, "day"),
+      bmrSmsSheetName(BMR_SMS_MARKETS.wholesale, "day")
+    );
+  }
+  if (sms.includeNight !== false) {
+    checkedBmrSmsTabs.push(
+      bmrSmsSheetName(BMR_SMS_MARKETS.retail, "night"),
+      bmrSmsSheetName(BMR_SMS_MARKETS.wholesale, "night")
+    );
+  }
   const setSms = (next) => setState((s) => {
     const prevSms = s.bmrSms || DEFAULT_BMR_SMS_STATE;
     return { ...s, bmrSms: typeof next === "function" ? next(prevSms) : next };
@@ -6269,7 +6295,16 @@ function BmrSmsSidebar({ state, setState, onGenerate, busy, sync, onRetrySync, g
       onChange: (e) => setSms({ ...sms, includeNight: e.target.checked }),
       className: "w-3.5 h-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500"
     }
-  ), /* @__PURE__ */ React.createElement("span", null, "7PM-7AM (Night)")))), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: bmrSmsSplit.footerHeight, handleProps: bmrSmsSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: bmrSmsSplit.footerHeight } }, /* @__PURE__ */ React.createElement(GoogleSheetSync, { gsheets, moduleId: "bmr_sms", sheetId: state.googleSheets?.sheetIds?.bmr_sms, targetSheetId: state.googleSheets?.targetSheetIds?.bmr_sms }), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR SMS")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
+  ), /* @__PURE__ */ React.createElement("span", null, "7PM-7AM (Night)")))), /* @__PURE__ */ React.createElement(SidebarSplitHandle, { height: bmrSmsSplit.footerHeight, handleProps: bmrSmsSplit.splitHandleProps }), /* @__PURE__ */ React.createElement("div", { className: "p-5 shrink-0 overflow-y-auto space-y-3", style: { height: bmrSmsSplit.footerHeight } }, /* @__PURE__ */ React.createElement(
+    GoogleSheetSync,
+    {
+      gsheets,
+      moduleId: "bmr_sms",
+      sheetId: state.googleSheets?.sheetIds?.bmr_sms,
+      targetSheetId: state.googleSheets?.targetSheetIds?.bmr_sms,
+      checkedTabTitles: checkedBmrSmsTabs
+    }
+  ), /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onGenerate, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating...") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate BMR SMS")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 text-center font-mono" }, ".xlsx · Google Sheets compatible")));
 }
 function EditorColorSwatch({ value, onChange, title = "Choose color", allowClear = true, fallback = "#FFFFFF" }) {
   return /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(

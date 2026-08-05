@@ -3607,7 +3607,10 @@ https://bit.ly/4vrcu64`;
                   {busy ? 'Updating…' : `Update checked sheets (${checkedTitles.length})`}
                 </Btn>
               )}
-              {url && <p className="text-[10px] text-neutral-600 leading-relaxed"><span className="text-neutral-400">Add</span> uses the selected row. <span className="text-neutral-400">Update</span> uses every checked sheet and ignores the selected row.</p>}
+              {url && <p className="text-[10px] text-neutral-600 leading-relaxed">
+                <span className="text-neutral-400">Add</span> {selectedTabLabel ? 'uses the selected row.' : 'copies new tabs without replacing existing ones.'}{' '}
+                <span className="text-neutral-400">Update</span> uses every checked sheet{selectedTabLabel ? ' and ignores the selected row.' : '.'}
+              </p>}
               <div className="flex items-center justify-between text-[10px]">
                 {url
                   ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">Open sheet ↗</a>
@@ -6582,6 +6585,10 @@ https://bit.ly/4vrcu64`;
       const bmrSplit = useResizableSidebarFooter('bmr_voip', 350);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const bmr = state.bmr || DEFAULT_BMR_STATE;
+      const checkedBmrTabs = [
+        ...(bmr.includeDay !== false ? ['7AM-7PM'] : []),
+        ...(bmr.includeNight !== false ? ['7PM-7AM'] : []),
+      ];
       const setBmr = (next) => setState(s => ({ ...s, bmr: next }));
 
       return (
@@ -6644,7 +6651,10 @@ https://bit.ly/4vrcu64`;
           <SidebarSplitHandle height={bmrSplit.footerHeight} handleProps={bmrSplit.splitHandleProps} />
 
           <div className="p-5 shrink-0 overflow-y-auto space-y-3" style={{ height: bmrSplit.footerHeight }}>
-            <GoogleSheetSync gsheets={gsheets} moduleId="bmr" sheetId={state.googleSheets?.sheetIds?.bmr} targetSheetId={state.googleSheets?.targetSheetIds?.bmr} />
+            <GoogleSheetSync gsheets={gsheets} moduleId="bmr"
+              sheetId={state.googleSheets?.sheetIds?.bmr}
+              targetSheetId={state.googleSheets?.targetSheetIds?.bmr}
+              checkedTabTitles={checkedBmrTabs} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating…</> : <><IconDownload /> Generate BMR VOIP</>}
             </Btn>
@@ -6925,6 +6935,19 @@ https://bit.ly/4vrcu64`;
       const bmrSmsSplit = useResizableSidebarFooter('bmr_sms', 350);
       const toggleTheme = () => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }));
       const sms = state.bmrSms || DEFAULT_BMR_SMS_STATE;
+      const checkedBmrSmsTabs = [];
+      if (sms.includeDay !== false) {
+        checkedBmrSmsTabs.push(
+          bmrSmsSheetName(BMR_SMS_MARKETS.retail, 'day'),
+          bmrSmsSheetName(BMR_SMS_MARKETS.wholesale, 'day'),
+        );
+      }
+      if (sms.includeNight !== false) {
+        checkedBmrSmsTabs.push(
+          bmrSmsSheetName(BMR_SMS_MARKETS.retail, 'night'),
+          bmrSmsSheetName(BMR_SMS_MARKETS.wholesale, 'night'),
+        );
+      }
       const setSms = (next) => setState(s => {
         const prevSms = s.bmrSms || DEFAULT_BMR_SMS_STATE;
         return { ...s, bmrSms: typeof next === 'function' ? next(prevSms) : next };
@@ -6975,7 +6998,10 @@ https://bit.ly/4vrcu64`;
           <SidebarSplitHandle height={bmrSmsSplit.footerHeight} handleProps={bmrSmsSplit.splitHandleProps} />
 
           <div className="p-5 shrink-0 overflow-y-auto space-y-3" style={{ height: bmrSmsSplit.footerHeight }}>
-            <GoogleSheetSync gsheets={gsheets} moduleId="bmr_sms" sheetId={state.googleSheets?.sheetIds?.bmr_sms} targetSheetId={state.googleSheets?.targetSheetIds?.bmr_sms} />
+            <GoogleSheetSync gsheets={gsheets} moduleId="bmr_sms"
+              sheetId={state.googleSheets?.sheetIds?.bmr_sms}
+              targetSheetId={state.googleSheets?.targetSheetIds?.bmr_sms}
+              checkedTabTitles={checkedBmrSmsTabs} />
             <Btn variant="primary" size="lg" onClick={onGenerate} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating...</> : <><IconDownload /> Generate BMR SMS</>}
             </Btn>
