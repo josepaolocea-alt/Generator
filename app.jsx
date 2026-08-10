@@ -7766,22 +7766,29 @@ https://bit.ly/4vrcu64`;
               {(wl.contents || []).length === 0 && (
                 <div className="text-[12px] text-neutral-500 italic">Nothing parsed yet. Paste content above.</div>
               )}
-              {(wl.contents || []).map((block, i) => (
-                <div key={i} className="rounded-md border border-neutral-900 bg-neutral-950 p-2">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] uppercase tracking-wide text-neutral-500">Content {i + 1}</span>
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => copyBlock(block, i)}
-                        className="text-[10px] text-neutral-500 hover:text-blue-300 disabled:opacity-40"
-                        disabled={!String(block || '').trim()}>
-                        {copiedIndex === i ? 'Copied' : 'Copy'}
-                      </button>
-                      <button onClick={() => deleteBlock(i)} className="text-[10px] text-neutral-500 hover:text-red-300">Remove</button>
+              {(wl.contents || []).map((block, i) => {
+                const analysis = wlSmsAnalyzeUtf(block);
+                return (
+                  <div key={i} className="rounded-md border border-neutral-900 bg-neutral-950 p-2">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-wide text-neutral-500">Content {i + 1}</span>
+                        {String(block || '').trim() && <WlSmsUtfStatusPill analysis={analysis} />}
+                        {String(block || '').trim() && <WlSmsLengthPill length={analysis.length} />}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => copyBlock(block, i)}
+                          className="text-[10px] text-neutral-500 hover:text-blue-300 disabled:opacity-40"
+                          disabled={!String(block || '').trim()}>
+                          {copiedIndex === i ? 'Copied' : 'Copy'}
+                        </button>
+                        <button onClick={() => deleteBlock(i)} className="text-[10px] text-neutral-500 hover:text-red-300">Remove</button>
+                      </div>
                     </div>
+                    <Textarea rows={3} value={block} onChange={e => updateBlock(i, e.target.value)} />
                   </div>
-                  <Textarea rows={3} value={block} onChange={e => updateBlock(i, e.target.value)} />
-                </div>
-              ))}
+                );
+              })}
               <div>
                 <Btn variant="ghost" size="sm" onClick={addBlock}><IconPlus /> Add empty content</Btn>
               </div>
