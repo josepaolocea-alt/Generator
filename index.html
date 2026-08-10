@@ -3166,15 +3166,18 @@ async function copyTextToClipboard(text) {
     document.body.removeChild(area);
   }
 }
+function wlSmsTrimAsciiEdges(value) {
+  return String(value ?? "").replace(/^[\u0009-\u000D\u0020]+|[\u0009-\u000D\u0020]+$/g, "");
+}
 function stripWlSmsLeadingNumber(block) {
-  return block.replace(/^\s*\d+[.\)]\s+/, "");
+  return block.replace(/^[\u0009-\u000D\u0020]*\d+[.\)][\u0009-\u000D\u0020]+/, "");
 }
 function parseWlSmsBlasts(text, mode = "auto") {
   if (text === null || text === void 0) return [];
   const normalized = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = normalized.split("\n");
   if (mode === "lines") {
-    return lines.map((l) => l.trim()).filter((l) => l.length).map(stripWlSmsLeadingNumber);
+    return lines.map(wlSmsTrimAsciiEdges).filter((l) => l.length).map(stripWlSmsLeadingNumber);
   }
   const isDivider = (line) => {
     const trimmed = line.trim();
@@ -3188,14 +3191,14 @@ function parseWlSmsBlasts(text, mode = "auto") {
   let current = [];
   for (const line of lines) {
     if (isSeparator(line)) {
-      const block = current.join("\n").trim();
+      const block = wlSmsTrimAsciiEdges(current.join("\n"));
       if (block) blocks.push(stripWlSmsLeadingNumber(block));
       current = [];
     } else {
       current.push(line);
     }
   }
-  const tail = current.join("\n").trim();
+  const tail = wlSmsTrimAsciiEdges(current.join("\n"));
   if (tail) blocks.push(stripWlSmsLeadingNumber(tail));
   return blocks;
 }

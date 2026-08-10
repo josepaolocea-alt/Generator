@@ -3009,8 +3009,14 @@ https://bit.ly/4vrcu64`;
       }
     }
 
+    // Remove layout whitespace without silently deleting Unicode spaces that
+    // must remain visible to the GSM-7 / UTF checker (for example U+00A0).
+    function wlSmsTrimAsciiEdges(value) {
+      return String(value ?? '').replace(/^[\u0009-\u000D\u0020]+|[\u0009-\u000D\u0020]+$/g, '');
+    }
+
     function stripWlSmsLeadingNumber(block) {
-      return block.replace(/^\s*\d+[.\)]\s+/, '');
+      return block.replace(/^[\u0009-\u000D\u0020]*\d+[.\)][\u0009-\u000D\u0020]+/, '');
     }
 
     function parseWlSmsBlasts(text, mode = 'auto') {
@@ -3018,7 +3024,7 @@ https://bit.ly/4vrcu64`;
       const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       const lines = normalized.split('\n');
       if (mode === 'lines') {
-        return lines.map(l => l.trim()).filter(l => l.length).map(stripWlSmsLeadingNumber);
+        return lines.map(wlSmsTrimAsciiEdges).filter(l => l.length).map(stripWlSmsLeadingNumber);
       }
       const isDivider = (line) => {
         const trimmed = line.trim();
@@ -3032,14 +3038,14 @@ https://bit.ly/4vrcu64`;
       let current = [];
       for (const line of lines) {
         if (isSeparator(line)) {
-          const block = current.join('\n').trim();
+          const block = wlSmsTrimAsciiEdges(current.join('\n'));
           if (block) blocks.push(stripWlSmsLeadingNumber(block));
           current = [];
         } else {
           current.push(line);
         }
       }
-      const tail = current.join('\n').trim();
+      const tail = wlSmsTrimAsciiEdges(current.join('\n'));
       if (tail) blocks.push(stripWlSmsLeadingNumber(tail));
       return blocks;
     }
