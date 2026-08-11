@@ -9466,9 +9466,268 @@ https://bit.ly/4vrcu64`;
     }
 
     /* ============================================================
+       SIP / FCS — every-2-hours monitoring
+       ============================================================ */
+    const SIP_MONITOR_TIME_SLOTS = ['12AM','2AM','4AM','6AM','8AM','10AM','12PM','2PM','4PM','6PM','8PM','10PM'];
+    const SIP_MONITOR_METRICS = [
+      { id: 'inx', label: 'INX' },
+      { id: 'pldtSip', label: 'PLDT SIP' },
+      { id: 'pldtFcs', label: 'PLDT FCS' },
+      { id: 'etpi', label: 'ETPI' },
+      { id: 'gsm', label: 'GSM' },
+    ];
+
+    function sipMonitorTodayIso(date = new Date()) {
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    function sipMonitorShiftDate(iso, delta) {
+      const [y, m, d] = String(iso || sipMonitorTodayIso()).split('-').map(Number);
+      const date = new Date(y || new Date().getFullYear(), Math.max(0, (m || 1) - 1), d || 1);
+      date.setDate(date.getDate() + delta);
+      return sipMonitorTodayIso(date);
+    }
+
+    function sipMonitorCurrentSlot(date = new Date()) {
+      const evenHour = Math.floor(date.getHours() / 2) * 2;
+      return HOURS_24[evenHour] || '12AM';
+    }
+
+    const DEFAULT_SIP_FCS_MONITORING = {
+      selectedDate: sipMonitorTodayIso(),
+      selectedSlot: sipMonitorCurrentSlot(),
+      values: {},
+    };
+
+    function sipMonitorNormalizeState(raw = {}) {
+      const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.selectedDate || ''))
+        ? String(raw.selectedDate)
+        : sipMonitorTodayIso();
+      const selectedSlot = SIP_MONITOR_TIME_SLOTS.includes(raw.selectedSlot)
+        ? raw.selectedSlot
+        : sipMonitorCurrentSlot();
+      return {
+        selectedDate,
+        selectedSlot,
+        values: raw.values && typeof raw.values === 'object' && !Array.isArray(raw.values) ? raw.values : {},
+      };
+    }
+
+    function sipMonitorValue(monitoring, dateIso, slot, metricId) {
+      const raw = monitoring?.values?.[dateIso]?.[slot]?.[metricId];
+      if (raw === '' || raw == null) return null;
+      const num = Number(raw);
+      return Number.isFinite(num) ? Math.max(0, Math.floor(num)) : null;
+    }
+
+    function sipMonitorTotal(monitoring, dateIso, slot) {
+      const values = SIP_MONITOR_METRICS.map(metric => sipMonitorValue(monitoring, dateIso, slot, metric.id));
+      const filled = values.filter(v => v != null);
+      return filled.length ? filled.reduce((sum, value) => sum + value, 0) : null;
+    }
+
+    function sipMonitorPrettyDate(iso) {
+      const [y, m, d] = String(iso || '').split('-').map(Number);
+      if (!y || !m || !d) return iso || '—';
+      return previewDateFormat(new Date(y, m - 1, d), 'd-mmm-yy');
+    }
+
+    function sipMonitorComparisonText(monitoring) {
+      const today = monitoring.selectedDate;
+      const yesterday = sipMonitorShiftDate(today, -1);
+      const slot = monitoring.selectedSlot;
+      const block = (iso) => {
+        const rows = [sipMonitorPrettyDate(iso), slot];
+        SIP_MONITOR_METRICS.forEach(metric => {
+          const value = sipMonitorValue(monitoring, iso, slot, metric.id);
+          rows.push(`${metric.label}\t${value == null ? '—' : value}`);
+        });
+        const total = sipMonitorTotal(monitoring, iso, slot);
+        rows.push(`Total Calls\t${total == null ? '—' : total}`);
+        return rows.join('\n');
+      };
+      return `${block(yesterday)}\n\n${block(today)}`;
+    }
+
+    function SipMonitorComparisonCard({ title, dateIso, slot, monitoring, tone = 'neutral' }) {
+      const toneClasses = tone === 'today'
+        ? 'border-blue-500/30 bg-blue-500/[0.04]'
+        : 'border-neutral-800 bg-neutral-950/50';
+      return (
+        <Card className={`overflow-hidden ${toneClasses}`}>
+          <div className="border-b border-neutral-800 px-4 py-3">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-neutral-500">{title}</div>
+            <div className="mt-1 flex items-center justify-between gap-3">
+              <span className="font-semibold text-red-300">{sipMonitorPrettyDate(dateIso)}</span>
+              <span className="rounded bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-300">{slot}</span>
+            </div>
+          </div>
+          <div className="divide-y divide-neutral-900">
+            {SIP_MONITOR_METRICS.map(metric => {
+              const value = sipMonitorValue(monitoring, dateIso, slot, metric.id);
+              return (
+                <div key={metric.id} className="flex items-center justify-between px-4 py-2 text-sm">
+                  <span className="text-neutral-400">{metric.label}</span>
+                  <span className={`font-mono font-semibold ${value == null ? 'text-neutral-700' : 'text-neutral-100'}`}>{value == null ? '—' : value.toLocaleString()}</span>
+                </div>
+              );
+            })}
+            <div className="flex items-center justify-between bg-emerald-500/[0.06] px-4 py-2.5 text-sm">
+              <span className="font-semibold text-emerald-200">Total Calls</span>
+              <span className="font-mono font-bold text-emerald-200">{sipMonitorTotal(monitoring, dateIso, slot)?.toLocaleString() ?? '—'}</span>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    function SipFcsMonitoringPanel({ monitoring, onChange, onToast, confirmDialog }) {
+      const selectedDate = monitoring.selectedDate;
+      const selectedSlot = monitoring.selectedSlot;
+      const yesterday = sipMonitorShiftDate(selectedDate, -1);
+
+      const setNow = () => onChange(prev => ({
+        ...prev,
+        selectedDate: sipMonitorTodayIso(),
+        selectedSlot: sipMonitorCurrentSlot(),
+      }));
+
+      const setReading = (dateIso, slot, metricId, raw) => {
+        onChange(prev => {
+          const values = { ...(prev.values || {}) };
+          const day = { ...(values[dateIso] || {}) };
+          const slotValues = { ...(day[slot] || {}) };
+          if (raw === '') delete slotValues[metricId];
+          else {
+            const parsed = Number(raw);
+            slotValues[metricId] = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+          }
+          if (Object.keys(slotValues).length) day[slot] = slotValues;
+          else delete day[slot];
+          if (Object.keys(day).length) values[dateIso] = day;
+          else delete values[dateIso];
+          return { ...prev, values };
+        });
+      };
+
+      const copyComparison = async () => {
+        const copied = await copyTextToClipboard(sipMonitorComparisonText(monitoring));
+        onToast(copied ? 'ok' : 'err', copied ? 'Yesterday and today comparison copied.' : 'Could not copy the comparison.');
+      };
+
+      const clearDay = async () => {
+        if (!monitoring.values?.[selectedDate]) return;
+        const ok = await confirmDialog({
+          title: `Clear ${sipMonitorPrettyDate(selectedDate)}?`,
+          message: 'All SIP/FCS monitoring entries for this date will be removed.',
+          confirmText: 'Clear day',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        onChange(prev => {
+          const values = { ...(prev.values || {}) };
+          delete values[selectedDate];
+          return { ...prev, values };
+        });
+        onToast('ok', `Cleared ${sipMonitorPrettyDate(selectedDate)}.`);
+      };
+
+      const filledSlots = SIP_MONITOR_TIME_SLOTS.filter(slot =>
+        SIP_MONITOR_METRICS.some(metric => sipMonitorValue(monitoring, selectedDate, slot, metric.id) != null)
+      ).length;
+
+      return (
+        <div className="space-y-7">
+          <div>
+            <SectionLabel hint="Daily input · every 2 hours from 12AM">SIP / FCS monitoring</SectionLabel>
+            <Card className="p-4">
+              <div className="grid gap-4 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto] md:items-end">
+                <div>
+                  <label className="mb-1.5 block text-[10px] uppercase tracking-[0.14em] text-neutral-500">Today / report date</label>
+                  <Input type="date" value={selectedDate} onChange={e => onChange(prev => ({ ...prev, selectedDate: e.target.value || sipMonitorTodayIso() }))} />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[10px] uppercase tracking-[0.14em] text-neutral-500">Current 2-hour time</label>
+                  <Select value={selectedSlot} onChange={e => onChange(prev => ({ ...prev, selectedSlot: e.target.value }))}>
+                    {SIP_MONITOR_TIME_SLOTS.map(slot => <option key={slot} value={slot}>{slot}</option>)}
+                  </Select>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Btn variant="ghost" onClick={setNow}>Now</Btn>
+                  <Btn variant="accent" onClick={copyComparison}>Copy comparison</Btn>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-neutral-500">
+                <Pill tone={filledSlots === 12 ? 'success' : 'default'}>{filledSlots}/12 slots entered</Pill>
+                <span>Enter a real 0 when the count is zero; leave the cell blank when it has not been monitored yet.</span>
+              </div>
+            </Card>
+          </div>
+
+          <div>
+            <SectionLabel hint="Ready to copy as one message">Yesterday same time vs today current time</SectionLabel>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <SipMonitorComparisonCard title="Yesterday · same time" dateIso={yesterday} slot={selectedSlot} monitoring={monitoring} />
+              <SipMonitorComparisonCard title="Today · current time" dateIso={selectedDate} slot={selectedSlot} monitoring={monitoring} tone="today" />
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <SectionLabel hint={`Editing ${sipMonitorPrettyDate(selectedDate)}`}>Daily input sheet</SectionLabel>
+              <Btn variant="danger" size="sm" onClick={clearDay} disabled={!monitoring.values?.[selectedDate]}>Clear selected day</Btn>
+            </div>
+            <Card className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-800 bg-neutral-950/80 text-[10px] uppercase tracking-[0.12em] text-neutral-500">
+                      <th className="px-3 py-2.5 text-left">Time</th>
+                      {SIP_MONITOR_METRICS.map(metric => <th key={metric.id} className="px-2 py-2.5 text-center">{metric.label}</th>)}
+                      <th className="px-3 py-2.5 text-right">Total Calls</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900">
+                    {SIP_MONITOR_TIME_SLOTS.map(slot => {
+                      const active = slot === selectedSlot;
+                      return (
+                        <tr key={slot} className={active ? 'bg-blue-500/[0.06]' : 'hover:bg-neutral-900/30'}>
+                          <td className="px-3 py-2">
+                            <button type="button" onClick={() => onChange(prev => ({ ...prev, selectedSlot: slot }))}
+                              className={`rounded px-2 py-1 font-mono text-xs font-semibold transition-colors ${active ? 'bg-blue-500/15 text-blue-300' : 'text-red-300 hover:bg-neutral-800'}`}>
+                              {slot}
+                            </button>
+                          </td>
+                          {SIP_MONITOR_METRICS.map(metric => {
+                            const value = sipMonitorValue(monitoring, selectedDate, slot, metric.id);
+                            return (
+                              <td key={metric.id} className="px-2 py-1.5">
+                                <Input type="number" min="0" step="1" inputMode="numeric" value={value ?? ''}
+                                  onChange={e => setReading(selectedDate, slot, metric.id, e.target.value)}
+                                  aria-label={`${sipMonitorPrettyDate(selectedDate)} ${slot} ${metric.label}`}
+                                  className="mx-auto !w-24 !px-2 !py-1.5 text-right font-mono text-xs [appearance:textfield]" />
+                              </td>
+                            );
+                          })}
+                          <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-300">
+                            {sipMonitorTotal(monitoring, selectedDate, slot)?.toLocaleString() ?? '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
+    /* ============================================================
        App
        ============================================================ */
-    const APP_STATE_SCHEMA_VERSION = 2;
+    const APP_STATE_SCHEMA_VERSION = 3;
 
     const DEFAULT_STATE = {
       schemaVersion: APP_STATE_SCHEMA_VERSION,
@@ -9480,6 +9739,7 @@ https://bit.ly/4vrcu64`;
       includeIndex: true,
       changelog: '',
       tab: 'config',
+      sipFcsMonitoring: DEFAULT_SIP_FCS_MONITORING,
       theme: 'dark',
       imported: [],
       module: 'sip_fcs',
@@ -9625,6 +9885,7 @@ https://bit.ly/4vrcu64`;
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
       const recorder = recorderNormalizeState(merged.recorder);
+      const sipFcsMonitoring = sipMonitorNormalizeState(merged.sipFcsMonitoring);
       const googleSheets = {
         clientId: (merged.googleSheets && typeof merged.googleSheets.clientId === 'string')
           ? merged.googleSheets.clientId
@@ -9663,6 +9924,7 @@ https://bit.ly/4vrcu64`;
         rcaSignatories,
         rcaCompany,
         recorder,
+        sipFcsMonitoring,
         googleSheets,
         backup,
       };
@@ -12926,6 +13188,14 @@ match /shared/whitelistSmsTestNumbers {
       const activeCount = state.sheets.filter(s => s.active).length;
       const days = daysInMonth(state.year, state.month);
       const activeRules = state.rules.filter(r => r.enabled).length;
+      const sipFcsMonitoring = sipMonitorNormalizeState(state.sipFcsMonitoring);
+      const setSipFcsMonitoring = useCallback((next) => setState(s => {
+        const previous = sipMonitorNormalizeState(s.sipFcsMonitoring);
+        return {
+          ...s,
+          sipFcsMonitoring: sipMonitorNormalizeState(typeof next === 'function' ? next(previous) : next),
+        };
+      }), [setState]);
 
       // Bundle passed to the SIP/FCS, BMR VOIP and BMR SMS sidebars so their
       // GoogleSheetSync panel can set the Client ID, connect and sync.
@@ -12948,6 +13218,7 @@ match /shared/whitelistSmsTestNumbers {
 
       const TABS = [
         { id: 'config',  label: 'Config' },
+        { id: 'monitoring', label: 'Monitoring' },
         { id: 'rules',   label: 'Rules' },
         { id: 'preview', label: 'Preview' },
         { id: 'notes',   label: 'Notes' },
@@ -13521,6 +13792,14 @@ match /shared/whitelistSmsTestNumbers {
                       <TemplateBar state={state} setState={setState} sync={sync} />
                     </div>
                   </div>
+                )}
+                {state.tab === 'monitoring' && (
+                  <SipFcsMonitoringPanel
+                    monitoring={sipFcsMonitoring}
+                    onChange={setSipFcsMonitoring}
+                    onToast={showToast}
+                    confirmDialog={confirmDialog}
+                  />
                 )}
                 {state.tab === 'rules' && (
                   <div>

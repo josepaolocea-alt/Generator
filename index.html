@@ -7925,7 +7925,160 @@ function RcaForm({ state, setState, sync }) {
     }
   )), /* @__PURE__ */ React.createElement(RcaSignatoriesPanel, { state, setState, sync }), /* @__PURE__ */ React.createElement(RcaTemplatesPanel, { state, setState, sync }));
 }
-const APP_STATE_SCHEMA_VERSION = 2;
+const SIP_MONITOR_TIME_SLOTS = ["12AM", "2AM", "4AM", "6AM", "8AM", "10AM", "12PM", "2PM", "4PM", "6PM", "8PM", "10PM"];
+const SIP_MONITOR_METRICS = [
+  { id: "inx", label: "INX" },
+  { id: "pldtSip", label: "PLDT SIP" },
+  { id: "pldtFcs", label: "PLDT FCS" },
+  { id: "etpi", label: "ETPI" },
+  { id: "gsm", label: "GSM" }
+];
+function sipMonitorTodayIso(date = /* @__PURE__ */ new Date()) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function sipMonitorShiftDate(iso, delta) {
+  const [y, m, d] = String(iso || sipMonitorTodayIso()).split("-").map(Number);
+  const date = new Date(y || (/* @__PURE__ */ new Date()).getFullYear(), Math.max(0, (m || 1) - 1), d || 1);
+  date.setDate(date.getDate() + delta);
+  return sipMonitorTodayIso(date);
+}
+function sipMonitorCurrentSlot(date = /* @__PURE__ */ new Date()) {
+  const evenHour = Math.floor(date.getHours() / 2) * 2;
+  return HOURS_24[evenHour] || "12AM";
+}
+const DEFAULT_SIP_FCS_MONITORING = {
+  selectedDate: sipMonitorTodayIso(),
+  selectedSlot: sipMonitorCurrentSlot(),
+  values: {}
+};
+function sipMonitorNormalizeState(raw = {}) {
+  const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.selectedDate || "")) ? String(raw.selectedDate) : sipMonitorTodayIso();
+  const selectedSlot = SIP_MONITOR_TIME_SLOTS.includes(raw.selectedSlot) ? raw.selectedSlot : sipMonitorCurrentSlot();
+  return {
+    selectedDate,
+    selectedSlot,
+    values: raw.values && typeof raw.values === "object" && !Array.isArray(raw.values) ? raw.values : {}
+  };
+}
+function sipMonitorValue(monitoring, dateIso, slot, metricId) {
+  const raw = monitoring?.values?.[dateIso]?.[slot]?.[metricId];
+  if (raw === "" || raw == null) return null;
+  const num = Number(raw);
+  return Number.isFinite(num) ? Math.max(0, Math.floor(num)) : null;
+}
+function sipMonitorTotal(monitoring, dateIso, slot) {
+  const values = SIP_MONITOR_METRICS.map((metric) => sipMonitorValue(monitoring, dateIso, slot, metric.id));
+  const filled = values.filter((v) => v != null);
+  return filled.length ? filled.reduce((sum, value) => sum + value, 0) : null;
+}
+function sipMonitorPrettyDate(iso) {
+  const [y, m, d] = String(iso || "").split("-").map(Number);
+  if (!y || !m || !d) return iso || "—";
+  return previewDateFormat(new Date(y, m - 1, d), "d-mmm-yy");
+}
+function sipMonitorComparisonText(monitoring) {
+  const today = monitoring.selectedDate;
+  const yesterday = sipMonitorShiftDate(today, -1);
+  const slot = monitoring.selectedSlot;
+  const block = (iso) => {
+    const rows = [sipMonitorPrettyDate(iso), slot];
+    SIP_MONITOR_METRICS.forEach((metric) => {
+      const value = sipMonitorValue(monitoring, iso, slot, metric.id);
+      rows.push(`${metric.label}	${value == null ? "—" : value}`);
+    });
+    const total = sipMonitorTotal(monitoring, iso, slot);
+    rows.push(`Total Calls	${total == null ? "—" : total}`);
+    return rows.join("\n");
+  };
+  return `${block(yesterday)}
+
+${block(today)}`;
+}
+function SipMonitorComparisonCard({ title, dateIso, slot, monitoring, tone = "neutral" }) {
+  const toneClasses = tone === "today" ? "border-blue-500/30 bg-blue-500/[0.04]" : "border-neutral-800 bg-neutral-950/50";
+  return /* @__PURE__ */ React.createElement(Card, { className: `overflow-hidden ${toneClasses}` }, /* @__PURE__ */ React.createElement("div", { className: "border-b border-neutral-800 px-4 py-3" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.16em] text-neutral-500" }, title), /* @__PURE__ */ React.createElement("div", { className: "mt-1 flex items-center justify-between gap-3" }, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-red-300" }, sipMonitorPrettyDate(dateIso)), /* @__PURE__ */ React.createElement("span", { className: "rounded bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-300" }, slot))), /* @__PURE__ */ React.createElement("div", { className: "divide-y divide-neutral-900" }, SIP_MONITOR_METRICS.map((metric) => {
+    const value = sipMonitorValue(monitoring, dateIso, slot, metric.id);
+    return /* @__PURE__ */ React.createElement("div", { key: metric.id, className: "flex items-center justify-between px-4 py-2 text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, metric.label), /* @__PURE__ */ React.createElement("span", { className: `font-mono font-semibold ${value == null ? "text-neutral-700" : "text-neutral-100"}` }, value == null ? "—" : value.toLocaleString()));
+  }), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between bg-emerald-500/[0.06] px-4 py-2.5 text-sm" }, /* @__PURE__ */ React.createElement("span", { className: "font-semibold text-emerald-200" }, "Total Calls"), /* @__PURE__ */ React.createElement("span", { className: "font-mono font-bold text-emerald-200" }, sipMonitorTotal(monitoring, dateIso, slot)?.toLocaleString() ?? "—"))));
+}
+function SipFcsMonitoringPanel({ monitoring, onChange, onToast, confirmDialog: confirmDialog2 }) {
+  const selectedDate = monitoring.selectedDate;
+  const selectedSlot = monitoring.selectedSlot;
+  const yesterday = sipMonitorShiftDate(selectedDate, -1);
+  const setNow = () => onChange((prev) => ({
+    ...prev,
+    selectedDate: sipMonitorTodayIso(),
+    selectedSlot: sipMonitorCurrentSlot()
+  }));
+  const setReading = (dateIso, slot, metricId, raw) => {
+    onChange((prev) => {
+      const values = { ...prev.values || {} };
+      const day = { ...values[dateIso] || {} };
+      const slotValues = { ...day[slot] || {} };
+      if (raw === "") delete slotValues[metricId];
+      else {
+        const parsed = Number(raw);
+        slotValues[metricId] = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+      }
+      if (Object.keys(slotValues).length) day[slot] = slotValues;
+      else delete day[slot];
+      if (Object.keys(day).length) values[dateIso] = day;
+      else delete values[dateIso];
+      return { ...prev, values };
+    });
+  };
+  const copyComparison = async () => {
+    const copied = await copyTextToClipboard(sipMonitorComparisonText(monitoring));
+    onToast(copied ? "ok" : "err", copied ? "Yesterday and today comparison copied." : "Could not copy the comparison.");
+  };
+  const clearDay = async () => {
+    if (!monitoring.values?.[selectedDate]) return;
+    const ok = await confirmDialog2({
+      title: `Clear ${sipMonitorPrettyDate(selectedDate)}?`,
+      message: "All SIP/FCS monitoring entries for this date will be removed.",
+      confirmText: "Clear day",
+      tone: "danger"
+    });
+    if (!ok) return;
+    onChange((prev) => {
+      const values = { ...prev.values || {} };
+      delete values[selectedDate];
+      return { ...prev, values };
+    });
+    onToast("ok", `Cleared ${sipMonitorPrettyDate(selectedDate)}.`);
+  };
+  const filledSlots = SIP_MONITOR_TIME_SLOTS.filter(
+    (slot) => SIP_MONITOR_METRICS.some((metric) => sipMonitorValue(monitoring, selectedDate, slot, metric.id) != null)
+  ).length;
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-7" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Daily input · every 2 hours from 12AM" }, "SIP / FCS monitoring"), /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "grid gap-4 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto] md:items-end" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "mb-1.5 block text-[10px] uppercase tracking-[0.14em] text-neutral-500" }, "Today / report date"), /* @__PURE__ */ React.createElement(Input, { type: "date", value: selectedDate, onChange: (e) => onChange((prev) => ({ ...prev, selectedDate: e.target.value || sipMonitorTodayIso() })) })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "mb-1.5 block text-[10px] uppercase tracking-[0.14em] text-neutral-500" }, "Current 2-hour time"), /* @__PURE__ */ React.createElement(Select, { value: selectedSlot, onChange: (e) => onChange((prev) => ({ ...prev, selectedSlot: e.target.value })) }, SIP_MONITOR_TIME_SLOTS.map((slot) => /* @__PURE__ */ React.createElement("option", { key: slot, value: slot }, slot)))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", onClick: setNow }, "Now"), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", onClick: copyComparison }, "Copy comparison"))), /* @__PURE__ */ React.createElement("div", { className: "mt-3 flex flex-wrap items-center gap-2 text-[11px] text-neutral-500" }, /* @__PURE__ */ React.createElement(Pill, { tone: filledSlots === 12 ? "success" : "default" }, filledSlots, "/12 slots entered"), /* @__PURE__ */ React.createElement("span", null, "Enter a real 0 when the count is zero; leave the cell blank when it has not been monitored yet.")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Ready to copy as one message" }, "Yesterday same time vs today current time"), /* @__PURE__ */ React.createElement("div", { className: "grid gap-4 lg:grid-cols-2" }, /* @__PURE__ */ React.createElement(SipMonitorComparisonCard, { title: "Yesterday · same time", dateIso: yesterday, slot: selectedSlot, monitoring }), /* @__PURE__ */ React.createElement(SipMonitorComparisonCard, { title: "Today · current time", dateIso: selectedDate, slot: selectedSlot, monitoring, tone: "today" }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "mb-3 flex flex-wrap items-center justify-between gap-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `Editing ${sipMonitorPrettyDate(selectedDate)}` }, "Daily input sheet"), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: clearDay, disabled: !monitoring.values?.[selectedDate] }, "Clear selected day")), /* @__PURE__ */ React.createElement(Card, { className: "overflow-hidden" }, /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto" }, /* @__PURE__ */ React.createElement("table", { className: "w-full min-w-[760px] border-collapse text-sm" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", { className: "border-b border-neutral-800 bg-neutral-950/80 text-[10px] uppercase tracking-[0.12em] text-neutral-500" }, /* @__PURE__ */ React.createElement("th", { className: "px-3 py-2.5 text-left" }, "Time"), SIP_MONITOR_METRICS.map((metric) => /* @__PURE__ */ React.createElement("th", { key: metric.id, className: "px-2 py-2.5 text-center" }, metric.label)), /* @__PURE__ */ React.createElement("th", { className: "px-3 py-2.5 text-right" }, "Total Calls"))), /* @__PURE__ */ React.createElement("tbody", { className: "divide-y divide-neutral-900" }, SIP_MONITOR_TIME_SLOTS.map((slot) => {
+    const active = slot === selectedSlot;
+    return /* @__PURE__ */ React.createElement("tr", { key: slot, className: active ? "bg-blue-500/[0.06]" : "hover:bg-neutral-900/30" }, /* @__PURE__ */ React.createElement("td", { className: "px-3 py-2" }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => onChange((prev) => ({ ...prev, selectedSlot: slot })),
+        className: `rounded px-2 py-1 font-mono text-xs font-semibold transition-colors ${active ? "bg-blue-500/15 text-blue-300" : "text-red-300 hover:bg-neutral-800"}`
+      },
+      slot
+    )), SIP_MONITOR_METRICS.map((metric) => {
+      const value = sipMonitorValue(monitoring, selectedDate, slot, metric.id);
+      return /* @__PURE__ */ React.createElement("td", { key: metric.id, className: "px-2 py-1.5" }, /* @__PURE__ */ React.createElement(
+        Input,
+        {
+          type: "number",
+          min: "0",
+          step: "1",
+          inputMode: "numeric",
+          value: value ?? "",
+          onChange: (e) => setReading(selectedDate, slot, metric.id, e.target.value),
+          "aria-label": `${sipMonitorPrettyDate(selectedDate)} ${slot} ${metric.label}`,
+          className: "mx-auto !w-24 !px-2 !py-1.5 text-right font-mono text-xs [appearance:textfield]"
+        }
+      ));
+    }), /* @__PURE__ */ React.createElement("td", { className: "px-3 py-2 text-right font-mono font-semibold text-emerald-300" }, sipMonitorTotal(monitoring, selectedDate, slot)?.toLocaleString() ?? "—"));
+  })))))));
+}
+const APP_STATE_SCHEMA_VERSION = 3;
 const DEFAULT_STATE = {
   schemaVersion: APP_STATE_SCHEMA_VERSION,
   year: (/* @__PURE__ */ new Date()).getFullYear(),
@@ -7936,6 +8089,7 @@ const DEFAULT_STATE = {
   includeIndex: true,
   changelog: "",
   tab: "config",
+  sipFcsMonitoring: DEFAULT_SIP_FCS_MONITORING,
   theme: "dark",
   imported: [],
   module: "sip_fcs",
@@ -8063,6 +8217,7 @@ function normalizeAppState(raw = {}, options = {}) {
   const rcaSignatories = Array.isArray(merged.rcaSignatories) && merged.rcaSignatories.length ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
   const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
   const recorder = recorderNormalizeState(merged.recorder);
+  const sipFcsMonitoring = sipMonitorNormalizeState(merged.sipFcsMonitoring);
   const googleSheets = {
     clientId: merged.googleSheets && typeof merged.googleSheets.clientId === "string" ? merged.googleSheets.clientId : DEFAULT_STATE.googleSheets.clientId || "",
     backupFolderId: merged.googleSheets && typeof merged.googleSheets.backupFolderId === "string" ? merged.googleSheets.backupFolderId : DEFAULT_STATE.googleSheets.backupFolderId || "",
@@ -8095,6 +8250,7 @@ function normalizeAppState(raw = {}, options = {}) {
     rcaSignatories,
     rcaCompany,
     recorder,
+    sipFcsMonitoring,
     googleSheets,
     backup
   };
@@ -10834,6 +10990,14 @@ function App() {
   const activeCount = state.sheets.filter((s) => s.active).length;
   const days = daysInMonth(state.year, state.month);
   const activeRules = state.rules.filter((r) => r.enabled).length;
+  const sipFcsMonitoring = sipMonitorNormalizeState(state.sipFcsMonitoring);
+  const setSipFcsMonitoring = useCallback((next) => setState((s) => {
+    const previous = sipMonitorNormalizeState(s.sipFcsMonitoring);
+    return {
+      ...s,
+      sipFcsMonitoring: sipMonitorNormalizeState(typeof next === "function" ? next(previous) : next)
+    };
+  }), [setState]);
   const googleClientId = String(state.googleSheets?.clientId || "");
   const googleConfigured = !!(googleClientId.trim() || GOOGLE_OAUTH_CLIENT_ID);
   const googleSyncProps = {
@@ -10858,6 +11022,7 @@ function App() {
   };
   const TABS = [
     { id: "config", label: "Config" },
+    { id: "monitoring", label: "Monitoring" },
     { id: "rules", label: "Rules" },
     { id: "preview", label: "Preview" },
     { id: "notes", label: "Notes" }
@@ -11091,7 +11256,15 @@ e.g. Sender ID approval ticket, vendor name, request date.`
       className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
     },
     t.label
-  ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first 2 days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
+  ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "monitoring" && /* @__PURE__ */ React.createElement(
+    SipFcsMonitoringPanel,
+    {
+      monitoring: sipFcsMonitoring,
+      onChange: setSipFcsMonitoring,
+      onToast: showToast,
+      confirmDialog
+    }
+  ), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first 2 days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
     Textarea,
     {
       rows: 12,
