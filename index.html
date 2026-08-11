@@ -455,7 +455,8 @@
 const { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } = React;
 const HOURS_24 = ["12AM", "1AM", "2AM", "3AM", "4AM", "5AM", "6AM", "7AM", "8AM", "9AM", "10AM", "11AM", "12PM", "1PM", "2PM", "3PM", "4PM", "5PM", "6PM", "7PM", "8PM", "9PM", "10PM", "11PM"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const LAYOUT_LABELS = { hourly: "Hourly Block", flat: "Flat Table", alarm: "Alarm Log" };
+const LAYOUT_LABELS = { hourly: "Hourly Block", twohour: "2 Hour Report", flat: "Flat Table", alarm: "Alarm Log" };
+const TWO_HOUR_SLOTS = ["12AM", "2AM", "4AM", "6AM", "8AM", "10AM", "12PM", "2PM", "4PM", "6PM", "8PM", "10PM"];
 const FLAT_COLS = ["Date", "Time", "Trunk ID", "Alias", "Active Calls", "CPS", "Peak", "CLZ Total", "CLZ CPS", "15min ASR", "15min ACD", "15min PDD"];
 const FONT_FAMILIES = ["Calibri", "Arial", "Helvetica", "Times New Roman", "Georgia", "Verdana", "Tahoma", "Trebuchet MS", "Courier New", "Consolas", "Comic Sans MS"];
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32];
@@ -533,7 +534,8 @@ const DEFAULT_SHEETS = [
   { id: "s_voscyn", name: "VOS CYN GSMGW", layout: "hourly", active: true, metrics: ["Activate Calls", "CPS", "PEAK"], hourStart: 0, hourEnd: 24, note: "" },
   { id: "s_kingsf", name: "KINGSFORD INOUT", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound", "Current Outbound", "Max Outbound"], hourStart: 0, hourEnd: 24, note: "" },
   { id: "s_uno", name: "UNOBANK IN", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound"], hourStart: 0, hourEnd: 24, note: "" },
-  { id: "s_myvelox", name: "MYVELOX INOUT", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound", "Current Outbound", "Max Outbound"], hourStart: 0, hourEnd: 24, note: "" }
+  { id: "s_myvelox", name: "MYVELOX INOUT", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound", "Current Outbound", "Max Outbound"], hourStart: 0, hourEnd: 24, note: "" },
+  { id: "s_2hour", name: "2 Hour Report", layout: "twohour", active: true, metrics: ["INX", "PLDT SIP", "PLDT FCS", "ETPI", "GSM"], dateFormat: "d-mmm-yy", note: "" }
 ];
 const STORAGE_KEY = "mrg_state_v1";
 const TEMPLATES_KEY = "mrg_templates_v1";
@@ -627,6 +629,28 @@ function detectHeaderRow(ws) {
   }
   return null;
 }
+function isTwoHourDateCell(cell) {
+  const value = cell?.value;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return true;
+  if (typeof value === "number" && /[dmy]/i.test(String(cell?.numFmt || ""))) return true;
+  if (typeof value !== "string") return false;
+  const text = value.trim();
+  return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(text) || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(text) || /^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(text);
+}
+function detectTwoHourReport(ws) {
+  const maxRows = Math.min(ws.rowCount || 12, 12);
+  const maxCols = Math.min(ws.columnCount || 100, 100);
+  for (let row = 1; row < maxRows; row++) {
+    const dateCols = [];
+    for (let col = 1; col <= maxCols; col++) {
+      const dateCell = ws.getRow(row).getCell(col);
+      const timeText = cellText(ws.getRow(row + 1).getCell(col)).toUpperCase().replace(/\s+/g, "");
+      if (isTwoHourDateCell(dateCell) && TWO_HOUR_SLOTS.includes(timeText)) dateCols.push(col);
+    }
+    if (dateCols.length >= 2) return { dateRow: row, timeRow: row + 1, dateCols };
+  }
+  return null;
+}
 function inferHourlyRowSeparator(ws, headerRow, metricCount) {
   if (!metricCount) return true;
   const afterFirstBlock = headerRow + metricCount + 1;
@@ -642,6 +666,27 @@ async function parseXlsxToSheets(file) {
   const sheets = [];
   wb.eachSheet((ws) => {
     if (SKIP_IMPORT_NAMES.test(ws.name)) return;
+    const twoHour = detectTwoHourReport(ws);
+    if (twoHour) {
+      const firstCol = twoHour.dateCols[0];
+      const metrics = [];
+      for (let row = twoHour.timeRow + 1; row <= Math.min(ws.rowCount || 80, twoHour.timeRow + 40); row++) {
+        const label = cellText(ws.getRow(row).getCell(firstCol));
+        if (!label) break;
+        if (/^total\s+(calls?|sip\/?fcs)$/i.test(label)) break;
+        metrics.push(label);
+      }
+      sheets.push({
+        id: newId(),
+        name: ws.name,
+        layout: "twohour",
+        active: true,
+        metrics: metrics.length ? metrics : ["INX", "PLDT SIP", "PLDT FCS", "ETPI", "GSM"],
+        dateFormat: ws.getRow(twoHour.dateRow).getCell(firstCol).numFmt || "d-mmm-yy",
+        note: ""
+      });
+      return;
+    }
     const hdr = detectHeaderRow(ws);
     if (!hdr) return;
     if (hdr.kind === "hourly") {
@@ -1239,7 +1284,7 @@ async function buildSipFcsBlob(state) {
       idx.addRow({
         sheet: s.name,
         layout: LAYOUT_LABELS[s.layout],
-        items: visibleLabels(s.layout === "hourly" ? s.metrics : s.columns).join(", ")
+        items: visibleLabels(s.layout === "hourly" || s.layout === "twohour" ? s.metrics : s.columns).join(", ")
       });
     });
     idx.addRow({});
@@ -1252,6 +1297,7 @@ async function buildSipFcsBlob(state) {
     const ws = wb.addWorksheet(safeSheetName(s.name));
     ws.properties.defaultRowHeight = 18;
     if (s.layout === "hourly") buildHourlySheet(ws, s, year, month, rules);
+    else if (s.layout === "twohour") buildTwoHourReportSheet(ws, s, year, month, rules);
     else if (s.layout === "flat") buildFlatSheet(ws, s, year, month, rules);
     else if (s.layout === "alarm") buildAlarmSheet(ws, s, rules);
   }
@@ -1264,7 +1310,8 @@ async function buildSipFcsBlob(state) {
     cl.getColumn(1).width = 100;
   }
   const buf = await wb.xlsx.writeBuffer();
-  const filename = `${MONTHS[month]}_${year}_SIP_FCS_Hourly_Record.xlsx`;
+  const onlyTwoHourReport = activeSheets.length === 1 && activeSheets[0].layout === "twohour";
+  const filename = onlyTwoHourReport ? "2 Hour Report.xlsx" : `${MONTHS[month]}_${year}_SIP_FCS_Hourly_Record.xlsx`;
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 async function generateWorkbook(state) {
@@ -1277,6 +1324,7 @@ const SIP_LAYOUT_RULE_SCOPES = [
   { value: "__layout_hourly__", label: "Global rules for all Hourly Block", layout: "hourly" },
   { value: "__layout_hourly_separator__", label: "Global rules for all Hourly Block with row separator", layout: "hourly", rowSeparator: true },
   { value: "__layout_hourly_no_separator__", label: "Global rules for all Hourly Block with no row separator", layout: "hourly", rowSeparator: false },
+  { value: "__layout_twohour__", label: "Global rules for all 2 Hour Report", layout: "twohour" },
   { value: "__layout_flat__", label: "Global rules for all Flat Table", layout: "flat" }
 ];
 function sipLayoutScopeMatches(layoutScope, sheet) {
@@ -1526,6 +1574,97 @@ function buildHourlySheet(ws, s, year, month, allRules) {
           }
         }
       }
+    });
+  }
+}
+function buildTwoHourReportSheet(ws, s, year, month, allRules) {
+  const configuredMetrics = visibleItems(s.metrics || []);
+  const metrics = configuredMetrics.length ? configuredMetrics : ["Metric 1"];
+  const metricCount = metrics.length;
+  const days = daysInMonth(year, month);
+  const totalCols = Math.max(2, days * 3 - 1);
+  const blockHeight = metricCount + 4;
+  const rules = rulesForSheet(allRules, s);
+  let cur = 1;
+  if (s.note && s.note.trim()) {
+    applyNoteStyle(ws, cur, totalCols, s);
+    cur += 2;
+  }
+  const dataStartRow = cur;
+  const border = { style: "thin", color: { argb: "FFD9D9D9" } };
+  TWO_HOUR_SLOTS.forEach((slot) => {
+    const dateRow = cur;
+    const timeRow = cur + 1;
+    const metricStartRow = cur + 2;
+    const totalRow = metricStartRow + metricCount;
+    for (let day = 1; day <= days; day++) {
+      const labelCol = 1 + (day - 1) * 3;
+      const valueCol = labelCol + 1;
+      const date = new Date(Date.UTC(year, month, day));
+      const dateCell = ws.getCell(dateRow, labelCol);
+      dateCell.value = date;
+      dateCell.numFmt = s.dateFormat || "d-mmm-yy";
+      dateCell.font = { bold: true, color: { argb: "FFFF0000" } };
+      dateCell.alignment = { horizontal: "center", vertical: "middle" };
+      const timeCell = ws.getCell(timeRow, labelCol);
+      timeCell.value = slot;
+      timeCell.font = { bold: true, color: { argb: "FFFF0000" } };
+      timeCell.alignment = { horizontal: "center", vertical: "middle" };
+      metrics.forEach((metric, metricIndex) => {
+        const row = metricStartRow + metricIndex;
+        const labelCell = ws.getCell(row, labelCol);
+        const inputCell = ws.getCell(row, valueCol);
+        labelCell.value = itemLabel(metric);
+        labelCell.alignment = { horizontal: "left", vertical: "middle" };
+        inputCell.value = null;
+        inputCell.alignment = { horizontal: "center", vertical: "middle" };
+        if (itemColor(metric)) {
+          const fill = { type: "pattern", pattern: "solid", fgColor: { argb: argbHex(itemColor(metric)) } };
+          labelCell.fill = fill;
+          if (itemColorExtend(metric)) inputCell.fill = fill;
+        }
+      });
+      const totalLabel = ws.getCell(totalRow, labelCol);
+      const totalValue = ws.getCell(totalRow, valueCol);
+      totalLabel.value = "Total Calls";
+      totalLabel.font = { bold: true };
+      totalValue.value = { formula: `SUM(${colLetter(valueCol)}${metricStartRow}:${colLetter(valueCol)}${totalRow - 1})` };
+      totalValue.font = { bold: true };
+      totalValue.alignment = { horizontal: "center", vertical: "middle" };
+      for (let row = dateRow; row <= totalRow; row++) {
+        for (let col = labelCol; col <= valueCol; col++) {
+          ws.getCell(row, col).border = { top: border, bottom: border, left: border, right: border };
+        }
+      }
+    }
+    cur = totalRow + 2;
+  });
+  for (let day = 1; day <= days; day++) {
+    const labelCol = 1 + (day - 1) * 3;
+    ws.getColumn(labelCol).width = 17;
+    ws.getColumn(labelCol + 1).width = 10;
+    if (day < days) ws.getColumn(labelCol + 2).width = 3;
+  }
+  ws.properties.defaultRowHeight = 18;
+  ws.views = [{ state: "frozen", ySplit: Math.max(0, dataStartRow - 1) }];
+  for (let day = 1; day <= days; day++) {
+    const valueCol = 2 + (day - 1) * 3;
+    const col = colLetter(valueCol);
+    const ref = `${col}${dataStartRow}:${col}${cur - 2}`;
+    const offset = `MOD(ROW()-${dataStartRow},${blockHeight})`;
+    const metricRow = `AND(${offset}>=2,${offset}<${2 + metricCount})`;
+    rules.forEach((rule, index) => {
+      if (!rule.enabled || !["above", "below", "blank", "zero"].includes(rule.type)) return;
+      const style = sipRuleStyle(rule, rule.type === "blank" ? "FF374151" : "FF166534");
+      let test = "";
+      if (rule.type === "above") test = `AND(ISNUMBER(${col}${dataStartRow}),${col}${dataStartRow}>${Number(rule.threshold) || 0})`;
+      if (rule.type === "below") test = `AND(ISNUMBER(${col}${dataStartRow}),${col}${dataStartRow}<${Number(rule.threshold) || 0})`;
+      if (rule.type === "blank") test = `ISBLANK(${col}${dataStartRow})`;
+      if (rule.type === "zero") test = `${col}${dataStartRow}=0`;
+      ws.addConditionalFormatting({
+        ref,
+        rules: [{ type: "expression", formulae: [`AND(${metricRow},${test})`], style, priority: 10 + index }]
+      });
     });
   }
 }
@@ -4061,7 +4200,7 @@ function UploadedSidebar({ state, setState }) {
     },
     /* @__PURE__ */ React.createElement("svg", { className: "w-4 h-4", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "15 18 9 12 15 6" }))
   )), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 -mt-1" }, "Sheets parsed from an uploaded .xlsx. Add the ones you want into the main sidebar.")), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto min-h-0" }, imported.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-[12px] text-neutral-400" }, "No uploaded sheets yet"), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-1.5 leading-relaxed" }, "Open the ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, "Config"), " tab and use ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, "Import .xlsx"), " in the Templates section.")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, imported.map((it) => {
-    const count = it.layout === "hourly" ? `${(it.metrics || []).length} metrics` : `${(it.columns || []).length} cols`;
+    const count = it.layout === "hourly" || it.layout === "twohour" ? `${(it.metrics || []).length} metrics` : `${(it.columns || []).length} cols`;
     return /* @__PURE__ */ React.createElement(
       "div",
       {
@@ -4484,11 +4623,15 @@ function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
   const setLayout = (layout) => {
     if (layout === sheet.layout) return;
     const next = { ...sheet, layout };
-    if (layout === "hourly") {
+    if (layout === "hourly" || layout === "twohour") {
       next.metrics = sheet.metrics?.length ? sheet.metrics : sheet.columns?.length ? sheet.columns : ["Metric 1"];
-      next.hourStart = sheet.hourStart ?? 0;
-      next.hourEnd = sheet.hourEnd ?? 24;
-      next.rowSeparator = sheet.rowSeparator ?? true;
+      if (layout === "hourly") {
+        next.hourStart = sheet.hourStart ?? 0;
+        next.hourEnd = sheet.hourEnd ?? 24;
+        next.rowSeparator = sheet.rowSeparator ?? true;
+      } else {
+        next.dateFormat = sheet.dateFormat || "d-mmm-yy";
+      }
     } else {
       next.columns = sheet.columns?.length ? sheet.columns : sheet.metrics?.length ? sheet.metrics : ["Column 1"];
     }
@@ -4501,7 +4644,7 @@ function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
       onChange: (e) => update({ name: e.target.value }),
       className: "text-3xl font-bold tracking-tight bg-transparent border-none outline-none w-full focus:bg-neutral-900/50 rounded px-1.5 -mx-1.5 py-0.5"
     }
-  ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mt-3 flex-wrap" }, /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, LAYOUT_LABELS[sheet.layout]), /* @__PURE__ */ React.createElement(Pill, { tone: sheet.active ? "success" : "muted" }, sheet.active ? "● Active" : "○ Inactive"), sheet.layout === "hourly" && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.metrics).length, "/", (sheet.metrics || []).length, " metrics"), sheet.layout === "hourly" && /* @__PURE__ */ React.createElement(Pill, null, hourlyHasRowSeparator(sheet) ? "With separator" : "No separator"), sheet.layout !== "hourly" && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.columns).length, "/", (sheet.columns || []).length, " columns"))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-2 shrink-0 w-44" }, /* @__PURE__ */ React.createElement(Select, { value: sheet.layout, onChange: (e) => setLayout(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "hourly" }, "Hourly Block"), /* @__PURE__ */ React.createElement("option", { value: "flat" }, "Flat Table"), /* @__PURE__ */ React.createElement("option", { value: "alarm" }, "Alarm Log")), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onDuplicate, className: "flex-1" }, "Duplicate"), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onDelete, className: "flex-1" }, "Delete")))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "hdr-note", title: "Header note", hint: "Shown at top of the generated sheet" }, /* @__PURE__ */ React.createElement(Textarea, { rows: 2, value: sheet.note || "", onChange: (e) => update({ note: e.target.value }), placeholder: "Optional instructional note (e.g. 'Highlight peak utilization hours in red')" }), /* @__PURE__ */ React.createElement("div", { className: "mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end" }, /* @__PURE__ */ React.createElement("div", { className: "md:col-span-2" }, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Font family"), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mt-3 flex-wrap" }, /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, LAYOUT_LABELS[sheet.layout]), /* @__PURE__ */ React.createElement(Pill, { tone: sheet.active ? "success" : "muted" }, sheet.active ? "● Active" : "○ Inactive"), (sheet.layout === "hourly" || sheet.layout === "twohour") && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.metrics).length, "/", (sheet.metrics || []).length, " metrics"), sheet.layout === "hourly" && /* @__PURE__ */ React.createElement(Pill, null, hourlyHasRowSeparator(sheet) ? "With separator" : "No separator"), sheet.layout === "twohour" && /* @__PURE__ */ React.createElement(Pill, null, "12 slots · every 2 hours"), sheet.layout !== "hourly" && sheet.layout !== "twohour" && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.columns).length, "/", (sheet.columns || []).length, " columns"))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-2 shrink-0 w-44" }, /* @__PURE__ */ React.createElement(Select, { value: sheet.layout, onChange: (e) => setLayout(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "hourly" }, "Hourly Block"), /* @__PURE__ */ React.createElement("option", { value: "twohour" }, "2 Hour Report"), /* @__PURE__ */ React.createElement("option", { value: "flat" }, "Flat Table"), /* @__PURE__ */ React.createElement("option", { value: "alarm" }, "Alarm Log")), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onDuplicate, className: "flex-1" }, "Duplicate"), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onDelete, className: "flex-1" }, "Delete")))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "hdr-note", title: "Header note", hint: "Shown at top of the generated sheet" }, /* @__PURE__ */ React.createElement(Textarea, { rows: 2, value: sheet.note || "", onChange: (e) => update({ note: e.target.value }), placeholder: "Optional instructional note (e.g. 'Highlight peak utilization hours in red')" }), /* @__PURE__ */ React.createElement("div", { className: "mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end" }, /* @__PURE__ */ React.createElement("div", { className: "md:col-span-2" }, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Font family"), /* @__PURE__ */ React.createElement(
     Select,
     {
       value: sheet.noteFontFamily || DEFAULT_NOTE_STYLE.noteFontFamily,
@@ -4621,7 +4764,19 @@ function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
       className: "text-neutral-500 hover:text-neutral-200 transition-colors"
     },
     /* @__PURE__ */ React.createElement(IconReset, null)
-  )))))) : /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: sheet.layout === "alarm" ? "Click the List badge to add per-column dropdown options" : null }, "Columns"), /* @__PURE__ */ React.createElement(
+  )))))) : sheet.layout === "twohour" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Card, { className: "p-4 border-blue-500/20 bg-blue-500/[0.04]" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold text-neutral-100" }, "2-hour comparison format"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-xs leading-relaxed text-neutral-500" }, "Generates 12 vertical time blocks from 12AM to 10PM. Each date uses a label/value pair across the sheet, so yesterday and today stay next to each other for quick copying.")), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "twohour-dateformat", title: "Date format", hint: "Repeated above every 2-hour block" }, (() => {
+    const fmt = sheet.dateFormat || "d-mmm-yy";
+    const isCustom = !DATE_FORMAT_VALUES.has(fmt);
+    return /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-3 max-w-lg" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Preset"), /* @__PURE__ */ React.createElement(
+      Select,
+      {
+        value: isCustom ? "__custom__" : fmt,
+        onChange: (e) => update({ dateFormat: e.target.value === "__custom__" ? fmt : e.target.value })
+      },
+      DATE_FORMATS.map((d) => /* @__PURE__ */ React.createElement("option", { key: d.value, value: d.value }, d.sample)),
+      /* @__PURE__ */ React.createElement("option", { value: "__custom__" }, "Customâ€¦")
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Format code"), /* @__PURE__ */ React.createElement(Input, { value: fmt, onChange: (e) => update({ dateFormat: e.target.value }), placeholder: "d-mmm-yy" })));
+  })()), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "twohour-metrics", title: "Metric rows", hint: `${visibleItems(sheet.metrics).length} of ${(sheet.metrics || []).length} rows per time block` }, /* @__PURE__ */ React.createElement(ListEditor, { items: sheet.metrics || [], onChange: (v) => update({ metrics: v }), placeholder: "e.g. PLDT SIP", label: "metric", withColor: true }))) : /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: sheet.layout === "alarm" ? "Click the List badge to add per-column dropdown options" : null }, "Columns"), /* @__PURE__ */ React.createElement(
     ListEditor,
     {
       items: sheet.columns || [],
@@ -4719,6 +4874,12 @@ function Preview({ sheet, year, month }) {
       const wk = isWeekend(year, month, dIdx + 1);
       return /* @__PURE__ */ React.createElement(React.Fragment, { key: dIdx }, visibleItems(sheet.metrics).map((m, mIdx) => /* @__PURE__ */ React.createElement("tr", { key: mIdx, className: `border-b border-neutral-900/60 ${wk ? "bg-red-950/20" : ""}` }, /* @__PURE__ */ React.createElement("td", { className: "px-3 py-1.5 text-neutral-400 font-mono sticky left-0 bg-[#232327]" }, mIdx === 0 ? `${year}-${pad(month + 1)}-${pad(dIdx + 1)}` : ""), /* @__PURE__ */ React.createElement("td", { className: "px-3 py-1.5 text-neutral-200", style: itemColor(m) ? { background: itemColor(m) } : {} }, itemLabel(m)), hours.map((_2, hi) => /* @__PURE__ */ React.createElement("td", { key: hi, className: "px-2 py-1.5 text-neutral-700 text-center", style: itemColor(m) && itemColorExtend(m) ? { background: itemColor(m) } : {} }, "·")))), showSeparator && dIdx < sample - 1 && /* @__PURE__ */ React.createElement("tr", { className: "h-2 bg-[#1c1c1f]" }, /* @__PURE__ */ React.createElement("td", { colSpan: 2 + hours.length })));
     }))));
+  }
+  if (sheet.layout === "twohour") {
+    const metrics = visibleItems(sheet.metrics || []);
+    const sampleDays = Math.min(2, daysInMonth(year, month));
+    const days = [...Array(sampleDays)].map((_, index) => index + 1);
+    return /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900 bg-[#232327] p-3" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-[620px] text-[11px]" }, /* @__PURE__ */ React.createElement("tbody", null, TWO_HOUR_SLOTS.slice(0, 2).map((slot, slotIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: slot }, /* @__PURE__ */ React.createElement("tr", null, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center font-semibold text-red-300" }, previewDateFormat(new Date(year, month, day), sheet.dateFormat || "d-mmm-yy")), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5" }), day < sampleDays && /* @__PURE__ */ React.createElement("td", { className: "w-5" })))), /* @__PURE__ */ React.createElement("tr", null, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center font-bold text-red-300" }, slot), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5" }), day < sampleDays && /* @__PURE__ */ React.createElement("td", null)))), metrics.map((metric, metricIndex) => /* @__PURE__ */ React.createElement("tr", { key: `${slot}-${metricIndex}` }, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-neutral-300", style: itemColor(metric) ? { background: itemColor(metric) } : {} }, itemLabel(metric)), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center text-neutral-700", style: itemColor(metric) && itemColorExtend(metric) ? { background: itemColor(metric) } : {} }, "·"), day < sampleDays && /* @__PURE__ */ React.createElement("td", null))))), /* @__PURE__ */ React.createElement("tr", null, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 font-semibold text-neutral-200" }, "Total Calls"), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center text-neutral-700" }, "0"), day < sampleDays && /* @__PURE__ */ React.createElement("td", null)))), slotIndex < 1 && /* @__PURE__ */ React.createElement("tr", { className: "h-3" }, /* @__PURE__ */ React.createElement("td", { colSpan: sampleDays * 3 - 1 })))))), /* @__PURE__ */ React.createElement("p", { className: "mt-3 text-[10px] text-neutral-600" }, "Preview shows 2 dates and the first 2 time blocks. The generated sheet includes every date in the month and all 12 time blocks."));
   }
   return /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-full text-[11px]" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", { className: "border-b border-neutral-800 bg-neutral-950" }, visibleLabels(sheet.columns).map((c) => /* @__PURE__ */ React.createElement("th", { key: c, className: "text-left px-3 py-2.5 font-semibold text-neutral-300" }, c)))), /* @__PURE__ */ React.createElement("tbody", null, [...Array(3)].map((_, i) => /* @__PURE__ */ React.createElement("tr", { key: i, className: "border-b border-neutral-900/60" }, visibleLabels(sheet.columns).map((c) => /* @__PURE__ */ React.createElement("td", { key: c, className: "px-3 py-1.5 text-neutral-700" }, "·")))))));
 }
@@ -8078,18 +8239,17 @@ function SipFcsMonitoringPanel({ monitoring, onChange, onToast, confirmDialog: c
     }), /* @__PURE__ */ React.createElement("td", { className: "px-3 py-2 text-right font-mono font-semibold text-emerald-300" }, sipMonitorTotal(monitoring, selectedDate, slot)?.toLocaleString() ?? "—"));
   })))))));
 }
-const APP_STATE_SCHEMA_VERSION = 3;
+const APP_STATE_SCHEMA_VERSION = 4;
 const DEFAULT_STATE = {
   schemaVersion: APP_STATE_SCHEMA_VERSION,
   year: (/* @__PURE__ */ new Date()).getFullYear(),
   month: (/* @__PURE__ */ new Date()).getMonth(),
   sheets: DEFAULT_SHEETS,
-  selectedSheetId: "s_sbc",
+  selectedSheetId: "s_2hour",
   rules: [],
   includeIndex: true,
   changelog: "",
   tab: "config",
-  sipFcsMonitoring: DEFAULT_SIP_FCS_MONITORING,
   theme: "dark",
   imported: [],
   module: "sip_fcs",
@@ -8185,11 +8345,16 @@ function migrateSheetItem(item) {
 }
 function migrateSheets(sheets) {
   const list = Array.isArray(sheets) && sheets.length ? sheets : DEFAULT_SHEETS;
-  return list.map((sheet) => ({
+  const migrated = list.map((sheet) => ({
     ...sheet,
     ...Array.isArray(sheet.columns) ? { columns: sheet.columns.map(migrateSheetItem) } : {},
     ...Array.isArray(sheet.metrics) ? { metrics: sheet.metrics.map(migrateSheetItem) } : {}
   }));
+  if (!migrated.some((sheet) => sheet.layout === "twohour")) {
+    const template = DEFAULT_SHEETS.find((sheet) => sheet.id === "s_2hour");
+    migrated.push({ ...template, metrics: [...template.metrics] });
+  }
+  return migrated;
 }
 function normalizeBmrSmsState(raw = {}) {
   const sms = { ...DEFAULT_BMR_SMS_STATE, ...raw || {} };
@@ -8207,6 +8372,12 @@ function normalizeAppState(raw = {}, options = {}) {
   const migrateLegacyLabels = !!options.migrateLegacyLabels && Number(raw?.schemaVersion || 0) < APP_STATE_SCHEMA_VERSION;
   const merged = { ...DEFAULT_STATE, ...raw || {} };
   delete merged.imageEditor;
+  const retiredMonitoringTab = merged.tab === "monitoring";
+  delete merged.sipFcsMonitoring;
+  if (retiredMonitoringTab) {
+    merged.tab = "config";
+    merged.selectedSheetId = "s_2hour";
+  }
   if (merged.module === "image") merged.module = DEFAULT_STATE.module;
   const bmr = { ...DEFAULT_BMR_STATE, ...merged.bmr || {} };
   const bmrSms = normalizeBmrSmsState(merged.bmrSms);
@@ -8217,7 +8388,6 @@ function normalizeAppState(raw = {}, options = {}) {
   const rcaSignatories = Array.isArray(merged.rcaSignatories) && merged.rcaSignatories.length ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
   const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
   const recorder = recorderNormalizeState(merged.recorder);
-  const sipFcsMonitoring = sipMonitorNormalizeState(merged.sipFcsMonitoring);
   const googleSheets = {
     clientId: merged.googleSheets && typeof merged.googleSheets.clientId === "string" ? merged.googleSheets.clientId : DEFAULT_STATE.googleSheets.clientId || "",
     backupFolderId: merged.googleSheets && typeof merged.googleSheets.backupFolderId === "string" ? merged.googleSheets.backupFolderId : DEFAULT_STATE.googleSheets.backupFolderId || "",
@@ -8250,7 +8420,6 @@ function normalizeAppState(raw = {}, options = {}) {
     rcaSignatories,
     rcaCompany,
     recorder,
-    sipFcsMonitoring,
     googleSheets,
     backup
   };
@@ -10965,8 +11134,8 @@ function App() {
         const fn = await generateRcaDocx(state);
         setToast({ type: "ok", msg: `Generated ${fn}` });
       } else {
-        await generateWorkbook(state);
-        setToast({ type: "ok", msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
+        const fn = await generateWorkbook(state);
+        setToast({ type: "ok", msg: `Generated ${fn}` });
       }
       if (googleConn.connected && GOOGLE_SYNC_MODULES[state.module]) {
         const pastedTarget = state.googleSheets?.targetSheetIds?.[state.module] || "";
@@ -10990,14 +11159,6 @@ function App() {
   const activeCount = state.sheets.filter((s) => s.active).length;
   const days = daysInMonth(state.year, state.month);
   const activeRules = state.rules.filter((r) => r.enabled).length;
-  const sipFcsMonitoring = sipMonitorNormalizeState(state.sipFcsMonitoring);
-  const setSipFcsMonitoring = useCallback((next) => setState((s) => {
-    const previous = sipMonitorNormalizeState(s.sipFcsMonitoring);
-    return {
-      ...s,
-      sipFcsMonitoring: sipMonitorNormalizeState(typeof next === "function" ? next(previous) : next)
-    };
-  }), [setState]);
   const googleClientId = String(state.googleSheets?.clientId || "");
   const googleConfigured = !!(googleClientId.trim() || GOOGLE_OAUTH_CLIENT_ID);
   const googleSyncProps = {
@@ -11022,7 +11183,6 @@ function App() {
   };
   const TABS = [
     { id: "config", label: "Config" },
-    { id: "monitoring", label: "Monitoring" },
     { id: "rules", label: "Rules" },
     { id: "preview", label: "Preview" },
     { id: "notes", label: "Notes" }
@@ -11256,15 +11416,7 @@ e.g. Sender ID approval ticket, vendor name, request date.`
       className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
     },
     t.label
-  ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "monitoring" && /* @__PURE__ */ React.createElement(
-    SipFcsMonitoringPanel,
-    {
-      monitoring: sipFcsMonitoring,
-      onChange: setSipFcsMonitoring,
-      onToast: showToast,
-      confirmDialog
-    }
-  ), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first 2 days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
+  ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first 2 days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
     Textarea,
     {
       rows: 12,

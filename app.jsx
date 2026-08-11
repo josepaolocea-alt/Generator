@@ -5,7 +5,8 @@
        ============================================================ */
     const HOURS_24 = ['12AM','1AM','2AM','3AM','4AM','5AM','6AM','7AM','8AM','9AM','10AM','11AM','12PM','1PM','2PM','3PM','4PM','5PM','6PM','7PM','8PM','9PM','10PM','11PM'];
     const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    const LAYOUT_LABELS = { hourly: 'Hourly Block', flat: 'Flat Table', alarm: 'Alarm Log' };
+    const LAYOUT_LABELS = { hourly: 'Hourly Block', twohour: '2 Hour Report', flat: 'Flat Table', alarm: 'Alarm Log' };
+    const TWO_HOUR_SLOTS = ['12AM','2AM','4AM','6AM','8AM','10AM','12PM','2PM','4PM','6PM','8PM','10PM'];
 
     const FLAT_COLS = ['Date','Time','Trunk ID','Alias','Active Calls','CPS','Peak','CLZ Total','CLZ CPS','15min ASR','15min ACD','15min PDD'];
 
@@ -91,6 +92,7 @@
       { id: 's_kingsf',   name: 'KINGSFORD INOUT', layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound','Current Outbound','Max Outbound'], hourStart: 0, hourEnd: 24, note: '' },
       { id: 's_uno',      name: 'UNOBANK IN',      layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound'], hourStart: 0, hourEnd: 24, note: '' },
       { id: 's_myvelox',  name: 'MYVELOX INOUT',   layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound','Current Outbound','Max Outbound'], hourStart: 0, hourEnd: 24, note: '' },
+      { id: 's_2hour',    name: '2 Hour Report',   layout: 'twohour', active: true, metrics: ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'], dateFormat: 'd-mmm-yy', note: '' },
     ];
 
     const STORAGE_KEY = 'mrg_state_v1';
@@ -190,6 +192,32 @@
       return null;
     }
 
+    function isTwoHourDateCell(cell) {
+      const value = cell?.value;
+      if (value instanceof Date && !Number.isNaN(value.getTime())) return true;
+      if (typeof value === 'number' && /[dmy]/i.test(String(cell?.numFmt || ''))) return true;
+      if (typeof value !== 'string') return false;
+      const text = value.trim();
+      return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(text)
+        || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(text)
+        || /^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(text);
+    }
+
+    function detectTwoHourReport(ws) {
+      const maxRows = Math.min(ws.rowCount || 12, 12);
+      const maxCols = Math.min(ws.columnCount || 100, 100);
+      for (let row = 1; row < maxRows; row++) {
+        const dateCols = [];
+        for (let col = 1; col <= maxCols; col++) {
+          const dateCell = ws.getRow(row).getCell(col);
+          const timeText = cellText(ws.getRow(row + 1).getCell(col)).toUpperCase().replace(/\s+/g, '');
+          if (isTwoHourDateCell(dateCell) && TWO_HOUR_SLOTS.includes(timeText)) dateCols.push(col);
+        }
+        if (dateCols.length >= 2) return { dateRow: row, timeRow: row + 1, dateCols };
+      }
+      return null;
+    }
+
     function inferHourlyRowSeparator(ws, headerRow, metricCount) {
       if (!metricCount) return true;
       const afterFirstBlock = headerRow + metricCount + 1;
@@ -206,6 +234,27 @@
       const sheets = [];
       wb.eachSheet((ws) => {
         if (SKIP_IMPORT_NAMES.test(ws.name)) return;
+        const twoHour = detectTwoHourReport(ws);
+        if (twoHour) {
+          const firstCol = twoHour.dateCols[0];
+          const metrics = [];
+          for (let row = twoHour.timeRow + 1; row <= Math.min(ws.rowCount || 80, twoHour.timeRow + 40); row++) {
+            const label = cellText(ws.getRow(row).getCell(firstCol));
+            if (!label) break;
+            if (/^total\s+(calls?|sip\/?fcs)$/i.test(label)) break;
+            metrics.push(label);
+          }
+          sheets.push({
+            id: newId(),
+            name: ws.name,
+            layout: 'twohour',
+            active: true,
+            metrics: metrics.length ? metrics : ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'],
+            dateFormat: ws.getRow(twoHour.dateRow).getCell(firstCol).numFmt || 'd-mmm-yy',
+            note: '',
+          });
+          return;
+        }
         const hdr = detectHeaderRow(ws);
         if (!hdr) return;
 
@@ -857,7 +906,7 @@
           idx.addRow({
             sheet: s.name,
             layout: LAYOUT_LABELS[s.layout],
-            items: visibleLabels(s.layout === 'hourly' ? s.metrics : s.columns).join(', '),
+            items: visibleLabels((s.layout === 'hourly' || s.layout === 'twohour') ? s.metrics : s.columns).join(', '),
           });
         });
         idx.addRow({});
@@ -870,9 +919,10 @@
       for (const s of activeSheets) {
         const ws = wb.addWorksheet(safeSheetName(s.name));
         ws.properties.defaultRowHeight = 18;
-        if (s.layout === 'hourly')      buildHourlySheet(ws, s, year, month, rules);
-        else if (s.layout === 'flat')   buildFlatSheet(ws, s, year, month, rules);
-        else if (s.layout === 'alarm')  buildAlarmSheet(ws, s, rules);
+        if (s.layout === 'hourly')       buildHourlySheet(ws, s, year, month, rules);
+        else if (s.layout === 'twohour') buildTwoHourReportSheet(ws, s, year, month, rules);
+        else if (s.layout === 'flat')    buildFlatSheet(ws, s, year, month, rules);
+        else if (s.layout === 'alarm')   buildAlarmSheet(ws, s, rules);
       }
 
       if (changelog && changelog.trim()) {
@@ -885,7 +935,10 @@
       }
 
       const buf = await wb.xlsx.writeBuffer();
-      const filename = `${MONTHS[month]}_${year}_SIP_FCS_Hourly_Record.xlsx`;
+      const onlyTwoHourReport = activeSheets.length === 1 && activeSheets[0].layout === 'twohour';
+      const filename = onlyTwoHourReport
+        ? '2 Hour Report.xlsx'
+        : `${MONTHS[month]}_${year}_SIP_FCS_Hourly_Record.xlsx`;
       return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
     }
 
@@ -900,6 +953,7 @@
       { value: '__layout_hourly__', label: 'Global rules for all Hourly Block', layout: 'hourly' },
       { value: '__layout_hourly_separator__', label: 'Global rules for all Hourly Block with row separator', layout: 'hourly', rowSeparator: true },
       { value: '__layout_hourly_no_separator__', label: 'Global rules for all Hourly Block with no row separator', layout: 'hourly', rowSeparator: false },
+      { value: '__layout_twohour__', label: 'Global rules for all 2 Hour Report', layout: 'twohour' },
       { value: '__layout_flat__',   label: 'Global rules for all Flat Table',   layout: 'flat' },
     ];
 
@@ -1163,6 +1217,109 @@
               }
             }
           }
+        });
+      }
+    }
+
+    function buildTwoHourReportSheet(ws, s, year, month, allRules) {
+      const configuredMetrics = visibleItems(s.metrics || []);
+      const metrics = configuredMetrics.length ? configuredMetrics : ['Metric 1'];
+      const metricCount = metrics.length;
+      const days = daysInMonth(year, month);
+      const totalCols = Math.max(2, (days * 3) - 1);
+      const blockHeight = metricCount + 4; // date, time, metrics, total, separator
+      const rules = rulesForSheet(allRules, s);
+      let cur = 1;
+
+      if (s.note && s.note.trim()) {
+        applyNoteStyle(ws, cur, totalCols, s);
+        cur += 2;
+      }
+      const dataStartRow = cur;
+      const border = { style: 'thin', color: { argb: 'FFD9D9D9' } };
+
+      TWO_HOUR_SLOTS.forEach((slot) => {
+        const dateRow = cur;
+        const timeRow = cur + 1;
+        const metricStartRow = cur + 2;
+        const totalRow = metricStartRow + metricCount;
+
+        for (let day = 1; day <= days; day++) {
+          const labelCol = 1 + ((day - 1) * 3);
+          const valueCol = labelCol + 1;
+          const date = new Date(Date.UTC(year, month, day));
+
+          const dateCell = ws.getCell(dateRow, labelCol);
+          dateCell.value = date;
+          dateCell.numFmt = s.dateFormat || 'd-mmm-yy';
+          dateCell.font = { bold: true, color: { argb: 'FFFF0000' } };
+          dateCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+          const timeCell = ws.getCell(timeRow, labelCol);
+          timeCell.value = slot;
+          timeCell.font = { bold: true, color: { argb: 'FFFF0000' } };
+          timeCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+          metrics.forEach((metric, metricIndex) => {
+            const row = metricStartRow + metricIndex;
+            const labelCell = ws.getCell(row, labelCol);
+            const inputCell = ws.getCell(row, valueCol);
+            labelCell.value = itemLabel(metric);
+            labelCell.alignment = { horizontal: 'left', vertical: 'middle' };
+            inputCell.value = null;
+            inputCell.alignment = { horizontal: 'center', vertical: 'middle' };
+            if (itemColor(metric)) {
+              const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(itemColor(metric)) } };
+              labelCell.fill = fill;
+              if (itemColorExtend(metric)) inputCell.fill = fill;
+            }
+          });
+
+          const totalLabel = ws.getCell(totalRow, labelCol);
+          const totalValue = ws.getCell(totalRow, valueCol);
+          totalLabel.value = 'Total Calls';
+          totalLabel.font = { bold: true };
+          totalValue.value = { formula: `SUM(${colLetter(valueCol)}${metricStartRow}:${colLetter(valueCol)}${totalRow - 1})` };
+          totalValue.font = { bold: true };
+          totalValue.alignment = { horizontal: 'center', vertical: 'middle' };
+
+          for (let row = dateRow; row <= totalRow; row++) {
+            for (let col = labelCol; col <= valueCol; col++) {
+              ws.getCell(row, col).border = { top: border, bottom: border, left: border, right: border };
+            }
+          }
+        }
+        cur = totalRow + 2;
+      });
+
+      for (let day = 1; day <= days; day++) {
+        const labelCol = 1 + ((day - 1) * 3);
+        ws.getColumn(labelCol).width = 17;
+        ws.getColumn(labelCol + 1).width = 10;
+        if (day < days) ws.getColumn(labelCol + 2).width = 3;
+      }
+      ws.properties.defaultRowHeight = 18;
+      ws.views = [{ state: 'frozen', ySplit: Math.max(0, dataStartRow - 1) }];
+
+      // Apply numeric and missing-value rules only to the editable metric rows.
+      for (let day = 1; day <= days; day++) {
+        const valueCol = 2 + ((day - 1) * 3);
+        const col = colLetter(valueCol);
+        const ref = `${col}${dataStartRow}:${col}${cur - 2}`;
+        const offset = `MOD(ROW()-${dataStartRow},${blockHeight})`;
+        const metricRow = `AND(${offset}>=2,${offset}<${2 + metricCount})`;
+        rules.forEach((rule, index) => {
+          if (!rule.enabled || !['above','below','blank','zero'].includes(rule.type)) return;
+          const style = sipRuleStyle(rule, rule.type === 'blank' ? 'FF374151' : 'FF166534');
+          let test = '';
+          if (rule.type === 'above') test = `AND(ISNUMBER(${col}${dataStartRow}),${col}${dataStartRow}>${Number(rule.threshold) || 0})`;
+          if (rule.type === 'below') test = `AND(ISNUMBER(${col}${dataStartRow}),${col}${dataStartRow}<${Number(rule.threshold) || 0})`;
+          if (rule.type === 'blank') test = `ISBLANK(${col}${dataStartRow})`;
+          if (rule.type === 'zero') test = `${col}${dataStartRow}=0`;
+          ws.addConditionalFormatting({
+            ref,
+            rules: [{ type: 'expression', formulae: [`AND(${metricRow},${test})`], style, priority: 10 + index }],
+          });
         });
       }
     }
@@ -4069,7 +4226,7 @@ https://bit.ly/4vrcu64`;
             ) : (
               <div className="space-y-1.5">
                 {imported.map((it) => {
-                  const count = it.layout === 'hourly'
+                  const count = (it.layout === 'hourly' || it.layout === 'twohour')
                     ? `${(it.metrics || []).length} metrics`
                     : `${(it.columns || []).length} cols`;
                   return (
@@ -4503,11 +4660,15 @@ https://bit.ly/4vrcu64`;
       const setLayout = (layout) => {
         if (layout === sheet.layout) return;
         const next = { ...sheet, layout };
-        if (layout === 'hourly') {
+        if (layout === 'hourly' || layout === 'twohour') {
           next.metrics = sheet.metrics?.length ? sheet.metrics : (sheet.columns?.length ? sheet.columns : ['Metric 1']);
-          next.hourStart = sheet.hourStart ?? 0;
-          next.hourEnd = sheet.hourEnd ?? 24;
-          next.rowSeparator = sheet.rowSeparator ?? true;
+          if (layout === 'hourly') {
+            next.hourStart = sheet.hourStart ?? 0;
+            next.hourEnd = sheet.hourEnd ?? 24;
+            next.rowSeparator = sheet.rowSeparator ?? true;
+          } else {
+            next.dateFormat = sheet.dateFormat || 'd-mmm-yy';
+          }
         } else {
           next.columns = sheet.columns?.length ? sheet.columns : (sheet.metrics?.length ? sheet.metrics : ['Column 1']);
         }
@@ -4525,14 +4686,16 @@ https://bit.ly/4vrcu64`;
               <div className="flex items-center gap-2 mt-3 flex-wrap">
                 <Pill tone="accent">{LAYOUT_LABELS[sheet.layout]}</Pill>
                 <Pill tone={sheet.active ? 'success' : 'muted'}>{sheet.active ? '● Active' : '○ Inactive'}</Pill>
-                {sheet.layout === 'hourly' && <Pill>{visibleItems(sheet.metrics).length}/{(sheet.metrics || []).length} metrics</Pill>}
+                {(sheet.layout === 'hourly' || sheet.layout === 'twohour') && <Pill>{visibleItems(sheet.metrics).length}/{(sheet.metrics || []).length} metrics</Pill>}
                 {sheet.layout === 'hourly' && <Pill>{hourlyHasRowSeparator(sheet) ? 'With separator' : 'No separator'}</Pill>}
-                {sheet.layout !== 'hourly' && <Pill>{visibleItems(sheet.columns).length}/{(sheet.columns || []).length} columns</Pill>}
+                {sheet.layout === 'twohour' && <Pill>12 slots · every 2 hours</Pill>}
+                {sheet.layout !== 'hourly' && sheet.layout !== 'twohour' && <Pill>{visibleItems(sheet.columns).length}/{(sheet.columns || []).length} columns</Pill>}
               </div>
             </div>
             <div className="flex flex-col gap-2 shrink-0 w-44">
               <Select value={sheet.layout} onChange={e => setLayout(e.target.value)}>
                 <option value="hourly">Hourly Block</option>
+                <option value="twohour">2 Hour Report</option>
                 <option value="flat">Flat Table</option>
                 <option value="alarm">Alarm Log</option>
               </Select>
@@ -4731,6 +4894,40 @@ https://bit.ly/4vrcu64`;
                     </div>
                   </div>
                 )}
+              </CollapsibleSection>
+            </>
+          ) : sheet.layout === 'twohour' ? (
+            <>
+              <Card className="p-4 border-blue-500/20 bg-blue-500/[0.04]">
+                <div className="text-sm font-semibold text-neutral-100">2-hour comparison format</div>
+                <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                  Generates 12 vertical time blocks from 12AM to 10PM. Each date uses a label/value pair across the sheet, so yesterday and today stay next to each other for quick copying.
+                </p>
+              </Card>
+              <CollapsibleSection sid="twohour-dateformat" title="Date format" hint="Repeated above every 2-hour block">
+                {(() => {
+                  const fmt = sheet.dateFormat || 'd-mmm-yy';
+                  const isCustom = !DATE_FORMAT_VALUES.has(fmt);
+                  return (
+                    <div className="grid grid-cols-2 gap-3 max-w-lg">
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Preset</label>
+                        <Select value={isCustom ? '__custom__' : fmt}
+                          onChange={e => update({ dateFormat: e.target.value === '__custom__' ? fmt : e.target.value })}>
+                          {DATE_FORMATS.map(d => <option key={d.value} value={d.value}>{d.sample}</option>)}
+                          <option value="__custom__">Customâ€¦</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Format code</label>
+                        <Input value={fmt} onChange={e => update({ dateFormat: e.target.value })} placeholder="d-mmm-yy" />
+                      </div>
+                    </div>
+                  );
+                })()}
+              </CollapsibleSection>
+              <CollapsibleSection sid="twohour-metrics" title="Metric rows" hint={`${visibleItems(sheet.metrics).length} of ${(sheet.metrics || []).length} rows per time block`}>
+                <ListEditor items={sheet.metrics || []} onChange={(v) => update({ metrics: v })} placeholder="e.g. PLDT SIP" label="metric" withColor />
               </CollapsibleSection>
             </>
           ) : (
@@ -4933,6 +5130,63 @@ https://bit.ly/4vrcu64`;
                 })}
               </tbody>
             </table>
+          </div>
+        );
+      }
+      if (sheet.layout === 'twohour') {
+        const metrics = visibleItems(sheet.metrics || []);
+        const sampleDays = Math.min(2, daysInMonth(year, month));
+        const days = [...Array(sampleDays)].map((_, index) => index + 1);
+        return (
+          <div className="overflow-x-auto rounded-lg border border-neutral-900 bg-[#232327] p-3">
+            <table className="min-w-[620px] text-[11px]">
+              <tbody>
+                {TWO_HOUR_SLOTS.slice(0, 2).map((slot, slotIndex) => (
+                  <React.Fragment key={slot}>
+                    <tr>
+                      {days.map(day => (
+                        <React.Fragment key={day}>
+                          <td className="border border-neutral-800 px-3 py-1.5 text-center font-semibold text-red-300">{previewDateFormat(new Date(year, month, day), sheet.dateFormat || 'd-mmm-yy')}</td>
+                          <td className="border border-neutral-800 px-3 py-1.5"></td>
+                          {day < sampleDays && <td className="w-5"></td>}
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                    <tr>
+                      {days.map(day => (
+                        <React.Fragment key={day}>
+                          <td className="border border-neutral-800 px-3 py-1.5 text-center font-bold text-red-300">{slot}</td>
+                          <td className="border border-neutral-800 px-3 py-1.5"></td>
+                          {day < sampleDays && <td></td>}
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                    {metrics.map((metric, metricIndex) => (
+                      <tr key={`${slot}-${metricIndex}`}>
+                        {days.map(day => (
+                          <React.Fragment key={day}>
+                            <td className="border border-neutral-800 px-3 py-1.5 text-neutral-300" style={itemColor(metric) ? { background: itemColor(metric) } : {}}>{itemLabel(metric)}</td>
+                            <td className="border border-neutral-800 px-3 py-1.5 text-center text-neutral-700" style={itemColor(metric) && itemColorExtend(metric) ? { background: itemColor(metric) } : {}}>·</td>
+                            {day < sampleDays && <td></td>}
+                          </React.Fragment>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr>
+                      {days.map(day => (
+                        <React.Fragment key={day}>
+                          <td className="border border-neutral-800 px-3 py-1.5 font-semibold text-neutral-200">Total Calls</td>
+                          <td className="border border-neutral-800 px-3 py-1.5 text-center text-neutral-700">0</td>
+                          {day < sampleDays && <td></td>}
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                    {slotIndex < 1 && <tr className="h-3"><td colSpan={(sampleDays * 3) - 1}></td></tr>}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-3 text-[10px] text-neutral-600">Preview shows 2 dates and the first 2 time blocks. The generated sheet includes every date in the month and all 12 time blocks.</p>
           </div>
         );
       }
@@ -9727,19 +9981,18 @@ https://bit.ly/4vrcu64`;
     /* ============================================================
        App
        ============================================================ */
-    const APP_STATE_SCHEMA_VERSION = 3;
+    const APP_STATE_SCHEMA_VERSION = 4;
 
     const DEFAULT_STATE = {
       schemaVersion: APP_STATE_SCHEMA_VERSION,
       year: new Date().getFullYear(),
       month: new Date().getMonth(),
       sheets: DEFAULT_SHEETS,
-      selectedSheetId: 's_sbc',
+      selectedSheetId: 's_2hour',
       rules: [],
       includeIndex: true,
       changelog: '',
       tab: 'config',
-      sipFcsMonitoring: DEFAULT_SIP_FCS_MONITORING,
       theme: 'dark',
       imported: [],
       module: 'sip_fcs',
@@ -9848,11 +10101,16 @@ https://bit.ly/4vrcu64`;
 
     function migrateSheets(sheets) {
       const list = Array.isArray(sheets) && sheets.length ? sheets : DEFAULT_SHEETS;
-      return list.map(sheet => ({
+      const migrated = list.map(sheet => ({
         ...sheet,
         ...(Array.isArray(sheet.columns) ? { columns: sheet.columns.map(migrateSheetItem) } : {}),
         ...(Array.isArray(sheet.metrics) ? { metrics: sheet.metrics.map(migrateSheetItem) } : {}),
       }));
+      if (!migrated.some(sheet => sheet.layout === 'twohour')) {
+        const template = DEFAULT_SHEETS.find(sheet => sheet.id === 's_2hour');
+        migrated.push({ ...template, metrics: [...template.metrics] });
+      }
+      return migrated;
     }
 
     function normalizeBmrSmsState(raw = {}) {
@@ -9874,6 +10132,12 @@ https://bit.ly/4vrcu64`;
       const merged = { ...DEFAULT_STATE, ...(raw || {}) };
       // Remove preferences left behind by versions that included the retired image tool.
       delete merged.imageEditor;
+      const retiredMonitoringTab = merged.tab === 'monitoring';
+      delete merged.sipFcsMonitoring;
+      if (retiredMonitoringTab) {
+        merged.tab = 'config';
+        merged.selectedSheetId = 's_2hour';
+      }
       if (merged.module === 'image') merged.module = DEFAULT_STATE.module;
       const bmr = { ...DEFAULT_BMR_STATE, ...(merged.bmr || {}) };
       const bmrSms = normalizeBmrSmsState(merged.bmrSms);
@@ -9885,7 +10149,6 @@ https://bit.ly/4vrcu64`;
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
       const recorder = recorderNormalizeState(merged.recorder);
-      const sipFcsMonitoring = sipMonitorNormalizeState(merged.sipFcsMonitoring);
       const googleSheets = {
         clientId: (merged.googleSheets && typeof merged.googleSheets.clientId === 'string')
           ? merged.googleSheets.clientId
@@ -9924,7 +10187,6 @@ https://bit.ly/4vrcu64`;
         rcaSignatories,
         rcaCompany,
         recorder,
-        sipFcsMonitoring,
         googleSheets,
         backup,
       };
@@ -13157,8 +13419,8 @@ match /shared/whitelistSmsTestNumbers {
             const fn = await generateRcaDocx(state);
             setToast({ type: 'ok', msg: `Generated ${fn}` });
           } else {
-            await generateWorkbook(state);
-            setToast({ type: 'ok', msg: `Generated ${MONTHS[state.month]}_${state.year}_SIP_FCS_Hourly_Record.xlsx` });
+            const fn = await generateWorkbook(state);
+            setToast({ type: 'ok', msg: `Generated ${fn}` });
           }
           // After a successful download, mirror to Google Sheets when already
           // connected (SIP/FCS, BMR VOIP, BMR SMS only). Silent — never opens a
@@ -13188,14 +13450,6 @@ match /shared/whitelistSmsTestNumbers {
       const activeCount = state.sheets.filter(s => s.active).length;
       const days = daysInMonth(state.year, state.month);
       const activeRules = state.rules.filter(r => r.enabled).length;
-      const sipFcsMonitoring = sipMonitorNormalizeState(state.sipFcsMonitoring);
-      const setSipFcsMonitoring = useCallback((next) => setState(s => {
-        const previous = sipMonitorNormalizeState(s.sipFcsMonitoring);
-        return {
-          ...s,
-          sipFcsMonitoring: sipMonitorNormalizeState(typeof next === 'function' ? next(previous) : next),
-        };
-      }), [setState]);
 
       // Bundle passed to the SIP/FCS, BMR VOIP and BMR SMS sidebars so their
       // GoogleSheetSync panel can set the Client ID, connect and sync.
@@ -13218,7 +13472,6 @@ match /shared/whitelistSmsTestNumbers {
 
       const TABS = [
         { id: 'config',  label: 'Config' },
-        { id: 'monitoring', label: 'Monitoring' },
         { id: 'rules',   label: 'Rules' },
         { id: 'preview', label: 'Preview' },
         { id: 'notes',   label: 'Notes' },
@@ -13792,14 +14045,6 @@ match /shared/whitelistSmsTestNumbers {
                       <TemplateBar state={state} setState={setState} sync={sync} />
                     </div>
                   </div>
-                )}
-                {state.tab === 'monitoring' && (
-                  <SipFcsMonitoringPanel
-                    monitoring={sipFcsMonitoring}
-                    onChange={setSipFcsMonitoring}
-                    onToast={showToast}
-                    confirmDialog={confirmDialog}
-                  />
                 )}
                 {state.tab === 'rules' && (
                   <div>
