@@ -2205,9 +2205,15 @@
 
       // We also request openid+email so the panel can show which Google account
       // must be given Editor access. drive.file covers app-created workbooks;
-      // spreadsheets lets a pasted, user-shared destination be edited too.
+      // spreadsheets lets a pasted, user-shared destination be edited too. The
+      // Apps Script project scope lets SIP/FCS install its same-cell paste/sum
+      // helper in the destination spreadsheet after a successful sync.
       const GOOGLE_SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-      const REQUEST_SCOPE = 'openid email ' + GOOGLE_DRIVE_SCOPE + ' ' + GOOGLE_SHEETS_SCOPE;
+      const GOOGLE_APPS_SCRIPT_SCOPE = 'https://www.googleapis.com/auth/script.projects';
+      const REQUEST_SCOPE = 'openid email ' + GOOGLE_DRIVE_SCOPE + ' ' + GOOGLE_SHEETS_SCOPE + ' ' + GOOGLE_APPS_SCRIPT_SCOPE;
+
+      const hasScope = (scope) => grantedScopes.split(/\s+/).includes(scope);
+      const hasRequiredScopes = () => hasDriveScope() && hasScope(GOOGLE_SHEETS_SCOPE) && hasScope(GOOGLE_APPS_SCRIPT_SCOPE);
 
       const isConfigured = () => !!clientId;
       const gisReady = () => !!(window.google && window.google.accounts && window.google.accounts.oauth2);
@@ -2252,8 +2258,7 @@
             // A token can come back without the Drive permission if the user
             // left its checkbox unticked (or a prior grant lacked it). Treat
             // that as a distinct failure so getToken() can force re-consent.
-            const hasSheetsScope = grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE);
-            if (!hasDriveScope() || !hasSheetsScope) {
+            if (!hasRequiredScopes()) {
               accessToken = null; tokenExpiry = 0;
               const err = new Error('GOOGLE_SYNC_SCOPES_NOT_GRANTED');
               err.code = 'GOOGLE_SYNC_SCOPES_NOT_GRANTED';
@@ -2268,10 +2273,10 @@
         });
       }
 
-      const SCOPE_HELP = 'Google Sheets access wasn\'t granted. Click Connect again and approve both requested Drive and Google Sheets permissions.';
+      const SCOPE_HELP = 'Google access wasn\'t fully granted. Click Connect again and approve Drive, Google Sheets, and Apps Script permissions.';
 
       async function getToken({ interactive = false } = {}) {
-        if (accessToken && Date.now() < tokenExpiry && hasDriveScope() && grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE)) return accessToken;
+        if (accessToken && Date.now() < tokenExpiry && hasRequiredScopes()) return accessToken;
         try {
           return await requestToken(interactive);
         } catch (e) {
@@ -2321,7 +2326,7 @@
         accessToken = null; tokenExpiry = 0; grantedEmail = ''; grantedScopes = '';
       }
 
-      const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasDriveScope() && grantedScopes.split(/\s+/).includes(GOOGLE_SHEETS_SCOPE);
+      const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasRequiredScopes();
       const email = () => grantedEmail;
       const sheetUrl = (fileId) => 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(fileId) + '/edit';
 
@@ -2586,6 +2591,102 @@
       }
 
       // ── Weekly backup helpers ────────────────────────────────────────────
+      // Install the SIP/FCS same-cell paste/sum helper as a container-bound
+      // Apps Script project. Only projects created and remembered by this app
+      // are ever overwritten; a destination that already has somebody else's
+      // bound script is left untouched.
+      function sipFcsPasteSumSource(tabTitles) {
+        const allowedTabs = JSON.stringify((tabTitles || []).filter(Boolean));
+        return `// Installed by Monthly Report Generator.\n` +
+          `var SIP_FCS_PASTE_SUM_TABS = ${allowedTabs};\n\n` +
+          `function onEdit(e) {\n` +
+          `  if (!e || !e.range || e.range.getNumRows() !== 1 || e.range.getNumColumns() !== 1) return;\n` +
+          `  var sheet = e.range.getSheet();\n` +
+          `  if (SIP_FCS_PASTE_SUM_TABS.indexOf(sheet.getName()) === -1) return;\n` +
+          `  var raw = typeof e.value === 'string' ? e.value : '';\n` +
+          `  if (!/[\\r\\n]/.test(raw)) return;\n` +
+          `  var parts = raw.split(/\\r?\\n/).map(function (part) { return part.trim(); }).filter(function (part) { return part !== ''; });\n` +
+          `  if (parts.length < 2) return;\n` +
+          `  var numberPattern = /^[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?|\\.\\d+)$/;\n` +
+          `  if (!parts.every(function (part) { return numberPattern.test(part); })) return;\n` +
+          `  var total = parts.reduce(function (sum, part) { return sum + Number(part.replace(/,/g, '')); }, 0);\n` +
+          `  if (isFinite(total)) e.range.setValue(total);\n` +
+          `}\n`;
+      }
+
+      async function getAppsScriptProject(scriptId) {
+        const token = await getToken();
+        const r = await fetch('https://script.googleapis.com/v1/projects/' + encodeURIComponent(scriptId), {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!r.ok) throw await driveError(r);
+        return await r.json();
+      }
+
+      async function createBoundAppsScript(fileId) {
+        const token = await getToken();
+        const r = await fetch('https://script.googleapis.com/v1/projects', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'SIP FCS Paste Sum', parentId: fileId }),
+        });
+        if (!r.ok) throw await driveError(r);
+        return await r.json();
+      }
+
+      async function updateAppsScriptContent(scriptId, tabTitles) {
+        const token = await getToken();
+        const manifest = {
+          timeZone: 'Asia/Manila',
+          exceptionLogging: 'STACKDRIVER',
+          runtimeVersion: 'V8',
+        };
+        const r = await fetch('https://script.googleapis.com/v1/projects/' + encodeURIComponent(scriptId) + '/content', {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: [
+            { name: 'PasteSum', type: 'SERVER_JS', source: sipFcsPasteSumSource(tabTitles) },
+            { name: 'appsscript', type: 'JSON', source: JSON.stringify(manifest, null, 2) },
+          ] }),
+        });
+        if (!r.ok) throw await driveError(r);
+      }
+
+      async function installSipFcsPasteSum(fileId, rememberedScriptId, tabTitles) {
+        if (!fileId) throw new Error('A Google Sheet is required before paste-to-sum can be installed.');
+        let scriptId = String(rememberedScriptId || '').trim();
+        if (scriptId) {
+          try {
+            const project = await getAppsScriptProject(scriptId);
+            if (project.parentId && project.parentId !== fileId) {
+              throw new Error('The saved Apps Script project belongs to a different spreadsheet.');
+            }
+          } catch (e) {
+            // A deleted remembered project can be recreated. Permission errors
+            // and parent mismatches must not risk changing an unrelated script.
+            if (e && e.status === 404) scriptId = '';
+            else throw e;
+          }
+        }
+        let created = false;
+        if (!scriptId) {
+          const project = await createBoundAppsScript(fileId);
+          scriptId = String(project.scriptId || '').trim();
+          if (!scriptId) throw new Error('Google created the Apps Script project without returning its ID.');
+          created = true;
+        }
+        try {
+          await updateAppsScriptContent(scriptId, tabTitles);
+        } catch (e) {
+          // Preserve a newly-created project ID even if the content write was
+          // interrupted, so the next sync can repair it instead of attempting
+          // to create a second bound project.
+          if (created && scriptId && e && typeof e === 'object') e.createdScriptId = scriptId;
+          throw e;
+        }
+        return { scriptId, created };
+      }
+
       // Unlike createSheet (which converts the xlsx into a Google Sheet), these
       // store files verbatim under the drive.file scope — no extra consent. Used
       // for the "Generator Backups" folder that holds the JSON data snapshot and
@@ -2631,7 +2732,7 @@
         return await r.json();
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, trimSheetGrids, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
     })();
 
     /* ============================================================
@@ -3782,6 +3883,12 @@ https://bit.ly/4vrcu64`;
               </div>
               {last?.at && (
                 <div className="text-[10px] text-neutral-600">Synced {new Date(last.at).toLocaleTimeString()}</div>
+              )}
+              {moduleId === 'sip_fcs' && last?.pasteSumInstalled && (
+                <div className="text-[10px] text-emerald-500">Paste-to-sum enabled for SIP/FCS tabs</div>
+              )}
+              {moduleId === 'sip_fcs' && last?.pasteSumError && (
+                <div className="text-[10px] text-amber-500 leading-relaxed">{last.pasteSumError}</div>
               )}
             </div>
           )}
@@ -10016,6 +10123,10 @@ https://bit.ly/4vrcu64`;
         clientId: '', backupFolderId: '',
         sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' },
         targetSheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' },
+        // Spreadsheet ID -> Apps Script project ID. Only projects created by
+        // this app are stored here, which prevents overwriting unrelated bound
+        // scripts in user-supplied destination spreadsheets.
+        pasteSumScriptIds: {},
       },
       // Weekly Google Drive backup bookkeeping. lastWeekKey is the ISO week of
       // the last successful backup, stored in synced state so only one automatic
@@ -10164,6 +10275,11 @@ https://bit.ly/4vrcu64`;
           ...DEFAULT_STATE.googleSheets.targetSheetIds,
           ...((merged.googleSheets && merged.googleSheets.targetSheetIds) || {}),
         },
+        pasteSumScriptIds: (merged.googleSheets && merged.googleSheets.pasteSumScriptIds
+          && typeof merged.googleSheets.pasteSumScriptIds === 'object'
+          && !Array.isArray(merged.googleSheets.pasteSumScriptIds))
+          ? merged.googleSheets.pasteSumScriptIds
+          : {},
       };
       const backup = {
         enabled: !(merged.backup && merged.backup.enabled === false),
@@ -13251,9 +13367,61 @@ match /shared/whitelistSmsTestNumbers {
               }
             }
           }
+
+          // SIP/FCS Google Sheets get a bound simple onEdit trigger that turns
+          // a line-separated numeric paste in one cell into its total. This is
+          // deliberately best-effort: the workbook/tab sync has already
+          // succeeded and must remain successful if the Apps Script API is not
+          // enabled or the destination owns an unrelated bound script.
+          let pasteSumInstalled = false;
+          let pasteSumHint = '';
+          if (moduleId === 'sip_fcs' && fileId) {
+            const pasteSumTabs = (latest.sheets || [])
+              .filter(sheet => sheet && sheet.active)
+              .map(sheet => safeSheetName(sheet.name));
+            const rememberedScriptId = latest.googleSheets?.pasteSumScriptIds?.[fileId] || '';
+            try {
+              const installed = await googleSheetsSync.installSipFcsPasteSum(fileId, rememberedScriptId, pasteSumTabs);
+              pasteSumInstalled = true;
+              if (installed.scriptId && installed.scriptId !== rememberedScriptId) {
+                setState(s => ({
+                  ...s,
+                  googleSheets: {
+                    ...(s.googleSheets || {}),
+                    pasteSumScriptIds: {
+                      ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}),
+                      [fileId]: installed.scriptId,
+                    },
+                  },
+                }));
+              }
+            } catch (e) {
+              console.warn('Installing SIP/FCS paste-to-sum failed', e);
+              if (e?.createdScriptId) {
+                setState(s => ({
+                  ...s,
+                  googleSheets: {
+                    ...(s.googleSheets || {}),
+                    pasteSumScriptIds: {
+                      ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}),
+                      [fileId]: e.createdScriptId,
+                    },
+                  },
+                }));
+              }
+              const detail = String(e?.message || e || 'Unknown Google Apps Script error');
+              if (/Apps Script API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(detail)) {
+                pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed — enable the Google Apps Script API in Google Cloud, reconnect, then sync again.';
+              } else if (/cannot access.*script|grant.*access.*script|script projects.*access|Apps Script dashboard/i.test(detail)) {
+                pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed — allow Google Apps Script API access in the Apps Script dashboard, then sync again.';
+              } else {
+                pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed: ' + detail;
+              }
+            }
+          }
           setGoogleConn(c => ({
             ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null,
-            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs } },
+            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, pasteSumInstalled, pasteSumError: pasteSumHint } },
           }));
           const successMsg = updatedTabs.length
             ? `Updated ${updatedTabs.length} checked sheet${updatedTabs.length === 1 ? '' : 's'}${missingUpdateTabs.length ? `; ${missingUpdateTabs.length} new tab${missingUpdateTabs.length === 1 ? '' : 's'} skipped — use Add selected tab` : ''}. Unchecked tabs were unchanged`
@@ -13264,8 +13432,10 @@ match /shared/whitelistSmsTestNumbers {
               : onlyTabTitle
                 ? `Tab "${onlyTabTitle}" already exists; no data was changed`
                 : 'No new tabs to add; existing Google Sheet data was left unchanged';
-          setToast({ type: trimHint ? 'err' : 'ok', msg: trimHint || successMsg });
-          setTimeout(() => setToast(null), trimHint ? 8000 : 4000);
+          const syncHint = [trimHint, pasteSumHint].filter(Boolean).join(' ');
+          const pasteSumSuffix = pasteSumInstalled ? ' · paste-to-sum enabled' : '';
+          setToast({ type: syncHint ? 'err' : 'ok', msg: syncHint || (successMsg + pasteSumSuffix) });
+          setTimeout(() => setToast(null), syncHint ? 10000 : 5000);
           return fileId;
         } catch (e) {
           console.warn('Google Sheets sync failed', e);
