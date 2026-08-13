@@ -3973,9 +3973,27 @@ https://bit.ly/4vrcu64`;
       return <select {...rest} className={`w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}`}>{children}</select>;
     }
 
-    function Textarea(props) {
-      const { className = '', ...rest } = props;
-      return <textarea {...rest} className={`w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors resize-y ${className}`} />;
+    function Textarea({ className = '', autoGrow = false, value, onInput, style, ...rest }) {
+      const textareaRef = useRef(null);
+
+      const resizeToContent = useCallback(() => {
+        const textarea = textareaRef.current;
+        if (!textarea || !autoGrow) return;
+        textarea.style.height = 'auto';
+        const borderHeight = textarea.offsetHeight - textarea.clientHeight;
+        textarea.style.height = `${Math.ceil(textarea.scrollHeight + borderHeight)}px`;
+      }, [autoGrow]);
+
+      useLayoutEffect(() => {
+        resizeToContent();
+      }, [value, resizeToContent]);
+
+      return (
+        <textarea {...rest} ref={textareaRef} value={value}
+          onInput={e => { resizeToContent(); onInput?.(e); }}
+          style={{ ...style, ...(autoGrow ? { overflowY: 'hidden' } : {}) }}
+          className={`w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${autoGrow ? 'resize-none overflow-hidden' : 'resize-y'} ${className}`} />
+      );
     }
 
     function IconUp() { return <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>; }
@@ -13988,7 +14006,7 @@ match /shared/whitelistSmsTestNumbers {
                   {bmrTab === 'notes' && (
                     <div>
                       <SectionLabel hint="Free-form notes carried with the BMR config">Notes</SectionLabel>
-                      <Textarea rows={12} value={bmr.notes || ''} onChange={e => setBmr({ ...bmr, notes: e.target.value })}
+                      <Textarea autoGrow rows={12} value={bmr.notes || ''} onChange={e => setBmr({ ...bmr, notes: e.target.value })}
                         placeholder={`Notes for BMR…\n\ne.g. Added APNTEL with debit-on-zero rule, hid CYN ACOM for the week.`} />
                     </div>
                   )}
@@ -14069,7 +14087,7 @@ match /shared/whitelistSmsTestNumbers {
                   {bmrSmsTab === 'notes' && (
                     <div>
                       <SectionLabel hint="Free-form notes carried with the BMR SMS config">Notes</SectionLabel>
-                      <Textarea rows={12} value={bmrSms.notes || ''} onChange={e => setBmrSms({ ...bmrSms, notes: e.target.value })}
+                      <Textarea autoGrow rows={12} value={bmrSms.notes || ''} onChange={e => setBmrSms({ ...bmrSms, notes: e.target.value })}
                         placeholder={`Notes for BMR SMS...\n\ne.g. Added SMS client, hid old WHS row, adjusted balance rule.`} />
                     </div>
                   )}
@@ -14161,7 +14179,7 @@ match /shared/whitelistSmsTestNumbers {
                   {whitelistSmsTab === 'notes' && (
                     <div>
                       <SectionLabel hint="Free-form notes carried with the Whitelist SMS config">Notes</SectionLabel>
-                      <Textarea rows={12} value={wl.notes || ''} onChange={e => setWl({ ...wl, notes: e.target.value })}
+                      <Textarea autoGrow rows={12} value={wl.notes || ''} onChange={e => setWl({ ...wl, notes: e.target.value })}
                         placeholder={`Notes for whitelist runs...\n\ne.g. Sender ID approval ticket, vendor name, request date.`} />
                     </div>
                   )}
@@ -14295,7 +14313,7 @@ match /shared/whitelistSmsTestNumbers {
                 {state.tab === 'notes' && (
                   <div>
                     <SectionLabel hint="Saved per generation · optionally exported as CHANGELOG sheet">Monthly notes</SectionLabel>
-                    <Textarea rows={12} value={state.changelog} onChange={e => setState(s => ({ ...s, changelog: e.target.value }))}
+                    <Textarea autoGrow rows={12} value={state.changelog} onChange={e => setState(s => ({ ...s, changelog: e.target.value }))}
                       placeholder={`Notes for ${MONTHS[state.month]} ${state.year}…\n\ne.g. Added NEWCLIENT, UNOBANK now only 6AM–10PM, removed old SBC2.`} />
                   </div>
                 )}

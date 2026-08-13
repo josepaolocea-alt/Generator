@@ -3941,9 +3941,32 @@ function ClearableInput({ value, onClear, clearTitle = "Clear input", className 
 function Select({ children, className = "", ...rest }) {
   return /* @__PURE__ */ React.createElement("select", { ...rest, className: `w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}` }, children);
 }
-function Textarea(props) {
-  const { className = "", ...rest } = props;
-  return /* @__PURE__ */ React.createElement("textarea", { ...rest, className: `w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors resize-y ${className}` });
+function Textarea({ className = "", autoGrow = false, value, onInput, style, ...rest }) {
+  const textareaRef = useRef(null);
+  const resizeToContent = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || !autoGrow) return;
+    textarea.style.height = "auto";
+    const borderHeight = textarea.offsetHeight - textarea.clientHeight;
+    textarea.style.height = `${Math.ceil(textarea.scrollHeight + borderHeight)}px`;
+  }, [autoGrow]);
+  useLayoutEffect(() => {
+    resizeToContent();
+  }, [value, resizeToContent]);
+  return /* @__PURE__ */ React.createElement(
+    "textarea",
+    {
+      ...rest,
+      ref: textareaRef,
+      value,
+      onInput: (e) => {
+        resizeToContent();
+        onInput?.(e);
+      },
+      style: { ...style, ...autoGrow ? { overflowY: "hidden" } : {} },
+      className: `w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${autoGrow ? "resize-none overflow-hidden" : "resize-y"} ${className}`
+    }
+  );
 }
 function IconUp() {
   return /* @__PURE__ */ React.createElement("svg", { className: "w-3 h-3", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "18 15 12 9 6 15" }));
@@ -11516,6 +11539,7 @@ function App() {
     ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: bmrTab, className: "anim-fade-in" }, bmrTab === "clients" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Drag to reorder · insert at row # · hide rows and columns" }, "Clients"), /* @__PURE__ */ React.createElement(BmrClientsEditor, { bmr, onChange: setBmr })), bmrTab === "rules" && /* @__PURE__ */ React.createElement(BmrRulesPanel, { bmr, onChange: setBmr }), bmrTab === "preview" && /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Live preview · first few clients × first 3 timeslots" }, "Structure preview"), /* @__PURE__ */ React.createElement(BmrPreview, { bmr })), bmrTab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Free-form notes carried with the BMR config" }, "Notes"), /* @__PURE__ */ React.createElement(
       Textarea,
       {
+        autoGrow: true,
         rows: 12,
         value: bmr.notes || "",
         onChange: (e) => setBmr({ ...bmr, notes: e.target.value }),
@@ -11543,6 +11567,7 @@ e.g. Added APNTEL with debit-on-zero rule, hid CYN ACOM for the week.`
     ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: bmrSmsTab, className: "anim-fade-in" }, bmrSmsTab === "clients" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Retail and Wholesale clients are edited separately" }, "Clients"), /* @__PURE__ */ React.createElement(BmrSmsClientsEditor, { sms: bmrSms, onChange: setBmrSms })), bmrSmsTab === "rules" && /* @__PURE__ */ React.createElement(BmrSmsRulesPanel, { sms: bmrSms, onChange: setBmrSms }), bmrSmsTab === "preview" && /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Live preview · Retail and Wholesale structures" }, "Structure preview"), /* @__PURE__ */ React.createElement(BmrSmsPreview, { sms: bmrSms })), bmrSmsTab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Free-form notes carried with the BMR SMS config" }, "Notes"), /* @__PURE__ */ React.createElement(
       Textarea,
       {
+        autoGrow: true,
         rows: 12,
         value: bmrSms.notes || "",
         onChange: (e) => setBmrSms({ ...bmrSms, notes: e.target.value }),
@@ -11575,6 +11600,7 @@ e.g. Added SMS client, hid old WHS row, adjusted balance rule.`
     ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: whitelistSmsTab, className: "anim-fade-in" }, whitelistSmsTab === "content" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Paste content separated by a dash line — each block becomes one row" }, "Content"), /* @__PURE__ */ React.createElement(WlSmsContentPanel, { wl, onChange: setWl })), whitelistSmsTab === "utf" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Flags non-GSM-7 characters (force UTF — 70 chars/part vs 160) and counts how many SMS parts each message uses" }, "Special character & length checker"), /* @__PURE__ */ React.createElement(WlSmsUtfCheckPanel, { wl, onChange: setWl })), whitelistSmsTab === "numbers" && /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Pick the test numbers to include in the output" }, "Test numbers"), /* @__PURE__ */ React.createElement(WlSmsNumbersPanel, { wl, onChange: setWl, sharedTestNumbers, onChangeSharedTestNumbers: setSharedTestNumbers, sharedReady: sharedTestNumbersReady })), whitelistSmsTab === "preview" && /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Same shape as the generated xlsx" }, "Preview"), /* @__PURE__ */ React.createElement(WlSmsPreview, { wl, sharedTestNumbers })), whitelistSmsTab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Free-form notes carried with the Whitelist SMS config" }, "Notes"), /* @__PURE__ */ React.createElement(
       Textarea,
       {
+        autoGrow: true,
         rows: 12,
         value: wl.notes || "",
         onChange: (e) => setWl({ ...wl, notes: e.target.value }),
@@ -11601,6 +11627,7 @@ e.g. Sender ID approval ticket, vendor name, request date.`
   ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first 2 days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
     Textarea,
     {
+      autoGrow: true,
       rows: 12,
       value: state.changelog,
       onChange: (e) => setState((s) => ({ ...s, changelog: e.target.value })),
