@@ -6,7 +6,40 @@
     const HOURS_24 = ['12AM','1AM','2AM','3AM','4AM','5AM','6AM','7AM','8AM','9AM','10AM','11AM','12PM','1PM','2PM','3PM','4PM','5PM','6PM','7PM','8PM','9PM','10PM','11PM'];
     const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
     const LAYOUT_LABELS = { hourly: 'Hourly Block', twohour: '2 Hour Report', flat: 'Flat Table', alarm: 'Alarm Log' };
-    const TWO_HOUR_SLOTS = ['12AM','2AM','4AM','6AM','8AM','10AM','12PM','2PM','4PM','6PM','8PM','10PM'];
+    const REPORT_INTERVAL_OPTIONS = [
+      { minutes: 120, label: 'Every 2 hours', shortLabel: '2 hours' },
+      { minutes: 60,  label: 'Hourly',       shortLabel: '1 hour' },
+      { minutes: 30,  label: 'Every 30 minutes', shortLabel: '30 minutes' },
+    ];
+    const REPORT_INTERVAL_MINUTES = new Set(REPORT_INTERVAL_OPTIONS.map(option => option.minutes));
+
+    function reportIntervalMinutes(sheet) {
+      const minutes = Number(sheet?.reportIntervalMinutes);
+      return REPORT_INTERVAL_MINUTES.has(minutes) ? minutes : 120;
+    }
+
+    function formatReportTime(totalMinutes) {
+      const minuteOfDay = ((Number(totalMinutes) % 1440) + 1440) % 1440;
+      const hour24 = Math.floor(minuteOfDay / 60);
+      const minute = minuteOfDay % 60;
+      const suffix = hour24 < 12 ? 'AM' : 'PM';
+      const hour12 = hour24 % 12 || 12;
+      return `${hour12}${minute ? ':' + String(minute).padStart(2, '0') : ''}${suffix}`;
+    }
+
+    function reportTimeSlots(sheet) {
+      const interval = reportIntervalMinutes(sheet);
+      return Array.from({ length: 1440 / interval }, (_, index) => formatReportTime(index * interval));
+    }
+
+    function parseReportTime(text) {
+      const match = String(text || '').trim().toUpperCase().replace(/\s+/g, '').match(/^(\d{1,2})(?::(\d{2}))?(AM|PM)$/);
+      if (!match) return null;
+      const hour = Number(match[1]);
+      const minute = Number(match[2] || 0);
+      if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+      return ((hour % 12) + (match[3] === 'PM' ? 12 : 0)) * 60 + minute;
+    }
 
     const FLAT_COLS = ['Date','Time','Trunk ID','Alias','Active Calls','CPS','Peak','CLZ Total','CLZ CPS','15min ASR','15min ACD','15min PDD'];
 
@@ -92,7 +125,7 @@
       { id: 's_kingsf',   name: 'KINGSFORD INOUT', layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound','Current Outbound','Max Outbound'], hourStart: 0, hourEnd: 24, note: '' },
       { id: 's_uno',      name: 'UNOBANK IN',      layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound'], hourStart: 0, hourEnd: 24, note: '' },
       { id: 's_myvelox',  name: 'MYVELOX INOUT',   layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound','Current Outbound','Max Outbound'], hourStart: 0, hourEnd: 24, note: '' },
-      { id: 's_2hour',    name: '2 Hour Report',   layout: 'twohour', active: true, metrics: ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'], dateFormat: 'd-mmm-yy', note: '' },
+      { id: 's_2hour',    name: '2 Hour Report',   layout: 'twohour', active: true, metrics: ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'], reportIntervalMinutes: 120, dateFormat: 'd-mmm-yy', note: '' },
     ];
 
     const STORAGE_KEY = 'mrg_state_v1';
@@ -210,12 +243,25 @@
         const dateCols = [];
         for (let col = 1; col <= maxCols; col++) {
           const dateCell = ws.getRow(row).getCell(col);
-          const timeText = cellText(ws.getRow(row + 1).getCell(col)).toUpperCase().replace(/\s+/g, '');
-          if (isTwoHourDateCell(dateCell) && TWO_HOUR_SLOTS.includes(timeText)) dateCols.push(col);
+          const timeText = cellText(ws.getRow(row + 1).getCell(col));
+          if (isTwoHourDateCell(dateCell) && parseReportTime(timeText) != null) dateCols.push(col);
         }
         if (dateCols.length >= 2) return { dateRow: row, timeRow: row + 1, dateCols };
       }
       return null;
+    }
+
+    function inferReportIntervalMinutes(ws, firstCol, firstTimeRow) {
+      const first = parseReportTime(cellText(ws.getRow(firstTimeRow).getCell(firstCol)));
+      if (first == null) return 120;
+      const lastRow = Math.min(ws.rowCount || (firstTimeRow + 80), firstTimeRow + 80);
+      for (let row = firstTimeRow + 1; row <= lastRow; row++) {
+        const next = parseReportTime(cellText(ws.getRow(row).getCell(firstCol)));
+        if (next == null) continue;
+        const difference = (next - first + 1440) % 1440;
+        if (REPORT_INTERVAL_MINUTES.has(difference)) return difference;
+      }
+      return 120;
     }
 
     function inferHourlyRowSeparator(ws, headerRow, metricCount) {
@@ -250,6 +296,7 @@
             layout: 'twohour',
             active: true,
             metrics: metrics.length ? metrics : ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'],
+            reportIntervalMinutes: inferReportIntervalMinutes(ws, firstCol, twoHour.timeRow),
             dateFormat: ws.getRow(twoHour.dateRow).getCell(firstCol).numFmt || 'd-mmm-yy',
             note: '',
           });
@@ -1224,6 +1271,7 @@
     function buildTwoHourReportSheet(ws, s, year, month, allRules) {
       const configuredMetrics = visibleItems(s.metrics || []);
       const metrics = configuredMetrics.length ? configuredMetrics : ['Metric 1'];
+      const timeSlots = reportTimeSlots(s);
       const metricCount = metrics.length;
       const days = daysInMonth(year, month);
       const totalCols = Math.max(2, (days * 3) - 1);
@@ -1238,7 +1286,7 @@
       const dataStartRow = cur;
       const border = { style: 'thin', color: { argb: 'FFD9D9D9' } };
 
-      TWO_HOUR_SLOTS.forEach((slot) => {
+      timeSlots.forEach((slot) => {
         const dateRow = cur;
         const timeRow = cur + 1;
         const metricStartRow = cur + 2;
@@ -4775,6 +4823,7 @@ https://bit.ly/4vrcu64`;
             next.rowSeparator = sheet.rowSeparator ?? true;
           } else {
             next.dateFormat = sheet.dateFormat || 'd-mmm-yy';
+            next.reportIntervalMinutes = reportIntervalMinutes(sheet);
           }
         } else {
           next.columns = sheet.columns?.length ? sheet.columns : (sheet.metrics?.length ? sheet.metrics : ['Column 1']);
@@ -4795,7 +4844,7 @@ https://bit.ly/4vrcu64`;
                 <Pill tone={sheet.active ? 'success' : 'muted'}>{sheet.active ? '● Active' : '○ Inactive'}</Pill>
                 {(sheet.layout === 'hourly' || sheet.layout === 'twohour') && <Pill>{visibleItems(sheet.metrics).length}/{(sheet.metrics || []).length} metrics</Pill>}
                 {sheet.layout === 'hourly' && <Pill>{hourlyHasRowSeparator(sheet) ? 'With separator' : 'No separator'}</Pill>}
-                {sheet.layout === 'twohour' && <Pill>12 slots · every 2 hours</Pill>}
+                {sheet.layout === 'twohour' && <Pill>{reportTimeSlots(sheet).length} slots · {REPORT_INTERVAL_OPTIONS.find(option => option.minutes === reportIntervalMinutes(sheet))?.shortLabel}</Pill>}
                 {sheet.layout !== 'hourly' && sheet.layout !== 'twohour' && <Pill>{visibleItems(sheet.columns).length}/{(sheet.columns || []).length} columns</Pill>}
               </div>
             </div>
@@ -5006,12 +5055,23 @@ https://bit.ly/4vrcu64`;
           ) : sheet.layout === 'twohour' ? (
             <>
               <Card className="p-4 border-blue-500/20 bg-blue-500/[0.04]">
-                <div className="text-sm font-semibold text-neutral-100">2-hour comparison format</div>
+                <div className="text-sm font-semibold text-neutral-100">Time-block comparison format</div>
                 <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-                  Generates 12 vertical time blocks from 12AM to 10PM. Each date uses a label/value pair across the sheet, so yesterday and today stay next to each other for quick copying.
+                  Generates vertical time blocks beginning at 12AM. Each date uses a label/value pair across the sheet, so yesterday and today stay next to each other for quick copying.
                 </p>
               </Card>
-              <CollapsibleSection sid="twohour-dateformat" title="Date format" hint="Repeated above every 2-hour block">
+              <CollapsibleSection sid="twohour-interval" title="Time interval" hint={`${reportTimeSlots(sheet).length} blocks per day · starts at 12AM`}>
+                <div className="max-w-sm">
+                  <label className="text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5">Monitoring frequency</label>
+                  <Select value={reportIntervalMinutes(sheet)} onChange={e => update({ reportIntervalMinutes: Number(e.target.value) })}>
+                    {REPORT_INTERVAL_OPTIONS.map(option => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
+                  </Select>
+                  <p className="text-[11px] text-neutral-500 mt-2 font-mono">
+                    12AM → {reportTimeSlots(sheet).at(-1)} · {reportTimeSlots(sheet).length} time blocks
+                  </p>
+                </div>
+              </CollapsibleSection>
+              <CollapsibleSection sid="twohour-dateformat" title="Date format" hint="Repeated above every time block">
                 {(() => {
                   const fmt = sheet.dateFormat || 'd-mmm-yy';
                   const isCustom = !DATE_FORMAT_VALUES.has(fmt);
@@ -5242,13 +5302,14 @@ https://bit.ly/4vrcu64`;
       }
       if (sheet.layout === 'twohour') {
         const metrics = visibleItems(sheet.metrics || []);
+        const timeSlots = reportTimeSlots(sheet);
         const sampleDays = Math.min(2, daysInMonth(year, month));
         const days = [...Array(sampleDays)].map((_, index) => index + 1);
         return (
           <div className="overflow-x-auto rounded-lg border border-neutral-900 bg-[#232327] p-3">
             <table className="min-w-[620px] text-[11px]">
               <tbody>
-                {TWO_HOUR_SLOTS.slice(0, 2).map((slot, slotIndex) => (
+                {timeSlots.slice(0, 2).map((slot, slotIndex) => (
                   <React.Fragment key={slot}>
                     <tr>
                       {days.map(day => (
@@ -5293,7 +5354,7 @@ https://bit.ly/4vrcu64`;
                 ))}
               </tbody>
             </table>
-            <p className="mt-3 text-[10px] text-neutral-600">Preview shows 2 dates and the first 2 time blocks. The generated sheet includes every date in the month and all 12 time blocks.</p>
+            <p className="mt-3 text-[10px] text-neutral-600">Preview shows 2 dates and the first 2 time blocks. The generated sheet includes every date in the month and all {timeSlots.length} time blocks.</p>
           </div>
         );
       }
