@@ -8623,6 +8623,16 @@ https://bit.ly/4vrcu64`;
       };
     }
 
+    function procedureFreshState() {
+      return procedureNormalizeState({
+        ...DEFAULT_PROCEDURE_STATE,
+        lastReviewed: new Date().toISOString().slice(0, 10),
+        steps: [
+          { id: procedureId(), title: 'First step', description: '', note: '', image: '' },
+        ],
+      });
+    }
+
     function procedureFileStem(proc) {
       const raw = String(proc?.title || 'Procedure').trim() || 'Procedure';
       return raw.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').slice(0, 100).trim() || 'Procedure';
@@ -9039,7 +9049,7 @@ https://bit.ly/4vrcu64`;
       return filename;
     }
 
-    function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport, onImport }) {
+    function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport, onImport, onClear }) {
       const proc = procedureNormalizeState(state.procedure);
       const theme = state.theme || 'dark';
       const importRef = useRef(null);
@@ -9086,6 +9096,9 @@ https://bit.ly/4vrcu64`;
           <div className="p-5 border-t border-neutral-900 space-y-2">
             <Btn variant="primary" size="lg" onClick={onExport} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Generate Word</>}
+            </Btn>
+            <Btn variant="danger" size="md" onClick={onClear} disabled={busy} className="w-full">
+              <IconX /> Clear Procedure
             </Btn>
           </div>
         </aside>
@@ -9190,24 +9203,24 @@ https://bit.ly/4vrcu64`;
 
     function ProcedurePreview({ proc }) {
       return (
-        <div data-procedure-preview-root className="rounded-lg border border-neutral-300 bg-white p-8 text-[#111827] shadow-sm">
+        <div data-procedure-preview-root style={{ colorScheme: 'light' }} className="rounded-lg border border-[#d1d5db] bg-[#ffffff] p-8 text-[#111827] shadow-sm">
           <div className="border-b-4 border-blue-600 pb-5">
             <h1 className="mt-2 text-3xl font-bold leading-tight">{proc.title || 'Untitled Procedure'}</h1>
-            <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-neutral-600">
+            <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-[#4b5563]">
               <div><strong>Document ID:</strong> {proc.documentId || '—'}</div>{proc.includeVersionInOutput && <div><strong>Version:</strong> {proc.version || '—'}</div>}
               <div><strong>Owner:</strong> {proc.owner || '—'}</div><div><strong>Department:</strong> {proc.department || '—'}</div>
               <div><strong>Last reviewed:</strong> {proc.lastReviewed || '—'}</div><div><strong>Steps:</strong> {proc.steps.length}</div>
             </div>
           </div>
-          {proc.purpose.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-neutral-900">Purpose</h2><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-neutral-700">{proc.purpose}</p></section>}
-          {proc.prerequisites.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-neutral-900">Prerequisites</h2><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-neutral-700">{procedureTextLines(proc.prerequisites).filter(Boolean).map((line, i) => <li key={i}>{line.replace(/^\s*[-•]\s*/, '')}</li>)}</ul></section>}
+          {proc.purpose.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">Purpose</h2><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#374151]">{proc.purpose}</p></section>}
+          {proc.prerequisites.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">Prerequisites</h2><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#374151]">{procedureTextLines(proc.prerequisites).filter(Boolean).map((line, i) => <li key={i}>{line.replace(/^\s*[-•]\s*/, '')}</li>)}</ul></section>}
           <div className="mt-8 space-y-7">
             {proc.steps.map((step, index) => (
-              <section key={step.id} data-procedure-step className="break-inside-avoid rounded-lg border border-neutral-200 p-5">
-                <div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">{index + 1}</div><div><div className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">Step {index + 1}</div>{procedureVisibleStepTitle(step, index) && <h2 className="text-lg font-bold leading-tight">{procedureVisibleStepTitle(step, index)}</h2>}</div></div>
-                {step.description && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-neutral-700">{step.description}</p>}
-                {step.image && <img src={step.image} alt={`Step ${index + 1}`} className="mt-4 max-h-[520px] w-full rounded border border-neutral-200 object-contain" />}
-                {step.note && <div className="mt-4 rounded-md border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-950"><strong>Note:</strong> {step.note}</div>}
+              <section key={step.id} data-procedure-step className="break-inside-avoid rounded-lg border border-[#e5e7eb] bg-[#ffffff] p-5 text-[#111827]">
+                <div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#2563eb] text-sm font-bold text-[#ffffff]">{index + 1}</div><div><div className="text-[9px] font-bold uppercase tracking-[0.18em] text-[#2563eb]">Step {index + 1}</div>{procedureVisibleStepTitle(step, index) && <h2 className="text-lg font-bold leading-tight text-[#111827]">{procedureVisibleStepTitle(step, index)}</h2>}</div></div>
+                {step.description && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[#374151]">{step.description}</p>}
+                {step.image && <img src={step.image} alt={`Step ${index + 1}`} className="mt-4 max-h-[520px] w-full rounded border border-[#e5e7eb] bg-[#ffffff] object-contain" />}
+                {step.note && <div className="mt-4 rounded-md border-l-4 border-[#3b82f6] bg-[#eff6ff] px-4 py-3 text-xs leading-5 text-[#172554]"><strong>Note:</strong> {step.note}</div>}
               </section>
             ))}
           </div>
@@ -14382,6 +14395,19 @@ match /shared/whitelistSmsTestNumbers {
         }
       };
 
+      const onClearProcedure = async () => {
+        const ok = await confirmDialog({
+          title: 'Clear this procedure?',
+          message: 'This will remove all procedure details, steps, notes, and screenshots and return the editor to a fresh draft. This action cannot be undone.',
+          confirmText: 'Clear procedure',
+          tone: 'danger',
+        });
+        if (!ok) return;
+        setState(s => ({ ...s, procedure: procedureFreshState() }));
+        setToast({ type: 'ok', msg: 'Procedure cleared. You can start a new guide.' });
+        setTimeout(() => setToast(null), 4000);
+      };
+
       const activeCount = state.sheets.filter(s => s.active).length;
       const days = daysInMonth(state.year, state.month);
       const activeRules = state.rules.filter(r => r.enabled).length;
@@ -14535,7 +14561,8 @@ match /shared/whitelistSmsTestNumbers {
         return (
           <div className="flex min-h-screen text-neutral-100">
             <ProcedureSidebar state={state} setState={setState} sync={sync} onRetrySync={retrySync}
-              gsheets={googleSyncProps} busy={busy} onExport={onGenerateProcedure} onImport={onImportProcedure} />
+              gsheets={googleSyncProps} busy={busy} onExport={onGenerateProcedure} onImport={onImportProcedure}
+              onClear={onClearProcedure} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20">
                 <div className="app-title-block min-w-0">
