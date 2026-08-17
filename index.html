@@ -7624,7 +7624,16 @@ function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, o
       onImageError(error.message || String(error));
     }
   };
-  return /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-start gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-sm font-bold text-blue-300" }, index + 1), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-[240px] space-y-3" }, /* @__PURE__ */ React.createElement(Input, { value: step.title, onChange: (e) => onChange({ title: e.target.value }), placeholder: `Step ${index + 1} title` }), /* @__PURE__ */ React.createElement(
+  const pasteImage = (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const imageItem = items.find((item) => item.kind === "file" && String(item.type || "").startsWith("image/"));
+    if (!imageItem) return;
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    pickImage(file);
+  };
+  return /* @__PURE__ */ React.createElement("div", { onPaste: pasteImage, tabIndex: -1, "aria-label": `Procedure step ${index + 1}. Press Control V to paste a screenshot.` }, /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-start gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-sm font-bold text-blue-300" }, index + 1), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-[240px] space-y-3" }, /* @__PURE__ */ React.createElement(Input, { value: step.title, onChange: (e) => onChange({ title: e.target.value }), placeholder: `Step ${index + 1} title` }), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       value: step.description,
@@ -7643,15 +7652,15 @@ function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, o
   ), /* @__PURE__ */ React.createElement("input", { ref: inputRef, type: "file", accept: "image/*", className: "hidden", onChange: (e) => {
     pickImage(e.target.files?.[0]);
     e.target.value = "";
-  } }), step.image ? /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-800 bg-neutral-950 p-2" }, /* @__PURE__ */ React.createElement("img", { src: step.image, alt: `Step ${index + 1}`, className: "max-h-[360px] w-full rounded object-contain bg-white" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => inputRef.current?.click() }, /* @__PURE__ */ React.createElement(IconUpload, null), " Replace"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onChange({ image: "" }) }, /* @__PURE__ */ React.createElement(IconX, null), " Remove"))) : /* @__PURE__ */ React.createElement(
+  } }), step.image ? /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-800 bg-neutral-950 p-2" }, /* @__PURE__ */ React.createElement("img", { src: step.image, alt: `Step ${index + 1}`, className: "max-h-[360px] w-full rounded object-contain bg-white" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => inputRef.current?.click() }, /* @__PURE__ */ React.createElement(IconUpload, null), " Replace"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onChange({ image: "" }) }, /* @__PURE__ */ React.createElement(IconX, null), " Remove"), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, "or press Ctrl+V in this step"))) : /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
       onClick: () => inputRef.current?.click(),
       className: "w-full rounded-lg border border-dashed border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-xs text-neutral-500 hover:border-blue-500/50 hover:text-blue-300 transition-colors"
     },
-    /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Add screenshot")
-  )), /* @__PURE__ */ React.createElement("div", { className: "flex shrink-0 items-center gap-1" }, /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(-1), disabled: index === 0, title: "Move up", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconUp, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(1), disabled: index === total - 1, title: "Move down", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconDown, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: onDelete, disabled: total === 1, title: "Delete step", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconX, null)))));
+    /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Paste with Ctrl+V or upload screenshot")
+  )), /* @__PURE__ */ React.createElement("div", { className: "flex shrink-0 items-center gap-1" }, /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(-1), disabled: index === 0, title: "Move up", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconUp, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(1), disabled: index === total - 1, title: "Move down", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconDown, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: onDelete, disabled: total === 1, title: "Delete step", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconX, null))))));
 }
 function ProcedureEditor({ proc, onChange, onImageError }) {
   const updateStep = (id, patch) => onChange({ ...proc, steps: proc.steps.map((step) => step.id === id ? { ...step, ...patch } : step) });

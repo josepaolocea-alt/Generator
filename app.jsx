@@ -8936,7 +8936,17 @@ https://bit.ly/4vrcu64`;
         try { onChange({ image: await procedureReadImageFile(file) }); }
         catch (error) { onImageError(error.message || String(error)); }
       };
+      const pasteImage = (event) => {
+        const items = Array.from(event.clipboardData?.items || []);
+        const imageItem = items.find(item => item.kind === 'file' && String(item.type || '').startsWith('image/'));
+        if (!imageItem) return;
+        const file = imageItem.getAsFile();
+        if (!file) return;
+        event.preventDefault();
+        pickImage(file);
+      };
       return (
+        <div onPaste={pasteImage} tabIndex={-1} aria-label={`Procedure step ${index + 1}. Press Control V to paste a screenshot.`}>
         <Card className="p-4">
           <div className="flex flex-wrap items-start gap-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-sm font-bold text-blue-300">{index + 1}</div>
@@ -8952,15 +8962,16 @@ https://bit.ly/4vrcu64`;
               {step.image ? (
                 <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-2">
                   <img src={step.image} alt={`Step ${index + 1}`} className="max-h-[360px] w-full rounded object-contain bg-white" />
-                  <div className="mt-2 flex gap-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Btn variant="ghost" size="sm" onClick={() => inputRef.current?.click()}><IconUpload /> Replace</Btn>
                     <Btn variant="ghost" size="sm" onClick={() => onChange({ image: '' })}><IconX /> Remove</Btn>
+                    <span className="text-[10px] text-neutral-600">or press Ctrl+V in this step</span>
                   </div>
                 </div>
               ) : (
                 <button type="button" onClick={() => inputRef.current?.click()}
                   className="w-full rounded-lg border border-dashed border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-xs text-neutral-500 hover:border-blue-500/50 hover:text-blue-300 transition-colors">
-                  <span className="inline-flex items-center gap-2"><IconUpload /> Add screenshot</span>
+                  <span className="inline-flex items-center gap-2"><IconUpload /> Paste with Ctrl+V or upload screenshot</span>
                 </button>
               )}
             </div>
@@ -8971,6 +8982,7 @@ https://bit.ly/4vrcu64`;
             </div>
           </div>
         </Card>
+        </div>
       );
     }
 
