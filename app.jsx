@@ -8675,6 +8675,179 @@ https://bit.ly/4vrcu64`;
       return canvas.toDataURL('image/jpeg', 0.84);
     }
 
+    const PROCEDURE_DOCX_STATE_MARKER = 'MRG_PROCEDURE_STATE_V1:';
+
+    function procedureUtf8ToBase64(value) {
+      const bytes = new TextEncoder().encode(String(value || ''));
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      return btoa(binary);
+    }
+
+    function procedureBase64ToUtf8(value) {
+      const binary = atob(String(value || ''));
+      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+
+    function procedureDocxManifest(proc) {
+      const normalized = procedureNormalizeState(proc);
+      const compact = {
+        ...normalized,
+        imageStepIndexes: normalized.steps.flatMap((step, index) => step.image ? [index] : []),
+        steps: normalized.steps.map(step => ({
+          id: step.id,
+          title: step.title,
+          description: step.description,
+          note: step.note,
+        })),
+      };
+      return PROCEDURE_DOCX_STATE_MARKER + procedureUtf8ToBase64(JSON.stringify(compact));
+    }
+
+    function procedureDecodeDocxManifest(rawText) {
+      const source = String(rawText || '');
+      const markerIndex = source.indexOf(PROCEDURE_DOCX_STATE_MARKER);
+      if (markerIndex < 0) return null;
+      const encoded = source.slice(markerIndex + PROCEDURE_DOCX_STATE_MARKER.length).match(/^([A-Za-z0-9+/=]+)/)?.[1];
+      if (!encoded) return null;
+      try {
+        const decoded = JSON.parse(procedureBase64ToUtf8(encoded));
+        return {
+          ...procedureNormalizeState(decoded),
+          _imageStepIndexes: Array.isArray(decoded.imageStepIndexes)
+            ? decoded.imageStepIndexes.filter(index => Number.isInteger(index) && index >= 0)
+            : [],
+        };
+      } catch (error) {
+        console.warn('Could not decode the embedded Procedure data', error);
+        return null;
+      }
+    }
+
+    function procedureHtmlRoot(html) {
+      const root = document.createElement('div');
+      root.innerHTML = String(html || '');
+      root.querySelectorAll('script,style,iframe,object,embed').forEach(node => node.remove());
+      return root;
+    }
+
+    function procedureImportedImages(root) {
+      return Array.from(root.querySelectorAll('img'))
+        .map(image => String(image.getAttribute('src') || ''))
+        .filter(src => /^data:image\//i.test(src));
+    }
+
+    function procedureLegacyDocxState(html, fileName) {
+      const root = procedureHtmlRoot(html);
+      Array.from(root.querySelectorAll('p,span')).forEach(node => {
+        if (String(node.textContent || '').includes(PROCEDURE_DOCX_STATE_MARKER)) node.remove();
+      });
+      const clean = value => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      const metadata = {};
+      root.querySelectorAll('td').forEach(cell => {
+        const value = clean(cell.textContent);
+        const match = value.match(/^(Document ID|Owner|Department|Version|Last reviewed)\s*:\s*(.*)$/i);
+        if (match) metadata[match[1].toLowerCase()] = match[2];
+      });
+      const titleNode = Array.from(root.querySelectorAll('h1,h2,h3,p')).find(node => {
+        const value = clean(node.textContent);
+        return value && !/^(Purpose|Prerequisites|STEP\s+\d+)/i.test(value) && !/^(Document ID|Owner|Department|Version|Last reviewed)\s*:/i.test(value);
+      });
+      const fallbackTitle = String(fileName || 'Imported Procedure').replace(/\.docx$/i, '') || 'Imported Procedure';
+      const imported = {
+        title: clean(titleNode?.textContent) || fallbackTitle,
+        documentId: metadata['document id'] || '',
+        owner: metadata.owner || '',
+        department: metadata.department || '',
+        version: metadata.version || '1.0',
+        includeVersionInOutput: !!metadata.version,
+        lastReviewed: metadata['last reviewed'] || '',
+        purpose: '',
+        prerequisites: '',
+        steps: [],
+      };
+      let mode = '';
+      let currentStep = null;
+      const purposeLines = [];
+      const prerequisiteLines = [];
+      const unassignedLines = [];
+      const addText = value => {
+        const line = clean(value);
+        if (!line || line === imported.title || line.includes(PROCEDURE_DOCX_STATE_MARKER)) return;
+        if (/^(Document ID|Owner|Department|Version|Last reviewed)\s*:/i.test(line)) return;
+        if (mode === 'purpose') purposeLines.push(line);
+        else if (mode === 'prerequisites') prerequisiteLines.push(line.replace(/^[-\u2022]\s*/, ''));
+        else if (currentStep) currentStep.description = [currentStep.description, line].filter(Boolean).join('\n');
+        else unassignedLines.push(line);
+      };
+      Array.from(root.children).forEach(node => {
+        const value = clean(node.textContent);
+        if (!value && !node.querySelector('img')) return;
+        if (/^Purpose$/i.test(value)) { mode = 'purpose'; currentStep = null; return; }
+        if (/^Prerequisites$/i.test(value)) { mode = 'prerequisites'; currentStep = null; return; }
+        const stepMatch = value.match(/^STEP\s+(\d+)(?:\s+(.*))?$/i);
+        if (stepMatch) {
+          currentStep = { id: procedureId(), title: clean(stepMatch[2]), description: '', note: '', image: '' };
+          imported.steps.push(currentStep);
+          mode = 'step';
+          return;
+        }
+        const images = procedureImportedImages(node);
+        if (images.length && currentStep && !currentStep.image) currentStep.image = images[0];
+        if (node.matches('table')) {
+          if (currentStep && /^Note\s*:/i.test(value)) currentStep.note = value.replace(/^Note\s*:\s*/i, '');
+          return;
+        }
+        if (node.matches('ul,ol')) {
+          Array.from(node.querySelectorAll('li')).forEach(item => addText(item.textContent));
+          return;
+        }
+        if (!images.length || value) addText(value);
+      });
+      imported.purpose = purposeLines.join('\n');
+      imported.prerequisites = prerequisiteLines.join('\n');
+      if (!imported.steps.length) {
+        const description = unassignedLines.join('\n');
+        if (!description && !imported.purpose && !imported.prerequisites) {
+          throw new Error('No editable procedure content could be recognized in this Word file.');
+        }
+        imported.steps = [{ id: procedureId(), title: '', description, note: '', image: procedureImportedImages(root)[0] || '' }];
+      } else if (unassignedLines.length && !imported.purpose) {
+        imported.purpose = unassignedLines.join('\n');
+      }
+      return procedureNormalizeState(imported);
+    }
+
+    async function procedureReadDocxFile(file) {
+      if (!file) throw new Error('Choose a Word file.');
+      if (!/\.docx$/i.test(String(file.name || ''))) throw new Error('Choose a .docx Word file.');
+      if (file.size > 25 * 1024 * 1024) throw new Error('Word file is too large. Choose a file under 25 MB.');
+      if (!window.mammoth) throw new Error('Word import library is not available. Reload the app and try again.');
+      const arrayBuffer = await file.arrayBuffer();
+      const [rawResult, htmlResult] = await Promise.all([
+        window.mammoth.extractRawText({ arrayBuffer }),
+        window.mammoth.convertToHtml({ arrayBuffer }),
+      ]);
+      const embedded = procedureDecodeDocxManifest(rawResult.value);
+      if (!embedded) {
+        return { procedure: procedureLegacyDocxState(htmlResult.value, file.name), exact: false };
+      }
+      const root = procedureHtmlRoot(htmlResult.value);
+      const images = procedureImportedImages(root);
+      let imageIndex = 0;
+      const imageStepIndexes = new Set(embedded._imageStepIndexes || []);
+      const steps = embedded.steps.map((step, stepIndex) => {
+        const hasImage = imageStepIndexes.has(stepIndex);
+        const image = hasImage ? (images[imageIndex++] || '') : '';
+        return { ...step, image };
+      });
+      const { _imageStepIndexes, ...editable } = embedded;
+      return { procedure: procedureNormalizeState({ ...editable, steps }), exact: true };
+    }
+
     async function buildProcedureBlob(state) {
       const proc = procedureNormalizeState(state.procedure);
       const wb = new ExcelJS.Workbook();
@@ -8815,7 +8988,6 @@ https://bit.ly/4vrcu64`;
         const step = proc.steps[index];
         const visibleTitle = procedureVisibleStepTitle(step, index);
         children.push(new D.Paragraph({
-          pageBreakBefore: index > 0 && !!step.image,
           spacing: { before: 360, after: 120 },
           keepNext: true,
           children: [
@@ -8848,6 +9020,14 @@ https://bit.ly/4vrcu64`;
           }));
         }
       }
+      // A tiny hidden paragraph keeps the editable Procedure model inside files
+      // generated by this app without changing their visible layout.
+      children.push(new D.Paragraph({
+        spacing: { before: 0, after: 0, line: 20 },
+        children: [new D.TextRun({
+          text: procedureDocxManifest(proc), font: 'Aptos', size: 2, color: 'FFFFFF', vanish: true,
+        })],
+      }));
       const doc = new D.Document({
         creator: 'Procedure Scribe', title: proc.title || 'Procedure',
         styles: { default: { document: { run: { font: 'Aptos', size: 22 } } } },
@@ -8859,9 +9039,10 @@ https://bit.ly/4vrcu64`;
       return filename;
     }
 
-    function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport }) {
+    function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport, onImport }) {
       const proc = procedureNormalizeState(state.procedure);
       const theme = state.theme || 'dark';
+      const importRef = useRef(null);
       const update = (patch) => setState(s => ({ ...s, procedure: { ...procedureNormalizeState(s.procedure), ...patch } }));
       return (
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
@@ -8884,6 +9065,18 @@ https://bit.ly/4vrcu64`;
                 <div className="text-xs text-neutral-200 truncate">{proc.title || 'Untitled Procedure'}</div>
                 <div className="text-[10px] text-neutral-600">{proc.steps.length} step{proc.steps.length === 1 ? '' : 's'} · Version {proc.version || '—'}</div>
               </div>
+              <input ref={importRef} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="hidden" onChange={async event => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) await onImport(file);
+                }} />
+              <Btn variant="ghost" size="sm" onClick={() => importRef.current?.click()} disabled={busy} className="w-full mt-2">
+                <IconUpload /> Import Word
+              </Btn>
+              <p className="mt-2 text-[10px] leading-relaxed text-neutral-600">
+                App-generated Word files reopen exactly. Other .docx files are mapped into this Procedure layout for review.
+              </p>
             </div>
             <GoogleSheetSync gsheets={gsheets} moduleId="procedure"
               sheetId={state.googleSheets?.sheetIds?.procedure}
@@ -14161,6 +14354,34 @@ match /shared/whitelistSmsTestNumbers {
         }
       };
 
+      const onImportProcedure = async (file) => {
+        setBusy(true);
+        try {
+          const imported = await procedureReadDocxFile(file);
+          const ok = await confirmDialog({
+            title: `Import ${file.name}?`,
+            message: imported.exact
+              ? 'This app-generated file contains editable Procedure data. Importing it will replace the current Procedure draft.'
+              : 'This Word file will be mapped into the current Procedure layout. Importing it will replace the current draft, and you should review the result before generating a new file.',
+            confirmText: 'Import',
+          });
+          if (!ok) return;
+          setState(s => ({ ...s, procedure: imported.procedure }));
+          setToast({
+            type: 'ok',
+            msg: imported.exact
+              ? `Imported ${file.name} with its editable Procedure data.`
+              : `Imported ${file.name}. Review the mapped fields and formatting.`,
+          });
+        } catch (e) {
+          console.error(e);
+          setToast({ type: 'err', msg: 'Import failed: ' + (e.message || e) });
+        } finally {
+          setBusy(false);
+          setTimeout(() => setToast(null), 5000);
+        }
+      };
+
       const activeCount = state.sheets.filter(s => s.active).length;
       const days = daysInMonth(state.year, state.month);
       const activeRules = state.rules.filter(r => r.enabled).length;
@@ -14314,7 +14535,7 @@ match /shared/whitelistSmsTestNumbers {
         return (
           <div className="flex min-h-screen text-neutral-100">
             <ProcedureSidebar state={state} setState={setState} sync={sync} onRetrySync={retrySync}
-              gsheets={googleSyncProps} busy={busy} onExport={onGenerateProcedure} />
+              gsheets={googleSyncProps} busy={busy} onExport={onGenerateProcedure} onImport={onImportProcedure} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20">
                 <div className="app-title-block min-w-0">
