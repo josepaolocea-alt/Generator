@@ -8672,17 +8672,10 @@ https://bit.ly/4vrcu64`;
         img.onerror = () => reject(new Error('Could not decode that image.'));
         img.src = dataUrl;
       });
-      const maxWidth = 1600;
-      const maxHeight = 1000;
-      const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/jpeg', 0.84);
+      if (!image.naturalWidth || !image.naturalHeight) throw new Error('That image has no readable dimensions.');
+      // Preserve the exact source pixels and format. Editing is the only time
+      // a new image is produced, and edited screenshots are exported as PNG.
+      return dataUrl;
     }
 
     const PROCEDURE_DOCX_STATE_MARKER = 'MRG_PROCEDURE_STATE_V1:';
@@ -9105,7 +9098,239 @@ https://bit.ly/4vrcu64`;
       );
     }
 
-    function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, onImageError }) {
+    function procedureEditorRect(action) {
+      return {
+        x: Math.min(action.x1, action.x2),
+        y: Math.min(action.y1, action.y2),
+        width: Math.abs(action.x2 - action.x1),
+        height: Math.abs(action.y2 - action.y1),
+      };
+    }
+
+    function procedureDrawImageEdit(ctx, action, isDraft = false) {
+      if (!action) return;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = action.color || '#ef4444';
+      ctx.fillStyle = action.color || '#ef4444';
+      ctx.lineWidth = Math.max(1, action.lineWidth || 4);
+      if (action.kind === 'arrow') {
+        const angle = Math.atan2(action.y2 - action.y1, action.x2 - action.x1);
+        const head = Math.max(12, ctx.lineWidth * 4.5);
+        ctx.beginPath();
+        ctx.moveTo(action.x1, action.y1);
+        ctx.lineTo(action.x2, action.y2);
+        ctx.moveTo(action.x2, action.y2);
+        ctx.lineTo(action.x2 - head * Math.cos(angle - Math.PI / 6), action.y2 - head * Math.sin(angle - Math.PI / 6));
+        ctx.moveTo(action.x2, action.y2);
+        ctx.lineTo(action.x2 - head * Math.cos(angle + Math.PI / 6), action.y2 - head * Math.sin(angle + Math.PI / 6));
+        ctx.stroke();
+      } else if (action.kind === 'rectangle' || action.kind === 'circle') {
+        const rect = procedureEditorRect(action);
+        ctx.beginPath();
+        if (action.kind === 'circle') {
+          ctx.ellipse(rect.x + rect.width / 2, rect.y + rect.height / 2, Math.max(1, rect.width / 2), Math.max(1, rect.height / 2), 0, 0, Math.PI * 2);
+        } else {
+          ctx.rect(rect.x, rect.y, rect.width, rect.height);
+        }
+        ctx.stroke();
+      } else if (action.kind === 'blur') {
+        const rect = procedureEditorRect(action);
+        if (rect.width > 1 && rect.height > 1) {
+          const radius = Math.max(6, action.radius || 12);
+          const pad = radius * 3;
+          const sx = Math.max(0, Math.floor(rect.x - pad));
+          const sy = Math.max(0, Math.floor(rect.y - pad));
+          const ex = Math.min(ctx.canvas.width, Math.ceil(rect.x + rect.width + pad));
+          const ey = Math.min(ctx.canvas.height, Math.ceil(rect.y + rect.height + pad));
+          const temp = document.createElement('canvas');
+          temp.width = Math.max(1, ex - sx);
+          temp.height = Math.max(1, ey - sy);
+          temp.getContext('2d').drawImage(ctx.canvas, sx, sy, temp.width, temp.height, 0, 0, temp.width, temp.height);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(rect.x, rect.y, rect.width, rect.height);
+          ctx.clip();
+          ctx.filter = `blur(${radius}px)`;
+          ctx.drawImage(temp, sx, sy);
+          ctx.restore();
+          if (isDraft) {
+            ctx.save();
+            ctx.setLineDash([Math.max(5, radius), Math.max(4, radius / 2)]);
+            ctx.lineWidth = Math.max(2, radius / 5);
+            ctx.strokeStyle = '#60a5fa';
+            ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+            ctx.restore();
+          }
+        }
+      } else if (action.kind === 'text') {
+        const fontSize = Math.max(10, action.fontSize || 32);
+        ctx.font = `700 ${fontSize}px Arial, sans-serif`;
+        ctx.textBaseline = 'top';
+        ctx.lineWidth = Math.max(2, fontSize / 10);
+        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+        ctx.strokeText(action.text || '', action.x1, action.y1);
+        ctx.fillStyle = action.color || '#ef4444';
+        ctx.fillText(action.text || '', action.x1, action.y1);
+      }
+      ctx.restore();
+    }
+
+    function ProcedureImageEditor({ image, onCancel, onSave }) {
+      const canvasRef = useRef(null);
+      const imageRef = useRef(null);
+      const textRef = useRef(null);
+      const [imageInfo, setImageInfo] = useState(null);
+      const [tool, setTool] = useState('arrow');
+      const [color, setColor] = useState('#ef4444');
+      const [strokeWidth, setStrokeWidth] = useState(5);
+      const [fontSize, setFontSize] = useState(32);
+      const [textValue, setTextValue] = useState('');
+      const [actions, setActions] = useState([]);
+      const [draft, setDraft] = useState(null);
+      const [saving, setSaving] = useState(false);
+      const [error, setError] = useState('');
+
+      useEffect(() => {
+        let active = true;
+        const source = new Image();
+        source.onload = () => {
+          if (!active) return;
+          imageRef.current = source;
+          setImageInfo({ width: source.naturalWidth, height: source.naturalHeight });
+        };
+        source.onerror = () => active && setError('Could not open this screenshot in the editor.');
+        source.src = image;
+        return () => { active = false; };
+      }, [image]);
+
+      useEffect(() => {
+        const onKey = event => {
+          if (event.key === 'Escape' && !saving) { event.preventDefault(); onCancel(); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [onCancel, saving]);
+
+      useLayoutEffect(() => {
+        const canvas = canvasRef.current;
+        const source = imageRef.current;
+        if (!canvas || !source || !imageInfo) return;
+        if (canvas.width !== imageInfo.width) canvas.width = imageInfo.width;
+        if (canvas.height !== imageInfo.height) canvas.height = imageInfo.height;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+        actions.forEach(action => procedureDrawImageEdit(ctx, action));
+        if (draft) procedureDrawImageEdit(ctx, draft, true);
+      }, [imageInfo, actions, draft]);
+
+      const pointFromEvent = event => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: Math.max(0, Math.min(canvas.width, (event.clientX - rect.left) * canvas.width / rect.width)),
+          y: Math.max(0, Math.min(canvas.height, (event.clientY - rect.top) * canvas.height / rect.height)),
+        };
+      };
+      const editorScale = imageInfo ? Math.max(1, imageInfo.width / 1200) : 1;
+      const onPointerDown = event => {
+        if (!imageInfo || saving) return;
+        event.preventDefault();
+        const point = pointFromEvent(event);
+        if (tool === 'text') {
+          if (!textValue.trim()) { textRef.current?.focus(); return; }
+          setActions(list => [...list, {
+            kind: 'text', x1: point.x, y1: point.y, text: textValue.trim(), color,
+            fontSize: Math.round(fontSize * editorScale),
+          }]);
+          return;
+        }
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        setDraft({
+          kind: tool, x1: point.x, y1: point.y, x2: point.x, y2: point.y, color,
+          lineWidth: strokeWidth * editorScale, radius: 12 * editorScale,
+        });
+      };
+      const onPointerMove = event => {
+        if (!draft) return;
+        const point = pointFromEvent(event);
+        setDraft(current => current ? { ...current, x2: point.x, y2: point.y } : current);
+      };
+      const finishDraft = event => {
+        if (!draft) return;
+        const point = pointFromEvent(event);
+        const finished = { ...draft, x2: point.x, y2: point.y };
+        const distance = Math.hypot(finished.x2 - finished.x1, finished.y2 - finished.y1);
+        if (distance >= 3 * editorScale) setActions(list => [...list, finished]);
+        setDraft(null);
+      };
+      const saveImage = async () => {
+        if (!actions.length) { onSave(image); return; }
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        setSaving(true);
+        setError('');
+        try {
+          const blob = await new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Could not create the edited image.')), 'image/png'));
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(new Error('Could not save the edited image.'));
+            reader.readAsDataURL(blob);
+          });
+          onSave(dataUrl);
+        } catch (saveError) {
+          setError(saveError.message || String(saveError));
+          setSaving(false);
+        }
+      };
+      const tools = [
+        ['arrow', 'Arrow'], ['circle', 'Circle'], ['rectangle', 'Rectangle'], ['blur', 'Blur'], ['text', 'Text'],
+      ];
+
+      return (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-2 sm:p-4" role="dialog" aria-modal="true" aria-label="Edit procedure screenshot">
+          <div className="flex h-[94vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-xl border border-neutral-800 bg-[#232327] shadow-2xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 px-4 py-3 sm:px-5">
+              <div><h3 className="text-sm font-bold">Edit screenshot</h3><p className="text-[11px] text-neutral-500">Annotations are applied at the image's original resolution.</p></div>
+              <button type="button" onClick={onCancel} disabled={saving} aria-label="Close image editor" className="rounded-md border border-neutral-800 p-2 text-neutral-400 hover:text-neutral-100 disabled:opacity-40"><IconX /></button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 border-b border-neutral-800 bg-neutral-950/60 px-4 py-3">
+              {tools.map(([id, label]) => <Btn key={id} variant={tool === id ? 'accent' : 'ghost'} size="sm" onClick={() => setTool(id)}>{label}</Btn>)}
+              <span className="mx-1 hidden h-6 border-l border-neutral-800 sm:block"></span>
+              {tool !== 'blur' && <label className="inline-flex items-center gap-2 text-[11px] text-neutral-400">Color <input type="color" value={color} onChange={event => setColor(event.target.value)} className="h-8 w-10 cursor-pointer rounded border border-neutral-700 bg-transparent p-0.5" /></label>}
+              {tool !== 'text' && tool !== 'blur' && <label className="inline-flex items-center gap-2 text-[11px] text-neutral-400">Width <input type="range" min="2" max="14" value={strokeWidth} onChange={event => setStrokeWidth(Number(event.target.value))} /></label>}
+              {tool === 'text' && <>
+                <input ref={textRef} value={textValue} onChange={event => setTextValue(event.target.value)} placeholder="Text to place on image" className="h-8 min-w-[220px] flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 text-xs text-neutral-100 outline-none focus:border-blue-500/60" />
+                <label className="inline-flex items-center gap-2 text-[11px] text-neutral-400">Size <input type="range" min="16" max="72" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label>
+              </>}
+              <span className="flex-1"></span>
+              <Btn variant="ghost" size="sm" disabled={!actions.length || saving} onClick={() => setActions(list => list.slice(0, -1))}>Undo</Btn>
+              <Btn variant="ghost" size="sm" disabled={!actions.length || saving} onClick={() => setActions([])}>Reset edits</Btn>
+            </div>
+            <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-[#111114] p-3 sm:p-5">
+              {imageInfo ? <canvas ref={canvasRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishDraft} onPointerCancel={() => setDraft(null)}
+                className="max-h-full max-w-full touch-none cursor-crosshair bg-white shadow-xl" style={{ width: 'auto', height: 'auto' }} />
+                : <div className="flex items-center gap-2 text-sm text-neutral-400"><span className="loader"></span> Loading image</div>}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-800 px-4 py-3 sm:px-5">
+              <div className="text-[11px] text-neutral-500">
+                {imageInfo ? `${imageInfo.width.toLocaleString()} × ${imageInfo.height.toLocaleString()} px · ` : ''}{actions.length} edit{actions.length === 1 ? '' : 's'}
+                {tool === 'text' ? ' · Enter text, then click where it should appear.' : ' · Click and drag on the image.'}
+                {error && <span className="ml-2 text-red-300">{error}</span>}
+              </div>
+              <div className="flex gap-2"><Btn variant="ghost" size="md" onClick={onCancel} disabled={saving}>Cancel</Btn><Btn variant="accent" size="md" onClick={saveImage} disabled={!imageInfo || saving}>{saving ? <><span className="loader"></span> Saving</> : 'Save changes'}</Btn></div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, onImageError, onEditImage }) {
       const inputRef = useRef(null);
       const pickImage = async (file) => {
         if (!file) return;
@@ -9140,6 +9365,7 @@ https://bit.ly/4vrcu64`;
                   <img src={step.image} alt={`Step ${index + 1}`} className="max-h-[360px] w-full rounded object-contain bg-white" />
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Btn variant="ghost" size="sm" onClick={() => inputRef.current?.click()}><IconUpload /> Replace</Btn>
+                    <Btn variant="ghost" size="sm" onClick={onEditImage}>Edit</Btn>
                     <Btn variant="ghost" size="sm" onClick={() => onChange({ image: '' })}><IconX /> Remove</Btn>
                     <span className="text-[10px] text-neutral-600">or press Ctrl+V in this step</span>
                   </div>
@@ -9163,8 +9389,10 @@ https://bit.ly/4vrcu64`;
     }
 
     function ProcedureEditor({ proc, onChange, onImageError }) {
+      const [editingStepId, setEditingStepId] = useState(null);
       const updateStep = (id, patch) => onChange({ ...proc, steps: proc.steps.map(step => step.id === id ? { ...step, ...patch } : step) });
       const addStep = () => onChange({ ...proc, steps: [...proc.steps, { id: procedureId(), title: '', description: '', note: '', image: '' }] });
+      const editingStep = proc.steps.find(step => step.id === editingStepId && step.image);
       return (
         <div className="space-y-4">
           <Card className="p-4 space-y-4">
@@ -9194,9 +9422,11 @@ https://bit.ly/4vrcu64`;
               onChange={patch => updateStep(step.id, patch)}
               onMove={delta => onChange(procedureMoveStep(proc, index, delta))}
               onDelete={() => onChange({ ...proc, steps: proc.steps.filter(item => item.id !== step.id) })}
-              onImageError={onImageError} />
+              onImageError={onImageError} onEditImage={() => setEditingStepId(step.id)} />
           ))}
           <Btn variant="ghost" size="md" onClick={addStep} className="w-full"><IconPlus /> Add another step</Btn>
+          {editingStep && <ProcedureImageEditor image={editingStep.image} onCancel={() => setEditingStepId(null)}
+            onSave={editedImage => { updateStep(editingStep.id, { image: editedImage }); setEditingStepId(null); }} />}
         </div>
       );
     }
