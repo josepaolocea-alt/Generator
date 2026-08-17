@@ -8589,6 +8589,7 @@ https://bit.ly/4vrcu64`;
       owner: '',
       department: '',
       version: '1.0',
+      includeVersionInOutput: false,
       lastReviewed: new Date().toISOString().slice(0, 10),
       purpose: '',
       prerequisites: '',
@@ -8608,12 +8609,13 @@ https://bit.ly/4vrcu64`;
         owner: String(merged.owner || ''),
         department: String(merged.department || ''),
         version: String(merged.version || ''),
+        includeVersionInOutput: merged.includeVersionInOutput === true,
         lastReviewed: String(merged.lastReviewed || ''),
         purpose: String(merged.purpose || ''),
         prerequisites: String(merged.prerequisites || ''),
         steps: sourceSteps.map((step, index) => ({
           id: String(step?.id || procedureId()),
-          title: String(step?.title || `Step ${index + 1}`),
+          title: step?.title == null ? '' : String(step.title),
           description: String(step?.description || ''),
           note: String(step?.note || ''),
           image: typeof step?.image === 'string' ? step.image : '',
@@ -8628,6 +8630,12 @@ https://bit.ly/4vrcu64`;
 
     function procedureTextLines(value) {
       return String(value || '').replace(/\r\n/g, '\n').split('\n');
+    }
+
+    function procedureVisibleStepTitle(step, index) {
+      const title = String(step?.title || '').trim();
+      if (!title) return '';
+      return new RegExp(`^step\\s*${index + 1}$`, 'i').test(title) ? '' : title;
     }
 
     function procedureMoveStep(proc, index, delta) {
@@ -8689,7 +8697,8 @@ https://bit.ly/4vrcu64`;
       ws.getRow(1).height = 30;
       const meta = [
         ['Document ID', proc.documentId], ['Owner', proc.owner], ['Department', proc.department],
-        ['Version', proc.version], ['Last reviewed', proc.lastReviewed],
+        ...(proc.includeVersionInOutput ? [['Version', proc.version]] : []),
+        ['Last reviewed', proc.lastReviewed],
       ];
       meta.forEach(([label, value], index) => {
         const row = index + 3;
@@ -8774,25 +8783,22 @@ https://bit.ly/4vrcu64`;
           spacing: { after: 100 },
           children: [text(proc.title || 'Untitled Procedure', { bold: true, size: 36 })],
         }),
-        new D.Paragraph({
-          alignment: D.AlignmentType.CENTER,
-          spacing: { after: 280 },
-          children: [text(`Step-by-step procedure${proc.version ? ` · Version ${proc.version}` : ''}`, { color: '6B7280', size: 20 })],
-        }),
       ];
       const borders = (() => {
         const b = { style: D.BorderStyle.SINGLE, size: 4, color: 'D1D5DB' };
         return { top: b, bottom: b, left: b, right: b };
       })();
-      const metaRows = [
+      const metaValues = [
         ['Document ID', proc.documentId, 'Owner', proc.owner],
         ['Department', proc.department, 'Last reviewed', proc.lastReviewed],
-      ].map(values => new D.TableRow({ children: [0, 1].map(pair => new D.TableCell({
+        ...(proc.includeVersionInOutput ? [['Version', proc.version, '', '']] : []),
+      ];
+      const metaRows = metaValues.map(values => new D.TableRow({ children: [0, 1].map(pair => new D.TableCell({
         width: { size: 5040, type: D.WidthType.DXA }, borders,
         margins: { top: 100, bottom: 100, left: 120, right: 120 },
-        children: [new D.Paragraph({ children: [
-          text(values[pair * 2] + ': ', { bold: true }), text(values[pair * 2 + 1] || '—'),
-        ] })],
+        children: [new D.Paragraph({ children: values[pair * 2]
+          ? [text(values[pair * 2] + ': ', { bold: true }), text(values[pair * 2 + 1] || '—')]
+          : [text(' ')] })],
       })) }));
       children.push(new D.Table({ width: { size: 10080, type: D.WidthType.DXA }, columnWidths: [5040, 5040], rows: metaRows }));
       if (proc.purpose.trim()) {
@@ -8807,13 +8813,14 @@ https://bit.ly/4vrcu64`;
       }
       for (let index = 0; index < proc.steps.length; index++) {
         const step = proc.steps[index];
+        const visibleTitle = procedureVisibleStepTitle(step, index);
         children.push(new D.Paragraph({
           pageBreakBefore: index > 0 && !!step.image,
           spacing: { before: 360, after: 120 },
           keepNext: true,
           children: [
             text(`STEP ${index + 1}`, { bold: true, color: '2563EB', size: 18 }),
-            text(`  ${step.title || `Step ${index + 1}`}`, { bold: true, size: 28 }),
+            ...(visibleTitle ? [text(`  ${visibleTitle}`, { bold: true, size: 28 })] : []),
           ],
         }));
         procedureTextLines(step.description).forEach(line => children.push(paragraph(line || ' ')));
@@ -8852,40 +8859,6 @@ https://bit.ly/4vrcu64`;
       return filename;
     }
 
-    async function generateProcedurePdf(state) {
-      if (!window.html2pdf) throw new Error('html2pdf library not loaded');
-      const proc = procedureNormalizeState(state.procedure);
-      const source = document.querySelector('[data-procedure-preview-root]');
-      if (!source) throw new Error('Procedure preview is not available.');
-      const wrapper = document.createElement('div');
-      wrapper.style.position = 'relative';
-      wrapper.style.height = '0';
-      wrapper.style.overflow = 'hidden';
-      wrapper.style.opacity = '0';
-      wrapper.style.pointerEvents = 'none';
-      const clone = source.cloneNode(true);
-      clone.style.width = '8.5in';
-      clone.style.maxWidth = '8.5in';
-      clone.style.padding = '0.55in';
-      clone.style.background = '#ffffff';
-      clone.style.color = '#111827';
-      wrapper.appendChild(clone);
-      document.body.appendChild(wrapper);
-      const filename = procedureFileStem(proc) + '.pdf';
-      try {
-        await window.html2pdf().set({
-          filename, margin: 0,
-          image: { type: 'jpeg', quality: 0.96 },
-          html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-          jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-          pagebreak: { mode: ['css', 'legacy'], avoid: ['[data-procedure-step]'] },
-        }).from(clone).save();
-      } finally {
-        document.body.removeChild(wrapper);
-      }
-      return filename;
-    }
-
     function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport }) {
       const proc = procedureNormalizeState(state.procedure);
       const theme = state.theme || 'dark';
@@ -8918,11 +8891,8 @@ https://bit.ly/4vrcu64`;
               selectedTabTitle="Procedure" selectedTabLabel="Procedure" />
           </div>
           <div className="p-5 border-t border-neutral-900 space-y-2">
-            <Btn variant="primary" size="lg" onClick={() => onExport('docx')} disabled={busy} className="w-full">
+            <Btn variant="primary" size="lg" onClick={onExport} disabled={busy} className="w-full">
               {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Generate Word</>}
-            </Btn>
-            <Btn variant="ghost" size="lg" onClick={() => onExport('pdf')} disabled={busy} className="w-full">
-              {busy ? 'Please wait…' : <><IconDownload /> Generate PDF</>}
             </Btn>
           </div>
         </aside>
@@ -8988,7 +8958,7 @@ https://bit.ly/4vrcu64`;
 
     function ProcedureEditor({ proc, onChange, onImageError }) {
       const updateStep = (id, patch) => onChange({ ...proc, steps: proc.steps.map(step => step.id === id ? { ...step, ...patch } : step) });
-      const addStep = () => onChange({ ...proc, steps: [...proc.steps, { id: procedureId(), title: `Step ${proc.steps.length + 1}`, description: '', note: '', image: '' }] });
+      const addStep = () => onChange({ ...proc, steps: [...proc.steps, { id: procedureId(), title: '', description: '', note: '', image: '' }] });
       return (
         <div className="space-y-4">
           <Card className="p-4 space-y-4">
@@ -8996,7 +8966,15 @@ https://bit.ly/4vrcu64`;
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="sm:col-span-2"><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Title</label><Input value={proc.title} onChange={e => onChange({ ...proc, title: e.target.value })} placeholder="Procedure title" /></div>
               <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Document ID</label><Input value={proc.documentId} onChange={e => onChange({ ...proc, documentId: e.target.value })} placeholder="SOP-001" /></div>
-              <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Version</label><Input value={proc.version} onChange={e => onChange({ ...proc, version: e.target.value })} placeholder="1.0" /></div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Version</label>
+                <Input value={proc.version} onChange={e => onChange({ ...proc, version: e.target.value })} placeholder="1.0" />
+                <label className="mt-2 flex items-center gap-2 text-[11px] text-neutral-500">
+                  <input type="checkbox" checked={proc.includeVersionInOutput} onChange={e => onChange({ ...proc, includeVersionInOutput: e.target.checked })}
+                    className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500" />
+                  Include version in generated Word file
+                </label>
+              </div>
               <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Owner</label><Input value={proc.owner} onChange={e => onChange({ ...proc, owner: e.target.value })} placeholder="Process owner" /></div>
               <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Department</label><Input value={proc.department} onChange={e => onChange({ ...proc, department: e.target.value })} placeholder="Department / team" /></div>
               <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Last reviewed</label><Input type="date" value={proc.lastReviewed} onChange={e => onChange({ ...proc, lastReviewed: e.target.value })} /></div>
@@ -9021,10 +8999,9 @@ https://bit.ly/4vrcu64`;
       return (
         <div data-procedure-preview-root className="rounded-lg border border-neutral-300 bg-white p-8 text-[#111827] shadow-sm">
           <div className="border-b-4 border-blue-600 pb-5">
-            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-blue-600">Step-by-step procedure</div>
             <h1 className="mt-2 text-3xl font-bold leading-tight">{proc.title || 'Untitled Procedure'}</h1>
             <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-neutral-600">
-              <div><strong>Document ID:</strong> {proc.documentId || '—'}</div><div><strong>Version:</strong> {proc.version || '—'}</div>
+              <div><strong>Document ID:</strong> {proc.documentId || '—'}</div>{proc.includeVersionInOutput && <div><strong>Version:</strong> {proc.version || '—'}</div>}
               <div><strong>Owner:</strong> {proc.owner || '—'}</div><div><strong>Department:</strong> {proc.department || '—'}</div>
               <div><strong>Last reviewed:</strong> {proc.lastReviewed || '—'}</div><div><strong>Steps:</strong> {proc.steps.length}</div>
             </div>
@@ -9034,7 +9011,7 @@ https://bit.ly/4vrcu64`;
           <div className="mt-8 space-y-7">
             {proc.steps.map((step, index) => (
               <section key={step.id} data-procedure-step className="break-inside-avoid rounded-lg border border-neutral-200 p-5">
-                <div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">{index + 1}</div><div><div className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">Step {index + 1}</div><h2 className="text-lg font-bold leading-tight">{step.title || `Step ${index + 1}`}</h2></div></div>
+                <div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">{index + 1}</div><div><div className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">Step {index + 1}</div>{procedureVisibleStepTitle(step, index) && <h2 className="text-lg font-bold leading-tight">{procedureVisibleStepTitle(step, index)}</h2>}</div></div>
                 {step.description && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-neutral-700">{step.description}</p>}
                 {step.image && <img src={step.image} alt={`Step ${index + 1}`} className="mt-4 max-h-[520px] w-full rounded border border-neutral-200 object-contain" />}
                 {step.note && <div className="mt-4 rounded-md border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-950"><strong>Note:</strong> {step.note}</div>}
@@ -14166,12 +14143,10 @@ match /shared/whitelistSmsTestNumbers {
         }
       };
 
-      const onGenerateProcedure = async (format) => {
+      const onGenerateProcedure = async () => {
         setBusy(true);
         try {
-          const filename = format === 'pdf'
-            ? await generateProcedurePdf(stateRef.current || state)
-            : await generateProcedureDocx(stateRef.current || state);
+          const filename = await generateProcedureDocx(stateRef.current || state);
           setToast({ type: 'ok', msg: `Generated ${filename}` });
           if (googleConn.connected) {
             try { await syncModuleToSheets('procedure', { interactive: false }); }
