@@ -2895,6 +2895,7 @@
       sip_fcs:  { build: buildSipFcsBlob,   sheetName: 'SIP FCS — Hourly Record' },
       bmr:      { build: buildBmrBlob,      sheetName: 'BMR VOIP — Balance Day & Night' },
       bmr_sms:  { build: buildBmrSmsBlob,   sheetName: 'BMR SMS — Balance Day & Night' },
+      procedure:{ build: buildProcedureBlob,sheetName: 'Procedure — Step-by-step Guide' },
       // buildRecorderBlob is a hoisted function declaration defined with the
       // Recorder module code further down this file.
       recorder: { build: buildRecorderBlob, sheetName: 'Recorder — VOS Hourly Record' },
@@ -8579,6 +8580,460 @@ https://bit.ly/4vrcu64`;
     }
 
     /* ============================================================
+       Procedure module — step-by-step guide / scribe editor
+       ============================================================ */
+    const procedureId = (prefix = 'step') => `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+    const DEFAULT_PROCEDURE_STATE = {
+      title: 'Untitled Procedure',
+      documentId: '',
+      owner: '',
+      department: '',
+      version: '1.0',
+      lastReviewed: new Date().toISOString().slice(0, 10),
+      purpose: '',
+      prerequisites: '',
+      steps: [
+        { id: 'procedure_step_1', title: 'First step', description: '', note: '', image: '' },
+      ],
+    };
+
+    function procedureNormalizeState(raw = {}) {
+      const merged = { ...DEFAULT_PROCEDURE_STATE, ...(raw || {}) };
+      const sourceSteps = Array.isArray(merged.steps) && merged.steps.length
+        ? merged.steps : DEFAULT_PROCEDURE_STATE.steps;
+      return {
+        ...merged,
+        title: String(merged.title || ''),
+        documentId: String(merged.documentId || ''),
+        owner: String(merged.owner || ''),
+        department: String(merged.department || ''),
+        version: String(merged.version || ''),
+        lastReviewed: String(merged.lastReviewed || ''),
+        purpose: String(merged.purpose || ''),
+        prerequisites: String(merged.prerequisites || ''),
+        steps: sourceSteps.map((step, index) => ({
+          id: String(step?.id || procedureId()),
+          title: String(step?.title || `Step ${index + 1}`),
+          description: String(step?.description || ''),
+          note: String(step?.note || ''),
+          image: typeof step?.image === 'string' ? step.image : '',
+        })),
+      };
+    }
+
+    function procedureFileStem(proc) {
+      const raw = String(proc?.title || 'Procedure').trim() || 'Procedure';
+      return raw.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').slice(0, 100).trim() || 'Procedure';
+    }
+
+    function procedureTextLines(value) {
+      return String(value || '').replace(/\r\n/g, '\n').split('\n');
+    }
+
+    function procedureMoveStep(proc, index, delta) {
+      const nextIndex = index + delta;
+      if (nextIndex < 0 || nextIndex >= proc.steps.length) return proc;
+      const steps = [...proc.steps];
+      const [step] = steps.splice(index, 1);
+      steps.splice(nextIndex, 0, step);
+      return { ...proc, steps };
+    }
+
+    async function procedureReadImageFile(file) {
+      if (!file || !String(file.type || '').startsWith('image/')) throw new Error('Choose an image file.');
+      if (file.size > 12 * 1024 * 1024) throw new Error('Screenshot is too large. Choose an image under 12 MB.');
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Could not read that image.'));
+        reader.readAsDataURL(file);
+      });
+      const image = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Could not decode that image.'));
+        img.src = dataUrl;
+      });
+      const maxWidth = 1600;
+      const maxHeight = 1000;
+      const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.84);
+    }
+
+    async function buildProcedureBlob(state) {
+      const proc = procedureNormalizeState(state.procedure);
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Procedure Scribe';
+      wb.created = new Date();
+      const ws = wb.addWorksheet('Procedure');
+      ws.properties.defaultRowHeight = 20;
+      ws.columns = [
+        { key: 'step', width: 10 },
+        { key: 'title', width: 34 },
+        { key: 'instructions', width: 72 },
+        { key: 'note', width: 46 },
+        { key: 'screenshot', width: 34 },
+      ];
+      ws.mergeCells('A1:E1');
+      ws.getCell('A1').value = proc.title || 'Untitled Procedure';
+      ws.getCell('A1').font = { bold: true, size: 18, color: { argb: 'FFFFFFFF' } };
+      ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+      ws.getCell('A1').alignment = { vertical: 'middle' };
+      ws.getRow(1).height = 30;
+      const meta = [
+        ['Document ID', proc.documentId], ['Owner', proc.owner], ['Department', proc.department],
+        ['Version', proc.version], ['Last reviewed', proc.lastReviewed],
+      ];
+      meta.forEach(([label, value], index) => {
+        const row = index + 3;
+        ws.getCell(row, 1).value = label;
+        ws.getCell(row, 1).font = { bold: true };
+        ws.mergeCells(row, 2, row, 5);
+        ws.getCell(row, 2).value = value || '';
+      });
+      let row = 9;
+      if (proc.purpose.trim()) {
+        ws.getCell(row, 1).value = 'Purpose'; ws.getCell(row, 1).font = { bold: true };
+        ws.mergeCells(row, 2, row, 5); ws.getCell(row, 2).value = proc.purpose;
+        ws.getCell(row, 2).alignment = { wrapText: true, vertical: 'top' };
+        row += 1;
+      }
+      if (proc.prerequisites.trim()) {
+        ws.getCell(row, 1).value = 'Prerequisites'; ws.getCell(row, 1).font = { bold: true };
+        ws.mergeCells(row, 2, row, 5); ws.getCell(row, 2).value = proc.prerequisites;
+        ws.getCell(row, 2).alignment = { wrapText: true, vertical: 'top' };
+        row += 1;
+      }
+      row += 1;
+      const headerRow = ws.getRow(row);
+      ['Step', 'Title', 'Instructions', 'Notes / tips', 'Screenshot'].forEach((value, index) => {
+        const cell = headerRow.getCell(index + 1);
+        cell.value = value;
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+        cell.alignment = { vertical: 'middle' };
+      });
+      proc.steps.forEach((step, index) => {
+        const dataRow = ws.getRow(row + index + 1);
+        dataRow.values = [index + 1, step.title, step.description, step.note, step.image ? 'Attached' : ''];
+        dataRow.alignment = { wrapText: true, vertical: 'top' };
+        dataRow.height = step.image
+          ? 112
+          : Math.max(34, 16 * Math.max(2, procedureTextLines(step.description).length, procedureTextLines(step.note).length));
+        for (let col = 1; col <= 5; col++) {
+          dataRow.getCell(col).border = {
+            top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+            right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          };
+        }
+        if (step.image) {
+          try {
+            const extension = /^data:image\/png/i.test(step.image) ? 'png' : 'jpeg';
+            const imageId = wb.addImage({ base64: step.image, extension });
+            ws.addImage(imageId, {
+              tl: { col: 4.08, row: row + index + 0.12 },
+              ext: { width: 220, height: 138 },
+              editAs: 'oneCell',
+            });
+          } catch (error) {
+            console.warn('Procedure screenshot could not be added to the sheet', error);
+          }
+        }
+      });
+      ws.views = [{ state: 'frozen', ySplit: row }];
+      ws.autoFilter = { from: { row, column: 1 }, to: { row, column: 5 } };
+      const buf = await wb.xlsx.writeBuffer();
+      const filename = procedureFileStem(proc) + '.xlsx';
+      return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
+    }
+
+    async function generateProcedureDocx(state) {
+      if (!window.docx) throw new Error('docx library not loaded');
+      const D = window.docx;
+      const proc = procedureNormalizeState(state.procedure);
+      const text = (value, options = {}) => new D.TextRun({
+        text: String(value ?? ''), font: 'Aptos', size: options.size || 22,
+        bold: !!options.bold, italics: !!options.italics, color: options.color,
+      });
+      const paragraph = (value, options = {}) => new D.Paragraph({
+        children: [text(value, options)], spacing: options.spacing || { after: 100 },
+        alignment: options.alignment, indent: options.indent,
+      });
+      const children = [
+        new D.Paragraph({
+          alignment: D.AlignmentType.CENTER,
+          spacing: { after: 100 },
+          children: [text(proc.title || 'Untitled Procedure', { bold: true, size: 36 })],
+        }),
+        new D.Paragraph({
+          alignment: D.AlignmentType.CENTER,
+          spacing: { after: 280 },
+          children: [text(`Step-by-step procedure${proc.version ? ` · Version ${proc.version}` : ''}`, { color: '6B7280', size: 20 })],
+        }),
+      ];
+      const borders = (() => {
+        const b = { style: D.BorderStyle.SINGLE, size: 4, color: 'D1D5DB' };
+        return { top: b, bottom: b, left: b, right: b };
+      })();
+      const metaRows = [
+        ['Document ID', proc.documentId, 'Owner', proc.owner],
+        ['Department', proc.department, 'Last reviewed', proc.lastReviewed],
+      ].map(values => new D.TableRow({ children: [0, 1].map(pair => new D.TableCell({
+        width: { size: 5040, type: D.WidthType.DXA }, borders,
+        margins: { top: 100, bottom: 100, left: 120, right: 120 },
+        children: [new D.Paragraph({ children: [
+          text(values[pair * 2] + ': ', { bold: true }), text(values[pair * 2 + 1] || '—'),
+        ] })],
+      })) }));
+      children.push(new D.Table({ width: { size: 10080, type: D.WidthType.DXA }, columnWidths: [5040, 5040], rows: metaRows }));
+      if (proc.purpose.trim()) {
+        children.push(paragraph('Purpose', { bold: true, size: 26, spacing: { before: 320, after: 100 } }));
+        procedureTextLines(proc.purpose).forEach(line => children.push(paragraph(line || ' ')));
+      }
+      if (proc.prerequisites.trim()) {
+        children.push(paragraph('Prerequisites', { bold: true, size: 26, spacing: { before: 260, after: 100 } }));
+        procedureTextLines(proc.prerequisites).filter(Boolean).forEach(line => children.push(new D.Paragraph({
+          bullet: { level: 0 }, spacing: { after: 60 }, children: [text(line.replace(/^\s*[-•]\s*/, ''))],
+        })));
+      }
+      for (let index = 0; index < proc.steps.length; index++) {
+        const step = proc.steps[index];
+        children.push(new D.Paragraph({
+          pageBreakBefore: index > 0 && !!step.image,
+          spacing: { before: 360, after: 120 },
+          keepNext: true,
+          children: [
+            text(`STEP ${index + 1}`, { bold: true, color: '2563EB', size: 18 }),
+            text(`  ${step.title || `Step ${index + 1}`}`, { bold: true, size: 28 }),
+          ],
+        }));
+        procedureTextLines(step.description).forEach(line => children.push(paragraph(line || ' ')));
+        if (step.image) {
+          const data = rcaDataUrlToUint8(step.image);
+          const natural = await rcaImageNaturalSize(step.image);
+          if (data && natural) {
+            const scale = Math.min(600 / natural.width, 340 / natural.height, 1);
+            const run = rcaSafeImageRun(D, {
+              type: rcaImageType(data.mime), data: data.bytes,
+              transformation: { width: Math.max(1, Math.round(natural.width * scale)), height: Math.max(1, Math.round(natural.height * scale)) },
+              altText: { title: `Step ${index + 1} screenshot`, description: step.title || '', name: `step-${index + 1}` },
+            });
+            if (run) children.push(new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { before: 100, after: 120 }, children: [run] }));
+          }
+        }
+        if (step.note.trim()) {
+          children.push(new D.Table({
+            width: { size: 10080, type: D.WidthType.DXA }, columnWidths: [10080],
+            rows: [new D.TableRow({ children: [new D.TableCell({
+              shading: { fill: 'EFF6FF' }, borders,
+              margins: { top: 100, bottom: 100, left: 140, right: 140 },
+              children: [new D.Paragraph({ children: [text('Note: ', { bold: true, color: '1D4ED8' }), text(step.note)] })],
+            })] })],
+          }));
+        }
+      }
+      const doc = new D.Document({
+        creator: 'Procedure Scribe', title: proc.title || 'Procedure',
+        styles: { default: { document: { run: { font: 'Aptos', size: 22 } } } },
+        sections: [{ properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 900, right: 900, bottom: 900, left: 900 } } }, children }],
+      });
+      const blob = await D.Packer.toBlob(doc);
+      const filename = procedureFileStem(proc) + '.docx';
+      saveAs(blob, filename);
+      return filename;
+    }
+
+    async function generateProcedurePdf(state) {
+      if (!window.html2pdf) throw new Error('html2pdf library not loaded');
+      const proc = procedureNormalizeState(state.procedure);
+      const source = document.querySelector('[data-procedure-preview-root]');
+      if (!source) throw new Error('Procedure preview is not available.');
+      const wrapper = document.createElement('div');
+      wrapper.style.position = 'relative';
+      wrapper.style.height = '0';
+      wrapper.style.overflow = 'hidden';
+      wrapper.style.opacity = '0';
+      wrapper.style.pointerEvents = 'none';
+      const clone = source.cloneNode(true);
+      clone.style.width = '8.5in';
+      clone.style.maxWidth = '8.5in';
+      clone.style.padding = '0.55in';
+      clone.style.background = '#ffffff';
+      clone.style.color = '#111827';
+      wrapper.appendChild(clone);
+      document.body.appendChild(wrapper);
+      const filename = procedureFileStem(proc) + '.pdf';
+      try {
+        await window.html2pdf().set({
+          filename, margin: 0,
+          image: { type: 'jpeg', quality: 0.96 },
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+          jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+          pagebreak: { mode: ['css', 'legacy'], avoid: ['[data-procedure-step]'] },
+        }).from(clone).save();
+      } finally {
+        document.body.removeChild(wrapper);
+      }
+      return filename;
+    }
+
+    function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport }) {
+      const proc = procedureNormalizeState(state.procedure);
+      const theme = state.theme || 'dark';
+      const update = (patch) => setState(s => ({ ...s, procedure: { ...procedureNormalizeState(s.procedure), ...patch } }));
+      return (
+        <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
+          <div className="p-5 border-b border-neutral-900">
+            <div className="flex items-center justify-between gap-2">
+              <SyncBadge sync={sync} onRetry={onRetrySync} />
+              <button onClick={() => setState(s => ({ ...s, theme: (s.theme || 'dark') === 'dark' ? 'light' : 'dark' }))}
+                className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400 hover:text-neutral-100">
+                {theme === 'dark' ? <IconSun /> : <IconMoon />} {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
+            </div>
+            <h1 className="text-[17px] font-bold tracking-tight leading-tight mt-2">Procedure Scribe</h1>
+            <p className="text-xs text-neutral-500 mt-1">Build visual, step-by-step guides</p>
+            <AccountChip sync={sync} />
+          </div>
+          <div className="p-5 flex-1 overflow-y-auto space-y-4">
+            <div>
+              <SectionLabel>Document</SectionLabel>
+              <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-1.5">
+                <div className="text-xs text-neutral-200 truncate">{proc.title || 'Untitled Procedure'}</div>
+                <div className="text-[10px] text-neutral-600">{proc.steps.length} step{proc.steps.length === 1 ? '' : 's'} · Version {proc.version || '—'}</div>
+              </div>
+            </div>
+            <GoogleSheetSync gsheets={gsheets} moduleId="procedure"
+              sheetId={state.googleSheets?.sheetIds?.procedure}
+              targetSheetId={state.googleSheets?.targetSheetIds?.procedure}
+              selectedTabTitle="Procedure" selectedTabLabel="Procedure" />
+          </div>
+          <div className="p-5 border-t border-neutral-900 space-y-2">
+            <Btn variant="primary" size="lg" onClick={() => onExport('docx')} disabled={busy} className="w-full">
+              {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Generate Word</>}
+            </Btn>
+            <Btn variant="ghost" size="lg" onClick={() => onExport('pdf')} disabled={busy} className="w-full">
+              {busy ? 'Please wait…' : <><IconDownload /> Generate PDF</>}
+            </Btn>
+          </div>
+        </aside>
+      );
+    }
+
+    function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, onImageError }) {
+      const inputRef = useRef(null);
+      const pickImage = async (file) => {
+        if (!file) return;
+        try { onChange({ image: await procedureReadImageFile(file) }); }
+        catch (error) { onImageError(error.message || String(error)); }
+      };
+      return (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-sm font-bold text-blue-300">{index + 1}</div>
+            <div className="flex-1 min-w-[240px] space-y-3">
+              <Input value={step.title} onChange={e => onChange({ title: e.target.value })} placeholder={`Step ${index + 1} title`} />
+              <textarea value={step.description} onChange={e => onChange({ description: e.target.value })}
+                placeholder="Describe exactly what the reader should do…"
+                className="w-full min-h-[105px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" />
+              <textarea value={step.note} onChange={e => onChange({ note: e.target.value })}
+                placeholder="Optional note, tip, expected result, or warning…"
+                className="w-full min-h-[62px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs text-neutral-200 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" />
+              <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={e => { pickImage(e.target.files?.[0]); e.target.value = ''; }} />
+              {step.image ? (
+                <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-2">
+                  <img src={step.image} alt={`Step ${index + 1}`} className="max-h-[360px] w-full rounded object-contain bg-white" />
+                  <div className="mt-2 flex gap-2">
+                    <Btn variant="ghost" size="sm" onClick={() => inputRef.current?.click()}><IconUpload /> Replace</Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => onChange({ image: '' })}><IconX /> Remove</Btn>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => inputRef.current?.click()}
+                  className="w-full rounded-lg border border-dashed border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-xs text-neutral-500 hover:border-blue-500/50 hover:text-blue-300 transition-colors">
+                  <span className="inline-flex items-center gap-2"><IconUpload /> Add screenshot</span>
+                </button>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button type="button" onClick={() => onMove(-1)} disabled={index === 0} title="Move up" className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25"><IconUp /></button>
+              <button type="button" onClick={() => onMove(1)} disabled={index === total - 1} title="Move down" className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25"><IconDown /></button>
+              <button type="button" onClick={onDelete} disabled={total === 1} title="Delete step" className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25"><IconX /></button>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    function ProcedureEditor({ proc, onChange, onImageError }) {
+      const updateStep = (id, patch) => onChange({ ...proc, steps: proc.steps.map(step => step.id === id ? { ...step, ...patch } : step) });
+      const addStep = () => onChange({ ...proc, steps: [...proc.steps, { id: procedureId(), title: `Step ${proc.steps.length + 1}`, description: '', note: '', image: '' }] });
+      return (
+        <div className="space-y-4">
+          <Card className="p-4 space-y-4">
+            <SectionLabel hint="Used on the cover and in file names">Procedure details</SectionLabel>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2"><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Title</label><Input value={proc.title} onChange={e => onChange({ ...proc, title: e.target.value })} placeholder="Procedure title" /></div>
+              <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Document ID</label><Input value={proc.documentId} onChange={e => onChange({ ...proc, documentId: e.target.value })} placeholder="SOP-001" /></div>
+              <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Version</label><Input value={proc.version} onChange={e => onChange({ ...proc, version: e.target.value })} placeholder="1.0" /></div>
+              <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Owner</label><Input value={proc.owner} onChange={e => onChange({ ...proc, owner: e.target.value })} placeholder="Process owner" /></div>
+              <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Department</label><Input value={proc.department} onChange={e => onChange({ ...proc, department: e.target.value })} placeholder="Department / team" /></div>
+              <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Last reviewed</label><Input type="date" value={proc.lastReviewed} onChange={e => onChange({ ...proc, lastReviewed: e.target.value })} /></div>
+            </div>
+            <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Purpose</label><textarea value={proc.purpose} onChange={e => onChange({ ...proc, purpose: e.target.value })} placeholder="What this procedure accomplishes…" className="w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" /></div>
+            <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Prerequisites</label><textarea value={proc.prerequisites} onChange={e => onChange({ ...proc, prerequisites: e.target.value })} placeholder="One requirement per line…" className="w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" /></div>
+          </Card>
+          <div className="flex items-center justify-between gap-3"><SectionLabel hint="screenshots are optional">Steps</SectionLabel><Btn variant="accent" size="sm" onClick={addStep}><IconPlus /> Add step</Btn></div>
+          {proc.steps.map((step, index) => (
+            <ProcedureStepEditor key={step.id} step={step} index={index} total={proc.steps.length}
+              onChange={patch => updateStep(step.id, patch)}
+              onMove={delta => onChange(procedureMoveStep(proc, index, delta))}
+              onDelete={() => onChange({ ...proc, steps: proc.steps.filter(item => item.id !== step.id) })}
+              onImageError={onImageError} />
+          ))}
+          <Btn variant="ghost" size="md" onClick={addStep} className="w-full"><IconPlus /> Add another step</Btn>
+        </div>
+      );
+    }
+
+    function ProcedurePreview({ proc }) {
+      return (
+        <div data-procedure-preview-root className="rounded-lg border border-neutral-300 bg-white p-8 text-[#111827] shadow-sm">
+          <div className="border-b-4 border-blue-600 pb-5">
+            <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-blue-600">Step-by-step procedure</div>
+            <h1 className="mt-2 text-3xl font-bold leading-tight">{proc.title || 'Untitled Procedure'}</h1>
+            <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-neutral-600">
+              <div><strong>Document ID:</strong> {proc.documentId || '—'}</div><div><strong>Version:</strong> {proc.version || '—'}</div>
+              <div><strong>Owner:</strong> {proc.owner || '—'}</div><div><strong>Department:</strong> {proc.department || '—'}</div>
+              <div><strong>Last reviewed:</strong> {proc.lastReviewed || '—'}</div><div><strong>Steps:</strong> {proc.steps.length}</div>
+            </div>
+          </div>
+          {proc.purpose.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-neutral-900">Purpose</h2><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-neutral-700">{proc.purpose}</p></section>}
+          {proc.prerequisites.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-neutral-900">Prerequisites</h2><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-neutral-700">{procedureTextLines(proc.prerequisites).filter(Boolean).map((line, i) => <li key={i}>{line.replace(/^\s*[-•]\s*/, '')}</li>)}</ul></section>}
+          <div className="mt-8 space-y-7">
+            {proc.steps.map((step, index) => (
+              <section key={step.id} data-procedure-step className="break-inside-avoid rounded-lg border border-neutral-200 p-5">
+                <div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">{index + 1}</div><div><div className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">Step {index + 1}</div><h2 className="text-lg font-bold leading-tight">{step.title || `Step ${index + 1}`}</h2></div></div>
+                {step.description && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-neutral-700">{step.description}</p>}
+                {step.image && <img src={step.image} alt={`Step ${index + 1}`} className="mt-4 max-h-[520px] w-full rounded border border-neutral-200 object-contain" />}
+                {step.note && <div className="mt-4 rounded-md border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-950"><strong>Note:</strong> {step.note}</div>}
+              </section>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /* ============================================================
        RCA module — Root Cause Analysis / Incident Report editor
        ============================================================ */
     const rcaId = (prefix = 'rca') => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
@@ -10196,12 +10651,13 @@ https://bit.ly/4vrcu64`;
       rcaTab: 'editor',
       rcaSignatories: DEFAULT_RCA_SIGNATORIES,
       rcaCompany: { ...DEFAULT_RCA_COMPANY },
+      procedure: DEFAULT_PROCEDURE_STATE,
       // Google Sheets sync: durable IDs for app-created sheets plus optional
       // pasted destinations owned by another account. No tokens are persisted.
       googleSheets: {
         clientId: '', backupFolderId: '',
-        sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' },
-        targetSheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '' },
+        sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '', procedure: '' },
+        targetSheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '', procedure: '' },
         // Spreadsheet ID -> Apps Script project ID. Only projects created by
         // this app are stored here, which prevents overwriting unrelated bound
         // scripts in user-supplied destination spreadsheets.
@@ -10335,6 +10791,7 @@ https://bit.ly/4vrcu64`;
       const editor = { ...DEFAULT_EDITOR_STATE, ...editorRaw, cells: editorNormalizeGrid(editorRaw.cells || DEFAULT_EDITOR_STATE.cells) };
       const whitelistSms = wlSmsNormalizeState(merged.whitelistSms);
       const rca = rcaNormalizeState(merged.rca);
+      const procedure = procedureNormalizeState(merged.procedure);
       const rcaSignatories = Array.isArray(merged.rcaSignatories) && merged.rcaSignatories.length
         ? merged.rcaSignatories : DEFAULT_RCA_SIGNATORIES;
       const rcaCompany = rcaNormalizeCompany(merged.rcaCompany);
@@ -10379,6 +10836,7 @@ https://bit.ly/4vrcu64`;
         editor,
         whitelistSms,
         rca,
+        procedure,
         rcaSignatories,
         rcaCompany,
         recorder,
@@ -12453,11 +12911,11 @@ https://bit.ly/4vrcu64`;
     }
 
 
-    // Role-based access. Admin sees everything; semi-admin gets the
-    // light-touch modules plus the team-shared Recorder. Anyone signed in
-    // defaults to semi_admin, so every Firebase user can use the Recorder.
+    // Role-based access. Regular admins get the operational/admin modules;
+    // the Procedure module is filtered separately to SUPER_ADMINS only.
+    // Anyone signed in without an assigned role defaults to semi_admin.
     const ROLE_MODULES = {
-      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'recorder'],
+      admin:      ['sip_fcs', 'bmr', 'bmr_sms', 'whitelist_sms', 'editor', 'rca', 'recorder', 'procedure'],
       semi_admin: ['whitelist_sms', 'editor', 'rca'],
     };
     const ROLE_LABELS = { admin: 'Admin', semi_admin: 'Semi-admin' };
@@ -12611,9 +13069,9 @@ https://bit.ly/4vrcu64`;
           <div className="rounded-lg border border-neutral-800 bg-neutral-950/40 p-4 text-[12px] text-neutral-400 leading-relaxed">
             <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-2">How roles work</div>
             <ul className="space-y-1.5 list-disc pl-5">
-              <li><span className="text-neutral-200">Admin</span> — full access: SIP / FCS, BMR VOIP, BMR SMS, Whitelist SMS, Editor, and this Users panel.</li>
+              <li><span className="text-neutral-200">Admin</span> — access to the operational generators, Recorder, RCA, Editor, and this Users panel.</li>
               <li><span className="text-neutral-200">Semi-admin</span> — Whitelist SMS and Editor only. Default for every new sign-in.</li>
-              <li>Emails listed in <code className="text-amber-300 bg-neutral-900 px-1 rounded">SUPER_ADMINS</code> (in <code className="text-neutral-300 bg-neutral-900 px-1 rounded">index.html</code>) are always admin and cannot be demoted from this UI.</li>
+              <li>Emails listed in <code className="text-amber-300 bg-neutral-900 px-1 rounded">SUPER_ADMINS</code> (in <code className="text-neutral-300 bg-neutral-900 px-1 rounded">index.html</code>) are always admin, cannot be demoted, and are the only users who can access the Procedure module.</li>
               <li>Role changes take effect the next time the user signs in or refreshes the page.</li>
             </ul>
             <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 mt-4 mb-2">Firestore security rules</div>
@@ -13696,6 +14154,26 @@ match /shared/whitelistSmsTestNumbers {
         }
       };
 
+      const onGenerateProcedure = async (format) => {
+        setBusy(true);
+        try {
+          const filename = format === 'pdf'
+            ? await generateProcedurePdf(stateRef.current || state)
+            : await generateProcedureDocx(stateRef.current || state);
+          setToast({ type: 'ok', msg: `Generated ${filename}` });
+          if (googleConn.connected) {
+            try { await syncModuleToSheets('procedure', { interactive: false }); }
+            catch { /* the sync handler shows its own actionable toast */ }
+          }
+        } catch (e) {
+          console.error(e);
+          setToast({ type: 'err', msg: 'Generation failed: ' + (e.message || e) });
+        } finally {
+          setBusy(false);
+          setTimeout(() => setToast(null), 4000);
+        }
+      };
+
       const activeCount = state.sheets.filter(s => s.active).length;
       const days = daysInMonth(state.year, state.month);
       const activeRules = state.rules.filter(r => r.enabled).length;
@@ -13745,6 +14223,7 @@ match /shared/whitelistSmsTestNumbers {
         { id: 'whitelist_sms', label: 'Whitelist SMS' },
         { id: 'editor',  label: 'Editor' },
         { id: 'rca',     label: 'RCA' },
+        { id: 'procedure', label: 'Procedure', superOnly: true },
         // Recorder data still lives in the shared/recorder* docs, but the tab
         // is admin-only — signed-out and semi-admin users never see it.
         { id: 'recorder', label: 'Recorder', adminOnly: true },
@@ -13752,13 +14231,14 @@ match /shared/whitelistSmsTestNumbers {
       ];
       const role = sync.role || 'semi_admin';
       const isAdmin = role === 'admin';
+      const isSuperAdmin = isSuperAdminEmail(sync.email);
       // Only enforce role-based filtering once we know who the user is. Before
       // sign-in (or when Firebase is unavailable) show everything so refreshes
       // don't bounce people off their last-active module.
       const roleEnforced = !!window.__fb && !!sync.uid;
       const MODULES = roleEnforced
-        ? ALL_MODULES.filter(m => m.adminOnly ? isAdmin : moduleAllowed(m.id, role))
-        : ALL_MODULES.filter(m => !m.adminOnly);
+        ? ALL_MODULES.filter(m => m.superOnly ? isSuperAdmin : (m.adminOnly ? isAdmin : moduleAllowed(m.id, role)))
+        : ALL_MODULES.filter(m => !m.adminOnly && !m.superOnly);
 
       useEffect(() => {
         if (!roleEnforced) return;
@@ -13774,6 +14254,7 @@ match /shared/whitelistSmsTestNumbers {
       const isBmrSms = state.module === 'bmr_sms';
       const isWlSms = state.module === 'whitelist_sms';
       const isRca = state.module === 'rca';
+      const isProcedure = state.module === 'procedure';
       const isRecorder = state.module === 'recorder';
       const isUsers = state.module === 'users';
       const whitelistSms = wlSmsNormalizeState(state.whitelistSms);
@@ -13836,6 +14317,54 @@ match /shared/whitelistSmsTestNumbers {
           onSelect={(id) => setState(s => ({ ...s, module: id }))}
         />
       );
+
+      if (isProcedure) {
+        const procedure = procedureNormalizeState(state.procedure);
+        const setProcedure = (next) => setState(s => ({
+          ...s,
+          procedure: procedureNormalizeState(typeof next === 'function' ? next(procedureNormalizeState(s.procedure)) : next),
+        }));
+        return (
+          <div className="flex min-h-screen text-neutral-100">
+            <ProcedureSidebar state={state} setState={setState} sync={sync} onRetrySync={retrySync}
+              gsheets={googleSyncProps} busy={busy} onExport={onGenerateProcedure} />
+            <main className="flex-1 min-w-0 flex flex-col">
+              <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20">
+                <div className="app-title-block min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-amber-400 mb-1">Super admin module</div>
+                  <h2 className="truncate text-[22px] font-bold tracking-tight">Procedure · {procedure.title || 'Untitled Procedure'}</h2>
+                </div>
+                <div className="app-pill-row hidden xl:flex items-center gap-2">
+                  <Pill>{procedure.steps.length} steps</Pill>
+                  <Pill tone={procedure.steps.some(step => step.image) ? 'accent' : 'muted'}>{procedure.steps.filter(step => step.image).length} screenshots</Pill>
+                  <Pill>v{procedure.version || '—'}</Pill>
+                </div>
+                <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">{ModuleSwitch}</div>
+              </header>
+              <div className="p-4 sm:p-6 lg:p-8 w-full max-w-[1800px]">
+                <div className="grid gap-6 xl:grid-cols-[minmax(520px,1fr)_minmax(440px,0.9fr)]">
+                  <div className="min-w-0"><ProcedureEditor proc={procedure} onChange={setProcedure} onImageError={message => showToast('err', message)} /></div>
+                  <div className="min-w-0 xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto">
+                    <SectionLabel hint="Updates live as you edit">Document preview</SectionLabel>
+                    <ProcedurePreview proc={procedure} />
+                  </div>
+                </div>
+              </div>
+              <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
+                <span className="font-mono">Procedure · {procedureFileStem(procedure)}</span>
+                <span>{procedure.steps.length} steps · {procedure.steps.filter(step => step.image).length} screenshots</span>
+              </footer>
+            </main>
+            {toast && (
+              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+                {toast.msg}
+              </div>
+            )}
+            {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
+            <Dialog dialog={dialog} onResolve={resolveDialog} />
+          </div>
+        );
+      }
 
       if (isRecorder) {
         return (
