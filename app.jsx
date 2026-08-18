@@ -4161,6 +4161,12 @@ https://bit.ly/4vrcu64`;
             </Btn>
           ) : (
             <div className="space-y-1.5">
+              <Btn variant="primary" size="sm" onClick={() => sync(moduleId, { interactive: true, createFresh: true })} disabled={busy} className="w-full">
+                {busy ? 'Creating…' : `Create my own Google Sheet${conn.email ? ` (${conn.email.split('@')[0]})` : ''}`}
+              </Btn>
+              <p className="text-[10px] text-neutral-600 leading-relaxed">
+                Creates a brand-new spreadsheet in the connected account’s Drive. The shared JPGC file is not changed, and the new personal file becomes this module’s destination.
+              </p>
               {selectedTabLabel && <p className="text-[10px] text-neutral-500 truncate" title={selectedTabLabel}>Selected tab: <span className="text-neutral-300">{selectedTabLabel}</span></p>}
               <Btn variant="ghost" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || '' })} disabled={busy || selectedUnavailable} className="w-full">
                 {busy ? <><span className="loader"></span> Checking tabs…</> : <>{selectedUnavailable ? 'Activate selected tab first' : url ? (selectedTabTitle ? 'Add selected tab' : 'Add new tabs') : 'Create Google Sheet'}</>}
@@ -4203,7 +4209,7 @@ https://bit.ly/4vrcu64`;
               {last?.at && (
                 <div className="text-[10px] text-neutral-600">
                   Synced {new Date(last.at).toLocaleTimeString()}
-                  {last.mode ? ` · ${last.mode === 'fast' ? 'Fast' : 'Exact'}` : ''}
+                  {last.mode ? ` · ${last.mode === 'new' ? 'Personal copy' : last.mode === 'fast' ? 'Quick' : 'Exact'}` : ''}
                   {last.durationMs ? ` · ${(last.durationMs / 1000).toFixed(1)}s` : ''}
                 </div>
               )}
@@ -14721,13 +14727,22 @@ match /shared/whitelistSmsTestNumbers {
       // Build the module's workbook and create its Google Sheet on first sync.
       // Later the caller can either append one selected missing tab or explicitly
       // replace every checked existing tab; unchecked tabs stay untouched.
-      const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = '', onlyTabTitles = [], replaceExisting = false, fastValues = false } = {}) => {
+      const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = '', onlyTabTitles = [], replaceExisting = false, fastValues = false, createFresh = false } = {}) => {
         const conf = GOOGLE_SYNC_MODULES[moduleId];
         if (!conf) return;
         if (!googleSheetsSync.isConfigured()) {
           setToast({ type: 'err', msg: 'Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync.' });
           setTimeout(() => setToast(null), 5000);
           return;
+        }
+        if (createFresh) {
+          const account = googleSheetsSync.email() || 'the connected Google account';
+          const ok = await confirmDialog({
+            title: 'Create a new personal Google Sheet?',
+            message: `A brand-new spreadsheet will be created in ${account}'s Drive and will become this module's destination. The shared JPGC spreadsheet will not be changed.`,
+            confirmText: 'Create my own sheet',
+          });
+          if (!ok) return;
         }
         if (replaceExisting || fastValues) {
           const checkedCount = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean).length : 0;
@@ -14757,7 +14772,7 @@ match /shared/whitelistSmsTestNumbers {
             : onlyTabTitle
               ? [onlyTabTitle]
               : [];
-          const { blob, sheets, valueSheets = [] } = await conf.build(latest, { onlyTabTitles: uploadTitles, valuesOnly: fastValues });
+          const { blob, filename, sheets, valueSheets = [] } = await conf.build(latest, { onlyTabTitles: uploadTitles, valuesOnly: fastValues });
           const requestedSheets = (replaceExisting || fastValues)
             ? (sheets || []).filter(s => checkedTitleSet.has(s.title))
             : onlyTabTitle
@@ -14779,7 +14794,30 @@ match /shared/whitelistSmsTestNumbers {
           let missingUpdateTabs = [];
           let requiresExactTabs = [];
           let syncedDims = [];
-          if (fastValues) {
+          if (createFresh) {
+            const personalName = String(filename || conf.sheetName || 'Generator').replace(/\.xlsx$/i, '');
+            fileId = await googleSheetsSync.createSheet(personalName, blob);
+            created = true;
+            addedTabs = (sheets || []).map(sheet => sheet.title).filter(Boolean);
+            // A pasted shared target always takes precedence during normal sync.
+            // Clear it when the user explicitly chooses a personal copy, while
+            // remembering the new app-owned spreadsheet for future syncs.
+            setState(s => ({
+              ...s,
+              googleSheets: {
+                ...(s.googleSheets || {}),
+                sheetIds: {
+                  ...((s.googleSheets && s.googleSheets.sheetIds) || {}),
+                  [moduleId]: fileId,
+                },
+                targetSheetIds: {
+                  ...DEFAULT_STATE.googleSheets.targetSheetIds,
+                  ...((s.googleSheets && s.googleSheets.targetSheetIds) || {}),
+                  [moduleId]: '',
+                },
+              },
+            }));
+          } else if (fastValues) {
             if (!existingId) throw new Error('Set or create a destination Google Sheet before using Fast update.');
             const result = await googleSheetsSync.updateValuesInPlace(existingId, valueSheets);
             updatedTabs = result.updated;
@@ -14820,7 +14858,7 @@ match /shared/whitelistSmsTestNumbers {
             created = true;
             addedTabs = (sheets || []).map(s => s.title).filter(Boolean);
           }
-          if (!replaceExisting && !fastValues && fileId && fileId !== existingId) {
+          if (!createFresh && !replaceExisting && !fastValues && fileId && fileId !== existingId) {
             setState(s => ({ ...s, googleSheets: { ...s.googleSheets, sheetIds: { ...s.googleSheets.sheetIds, [moduleId]: fileId } } }));
           }
           // Only trim tabs created or replaced by this sync. Unchecked existing
@@ -14905,9 +14943,11 @@ match /shared/whitelistSmsTestNumbers {
           const durationMs = Math.round(performance.now() - syncStartedAt);
           setGoogleConn(c => ({
             ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null,
-            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, mode: fastValues ? 'fast' : 'exact', durationMs, pasteSumInstalled, pasteSumError: pasteSumHint } },
+            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, mode: createFresh ? 'new' : fastValues ? 'fast' : 'exact', durationMs, pasteSumInstalled, pasteSumError: pasteSumHint } },
           }));
-          const successMsg = fastValues && updatedTabs.length
+          const successMsg = createFresh
+            ? `Created a new personal Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? '' : 's'}; the shared JPGC file was unchanged`
+            : fastValues && updatedTabs.length
             ? `Fast-updated values and formulas in ${updatedTabs.length} sheet${updatedTabs.length === 1 ? '' : 's'}; existing formatting was preserved`
             : updatedTabs.length
             ? `Updated ${updatedTabs.length} checked sheet${updatedTabs.length === 1 ? '' : 's'}${missingUpdateTabs.length ? `; ${missingUpdateTabs.length} new tab${missingUpdateTabs.length === 1 ? '' : 's'} skipped — use Add selected tab` : ''}. Unchecked tabs were unchanged`
