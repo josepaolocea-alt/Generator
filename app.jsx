@@ -933,7 +933,23 @@
       }));
     }
 
-    async function buildSipFcsBlob(state) {
+    // Syncing one/few selected tabs should not upload every other worksheet in
+    // the module. The builders still construct the workbook normally (which
+    // keeps their formatting logic in one place), then discard unrequested tabs
+    // before ExcelJS serializes and Drive uploads the staging file. Downloads and
+    // first-time full syncs omit this option and remain byte-for-byte unchanged.
+    function retainRequestedWorkbookSheets(wb, requestedTitles) {
+      const wanted = new Set((requestedTitles || []).map(title => String(title || '')).filter(Boolean));
+      if (!wanted.size) return;
+      wb.worksheets.slice().forEach((ws) => {
+        if (!wanted.has(ws.name)) wb.removeWorksheet(ws.id);
+      });
+      if (!wb.worksheets.length) {
+        throw new Error('None of the selected sheets were found in the generated workbook. Refresh the app and try again.');
+      }
+    }
+
+    async function buildSipFcsBlob(state, options = {}) {
       const wb = new ExcelJS.Workbook();
       wb.creator = 'Monthly Report Generator';
       wb.created = new Date();
@@ -981,6 +997,7 @@
         cl.getColumn(1).width = 100;
       }
 
+      retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
       const buf = await wb.xlsx.writeBuffer();
       const onlyTwoHourReport = activeSheets.length === 1 && activeSheets[0].layout === 'twohour';
       const filename = onlyTwoHourReport
@@ -1922,7 +1939,7 @@
       ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
     }
 
-    async function buildBmrBlob(state) {
+    async function buildBmrBlob(state, options = {}) {
       const wb = new ExcelJS.Workbook();
       wb.creator = 'BMR Generator';
       wb.created = new Date();
@@ -1936,6 +1953,7 @@
         const ws = wb.addWorksheet(name);
         buildBmrSheet(ws, bmr, shift);
       }
+      retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
       const buf = await wb.xlsx.writeBuffer();
       const filename = `BMR_VOIP_${bmrTodayString()}.xlsx`;
       return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
@@ -2197,7 +2215,7 @@
       ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
     }
 
-    async function buildBmrSmsBlob(state) {
+    async function buildBmrSmsBlob(state, options = {}) {
       const wb = new ExcelJS.Workbook();
       wb.creator = 'BMR SMS Generator';
       wb.created = new Date();
@@ -2215,6 +2233,7 @@
         });
       });
 
+      retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
       const buf = await wb.xlsx.writeBuffer();
       const filename = `BMR_SMS_${bmrTodayString()}.xlsx`;
       return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
@@ -2416,6 +2435,40 @@
         return (body.sheets || []).map(s => s.properties).filter(p => p && Number.isInteger(p.sheetId) && p.title);
       }
 
+      async function batchUpdateSheets(fileId, requests) {
+        if (!requests.length) return null;
+        const token = await getToken();
+        const r = await fetch(
+          'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + ':batchUpdate',
+          {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requests }),
+          },
+        );
+        if (!r.ok) throw await driveError(r);
+        return await r.json();
+      }
+
+      // copyTo is one of the slowest sync calls. Run independent copies in a
+      // small pool so latency does not grow one full round-trip per tab, while
+      // staying comfortably below the Sheets per-user write quota.
+      async function mapWithConcurrency(items, limit, worker) {
+        if (!items.length) return [];
+        const results = new Array(items.length);
+        let cursor = 0;
+        const runners = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+          while (cursor < items.length) {
+            const index = cursor++;
+            results[index] = await worker(items[index], index);
+          }
+        });
+        const settled = await Promise.allSettled(runners);
+        const failed = settled.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        return results;
+      }
+
       async function copySheetTabRaw(sourceFileId, sourceSheetId, destinationFileId) {
         const token = await getToken();
         const copyResp = await fetch(
@@ -2428,30 +2481,6 @@
         );
         if (!copyResp.ok) throw await driveError(copyResp);
         return await copyResp.json();
-      }
-
-      // Copy one converted tab into an existing spreadsheet, then restore its
-      // intended title (Google may initially name cross-file copies "Copy of …").
-      async function copySheetTab(sourceFileId, sourceSheetId, destinationFileId, title) {
-        const token = await getToken();
-        const copied = await copySheetTabRaw(sourceFileId, sourceSheetId, destinationFileId);
-        if (copied.title !== title) {
-          const renameResp = await fetch(
-            'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(destinationFileId) + ':batchUpdate',
-            {
-              method: 'POST',
-              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ requests: [{
-                updateSheetProperties: {
-                  properties: { sheetId: copied.sheetId, title },
-                  fields: 'title',
-                },
-              }] }),
-            },
-          );
-          if (!renameResp.ok) throw await driveError(renameResp);
-        }
-        return { ...copied, title };
       }
 
       // Temporary conversion files exist only long enough to supply formatted
@@ -2479,18 +2508,74 @@
         if (!missing.length) return { added: [], existing: wanted.map(d => d.title) };
 
         let tempId = '';
-        const added = [];
+        const staged = [];
+        let renameStarted = false;
         try {
           tempId = await createSheet((tempName || 'Generator') + ' — sync staging', blob);
           const sourceTabs = await getSheetTabs(tempId);
           const sourceByTitle = new Map(sourceTabs.map(p => [p.title, p]));
-          for (const want of missing) {
+          missing.forEach((want) => {
             const source = sourceByTitle.get(want.title);
             if (!source) throw new Error('Generated tab "' + want.title + '" was not found in the converted workbook.');
-            await copySheetTab(tempId, source.sheetId, fileId, want.title);
-            added.push(want.title);
+          });
+          await mapWithConcurrency(missing, 4, async (want) => {
+            const source = sourceByTitle.get(want.title);
+            const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
+            staged.push({ dim: want, copied });
+          });
+          const renameRequests = staged
+            .filter(item => item.copied.title !== item.dim.title)
+            .map(item => ({
+              updateSheetProperties: {
+                properties: { sheetId: item.copied.sheetId, title: item.dim.title },
+                fields: 'title',
+              },
+            }));
+          if (renameRequests.length) {
+            renameStarted = true;
+            await batchUpdateSheets(fileId, renameRequests);
           }
-          return { added, existing: wanted.filter(d => existingTitles.has(d.title)).map(d => d.title) };
+          return {
+            added: missing.map(item => item.title),
+            addedDims: missing.map(dim => {
+              const copied = staged.find(item => item.dim.title === dim.title)?.copied || {};
+              return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+            }),
+            existing: wanted.filter(d => existingTitles.has(d.title)).map(d => d.title),
+          };
+        } catch (e) {
+          if (staged.length) {
+            try {
+              if (!renameStarted) {
+                await batchUpdateSheets(fileId, staged.map(item => ({ deleteSheet: { sheetId: item.copied.sheetId } })));
+              } else {
+                // batchUpdate is atomic, but its response can be interrupted.
+                // Verify success before deciding whether copied tabs are safe to
+                // remove; preserve them if Google leaves the state uncertain.
+                const currentTabs = await getSheetTabs(fileId);
+                const completed = staged.every(item =>
+                  currentTabs.some(tab => tab.sheetId === item.copied.sheetId && tab.title === item.dim.title)
+                );
+                if (completed) {
+                  return {
+                    added: missing.map(item => item.title),
+                    addedDims: missing.map(dim => {
+                      const copied = staged.find(item => item.dim.title === dim.title)?.copied || {};
+                      return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+                    }),
+                    existing: wanted.filter(d => existingTitles.has(d.title)).map(d => d.title),
+                  };
+                }
+                const stagingIds = staged
+                  .filter(item => currentTabs.some(tab => tab.sheetId === item.copied.sheetId))
+                  .map(item => item.copied.sheetId);
+                if (stagingIds.length === staged.length) {
+                  await batchUpdateSheets(fileId, stagingIds.map(sheetId => ({ deleteSheet: { sheetId } })));
+                }
+              }
+            } catch { /* preserve copied tabs when their state cannot be verified */ }
+          }
+          throw e;
         } finally {
           if (tempId) {
             try { await deleteFile(tempId); }
@@ -2520,12 +2605,15 @@
           tempId = await createSheet((tempName || 'Generator') + ' — update staging', blob);
           const sourceTabs = await getSheetTabs(tempId);
           const sourceByTitle = new Map(sourceTabs.map(p => [p.title, p]));
-          for (const item of replaceable) {
+          replaceable.forEach((item) => {
             const source = sourceByTitle.get(item.dim.title);
             if (!source) throw new Error('Generated tab "' + item.dim.title + '" was not found in the converted workbook.');
+          });
+          await mapWithConcurrency(replaceable, 4, async (item) => {
+            const source = sourceByTitle.get(item.dim.title);
             const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
             staged.push({ ...item, copied });
-          }
+          });
 
           const stamp = Date.now();
           const renameOld = staged.map(item => ({
@@ -2545,17 +2633,17 @@
                 fields: 'title,index',
               },
             }));
-          const token = await getToken();
-          const replaceResp = await fetch(
-            'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + ':batchUpdate',
-            {
-              method: 'POST',
-              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ requests: [...renameOld, ...deleteOld, ...installNew] }),
-            },
-          );
-          if (!replaceResp.ok) throw await driveError(replaceResp);
-          return { updated: staged.map(item => item.dim.title), missing };
+          await batchUpdateSheets(fileId, [...renameOld, ...deleteOld, ...installNew]);
+          return {
+            updated: wanted.filter(dim => staged.some(item => item.dim.title === dim.title)).map(dim => dim.title),
+            updatedDims: wanted
+              .filter(dim => staged.some(item => item.dim.title === dim.title))
+              .map(dim => {
+                const copied = staged.find(item => item.dim.title === dim.title)?.copied || {};
+                return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+              }),
+            missing,
+          };
         } catch (e) {
           // On an interrupted response, verify whether the atomic swap actually
           // completed. Otherwise remove only copied staging tabs while originals
@@ -2567,18 +2655,22 @@
                 !currentTabs.some(p => p.sheetId === item.existing.sheetId) &&
                 currentTabs.some(p => p.sheetId === item.copied.sheetId && p.title === item.dim.title)
               );
-              if (completed) return { updated: staged.map(item => item.dim.title), missing };
+              if (completed) return {
+                updated: wanted.filter(dim => staged.some(item => item.dim.title === dim.title)).map(dim => dim.title),
+                updatedDims: wanted
+                  .filter(dim => staged.some(item => item.dim.title === dim.title))
+                  .map(dim => {
+                    const copied = staged.find(item => item.dim.title === dim.title)?.copied || {};
+                    return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+                  }),
+                missing,
+              };
               const originalsIntact = staged.every(item => currentTabs.some(p => p.sheetId === item.existing.sheetId));
               const stagingIds = staged
                 .filter(item => currentTabs.some(p => p.sheetId === item.copied.sheetId))
                 .map(item => item.copied.sheetId);
               if (originalsIntact && stagingIds.length) {
-                const token = await getToken();
-                await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + ':batchUpdate', {
-                  method: 'POST',
-                  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ requests: stagingIds.map(sheetId => ({ deleteSheet: { sheetId } })) }),
-                });
+                await batchUpdateSheets(fileId, stagingIds.map(sheetId => ({ deleteSheet: { sheetId } })));
               }
             } catch { /* preserve both versions when the state cannot be verified */ }
           }
@@ -2601,14 +2693,28 @@
       async function trimSheetGrids(fileId, dims) {
         const wanted = (dims || []).filter(d => d && d.title && d.rows > 0 && d.cols > 0);
         if (!fileId || !wanted.length) return;
-        const token = await getToken();
-        const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId);
-        const metaResp = await fetch(base + '?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))', {
-          headers: { Authorization: 'Bearer ' + token },
+        const byTitle = new Map();
+        wanted.forEach((want) => {
+          if (Number.isInteger(want.sheetId) && want.gridProperties) {
+            byTitle.set(want.title, { sheetId: want.sheetId, title: want.title, gridProperties: want.gridProperties });
+          }
         });
-        if (!metaResp.ok) throw await driveError(metaResp);
-        const meta = await metaResp.json();
-        const byTitle = new Map((meta.sheets || []).map(s => [s.properties && s.properties.title, s.properties]));
+        // copyTo already returns SheetProperties, including grid dimensions.
+        // Only fetch spreadsheet metadata for first-time whole-file creation or
+        // if Google omitted properties from an individual copy response.
+        if (byTitle.size !== wanted.length) {
+          const token = await getToken();
+          const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId);
+          const metaResp = await fetch(base + '?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))', {
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          if (!metaResp.ok) throw await driveError(metaResp);
+          const meta = await metaResp.json();
+          (meta.sheets || []).forEach((sheet) => {
+            const props = sheet.properties;
+            if (props && props.title) byTitle.set(props.title, props);
+          });
+        }
         const requests = [];
         wanted.forEach((want) => {
           const props = byTitle.get(want.title);
@@ -2630,12 +2736,7 @@
           });
         });
         if (!requests.length) return;
-        const r = await fetch(base + ':batchUpdate', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requests }),
-        });
-        if (!r.ok) throw await driveError(r);
+        await batchUpdateSheets(fileId, requests);
       }
 
       // ── Weekly backup helpers ────────────────────────────────────────────
@@ -9055,7 +9156,7 @@ https://bit.ly/4vrcu64`;
       return { procedure: procedureNormalizeState({ ...editable, steps }), exact: true };
     }
 
-    async function buildProcedureBlob(state) {
+    async function buildProcedureBlob(state, options = {}) {
       const proc = procedureNormalizeState(state.procedure);
       const wb = new ExcelJS.Workbook();
       wb.creator = 'Procedure Scribe';
@@ -9140,6 +9241,7 @@ https://bit.ly/4vrcu64`;
       });
       ws.views = [{ state: 'frozen', ySplit: row }];
       ws.autoFilter = { from: { row, column: 1 }, to: { row, column: 5 } };
+      retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
       const buf = await wb.xlsx.writeBuffer();
       const filename = procedureFileStem(proc) + '.xlsx';
       return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
@@ -12299,10 +12401,11 @@ https://bit.ly/4vrcu64`;
     }
     // Google Sheets sync builder — reproduces exactly what the Download
     // button makes for the month/year picked in the Recorder sidebar.
-    async function buildRecorderBlob(state) {
+    async function buildRecorderBlob(state, options = {}) {
       const rec = recorderNormalizeState(state.recorder);
       const year = recorderParseIntOr(rec.exportYear, new Date().getFullYear());
       const wb = recorderBuildWorkbook(rec, year, rec.exportMonth);
+      retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
       const buf = await wb.xlsx.writeBuffer();
       const filename = recorderFileName(rec.filePattern, year, rec.exportMonth);
       return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
@@ -14464,8 +14567,13 @@ match /shared/whitelistSmsTestNumbers {
         try {
           await googleSheetsSync.getToken({ interactive });
           const latest = stateRef.current || DEFAULT_STATE;
-          const { blob, sheets } = await conf.build(latest);
           const checkedTitleSet = new Set(Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean) : []);
+          const uploadTitles = replaceExisting
+            ? [...checkedTitleSet]
+            : onlyTabTitle
+              ? [onlyTabTitle]
+              : [];
+          const { blob, sheets } = await conf.build(latest, { onlyTabTitles: uploadTitles });
           const requestedSheets = replaceExisting
             ? (sheets || []).filter(s => checkedTitleSet.has(s.title))
             : onlyTabTitle
@@ -14485,10 +14593,12 @@ match /shared/whitelistSmsTestNumbers {
           let addedTabs = [];
           let updatedTabs = [];
           let missingUpdateTabs = [];
+          let syncedDims = [];
           if (replaceExisting) {
             if (!existingId) throw new Error('Set or create a destination Google Sheet before updating checked sheets.');
             const result = await googleSheetsSync.replaceExistingTabs(existingId, blob, requestedSheets, conf.sheetName);
             updatedTabs = result.updated;
+            syncedDims = result.updatedDims || [];
             missingUpdateTabs = result.missing;
             if (!updatedTabs.length) {
               throw new Error('None of the checked sheets exist in the destination yet. Add each new tab with Add selected tab first.');
@@ -14497,6 +14607,7 @@ match /shared/whitelistSmsTestNumbers {
             try {
               const result = await googleSheetsSync.appendMissingTabs(existingId, blob, requestedSheets, conf.sheetName);
               addedTabs = result.added;
+              syncedDims = result.addedDims || [];
             } catch (e) {
               // A deleted linked file can safely be recreated. A 403 is not
               // treated the same way: it may mean the Sheets API is disabled,
@@ -14518,11 +14629,9 @@ match /shared/whitelistSmsTestNumbers {
           // Only trim tabs created or replaced by this sync. Unchecked existing
           // tabs are never resized because they may contain unrelated user data.
           let trimHint = '';
-          const addedSet = new Set(addedTabs);
-          const updatedSet = new Set(updatedTabs);
           const newTabDims = created
             ? sheets
-            : requestedSheets.filter(s => addedSet.has(s.title) || updatedSet.has(s.title));
+            : syncedDims;
           if (newTabDims.length) {
             try {
               await googleSheetsSync.trimSheetGrids(fileId, newTabDims);
@@ -14546,42 +14655,50 @@ match /shared/whitelistSmsTestNumbers {
               .filter(sheet => sheet && sheet.active)
               .map(sheet => safeSheetName(sheet.name));
             const rememberedScriptId = latest.googleSheets?.pasteSumScriptIds?.[fileId] || '';
-            try {
-              const installed = await googleSheetsSync.installSipFcsPasteSum(fileId, rememberedScriptId, pasteSumTabs);
+            // Replacing an existing tab does not change the trigger's allowed
+            // title list. If this app already installed the bound script, avoid
+            // two serial Apps Script API calls on every routine update/no-op.
+            const needsPasteSumWrite = !rememberedScriptId || created || addedTabs.length > 0;
+            if (!needsPasteSumWrite) {
               pasteSumInstalled = true;
-              if (installed.scriptId && installed.scriptId !== rememberedScriptId) {
-                setState(s => ({
-                  ...s,
-                  googleSheets: {
-                    ...(s.googleSheets || {}),
-                    pasteSumScriptIds: {
-                      ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}),
-                      [fileId]: installed.scriptId,
+            } else {
+              try {
+                const installed = await googleSheetsSync.installSipFcsPasteSum(fileId, rememberedScriptId, pasteSumTabs);
+                pasteSumInstalled = true;
+                if (installed.scriptId && installed.scriptId !== rememberedScriptId) {
+                  setState(s => ({
+                    ...s,
+                    googleSheets: {
+                      ...(s.googleSheets || {}),
+                      pasteSumScriptIds: {
+                        ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}),
+                        [fileId]: installed.scriptId,
+                      },
                     },
-                  },
-                }));
-              }
-            } catch (e) {
-              console.warn('Installing SIP/FCS paste-to-sum failed', e);
-              if (e?.createdScriptId) {
-                setState(s => ({
-                  ...s,
-                  googleSheets: {
-                    ...(s.googleSheets || {}),
-                    pasteSumScriptIds: {
-                      ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}),
-                      [fileId]: e.createdScriptId,
+                  }));
+                }
+              } catch (e) {
+                console.warn('Installing SIP/FCS paste-to-sum failed', e);
+                if (e?.createdScriptId) {
+                  setState(s => ({
+                    ...s,
+                    googleSheets: {
+                      ...(s.googleSheets || {}),
+                      pasteSumScriptIds: {
+                        ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}),
+                        [fileId]: e.createdScriptId,
+                      },
                     },
-                  },
-                }));
-              }
-              const detail = String(e?.message || e || 'Unknown Google Apps Script error');
-              if (/Apps Script API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(detail)) {
-                pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed — enable the Google Apps Script API in Google Cloud, reconnect, then sync again.';
-              } else if (/cannot access.*script|grant.*access.*script|script projects.*access|Apps Script dashboard/i.test(detail)) {
-                pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed — allow Google Apps Script API access in the Apps Script dashboard, then sync again.';
-              } else {
-                pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed: ' + detail;
+                  }));
+                }
+                const detail = String(e?.message || e || 'Unknown Google Apps Script error');
+                if (/Apps Script API has not been used|SERVICE_DISABLED|has not been enabled|accessNotConfigured/i.test(detail)) {
+                  pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed — enable the Google Apps Script API in Google Cloud, reconnect, then sync again.';
+                } else if (/cannot access.*script|grant.*access.*script|script projects.*access|Apps Script dashboard/i.test(detail)) {
+                  pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed — allow Google Apps Script API access in the Apps Script dashboard, then sync again.';
+                } else {
+                  pasteSumHint = 'Sheets were synced, but paste-to-sum was not installed: ' + detail;
+                }
               }
             }
           }
