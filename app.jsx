@@ -4159,6 +4159,7 @@ https://bit.ly/4vrcu64`;
                   return (
                     <button key={`${option.value}-${index}`} ref={node => optionRefs.current[index] = node}
                       id={`${listboxIdRef.current}-option-${index}`} type="button" role="option" aria-selected={selected}
+                      data-active={active ? 'true' : 'false'}
                       disabled={option.disabled} onMouseEnter={() => !option.disabled && setActiveIndex(index)}
                       onClick={() => chooseOption(option)}
                       className={`no-press flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${option.disabled ? 'cursor-not-allowed opacity-35' : ''} ${active ? 'bg-blue-500/10 text-blue-100' : 'text-neutral-300 hover:bg-neutral-900/80'} ${selected ? 'font-medium' : ''}`}>
