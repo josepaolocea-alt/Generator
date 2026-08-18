@@ -1379,13 +1379,49 @@ function retainRequestedWorkbookSheets(wb, requestedTitles) {
     throw new Error("None of the selected sheets were found in the generated workbook. Refresh the app and try again.");
   }
 }
+function googleSheetsCellValue(cell) {
+  if (cell?.isMerged && cell.master && cell.master.address !== cell.address) return null;
+  const value = cell?.value;
+  if (value == null) return null;
+  if (value instanceof Date) return (value.getTime() - Date.UTC(1899, 11, 30)) / 864e5;
+  if (typeof value !== "object") return value;
+  if (typeof value.formula === "string") return value.formula.startsWith("=") ? value.formula : "=" + value.formula;
+  if (Array.isArray(value.richText)) return value.richText.map((part) => String(part?.text || "")).join("");
+  if (typeof value.text !== "undefined") return String(value.text ?? "");
+  if (typeof value.hyperlink === "string") return value.hyperlink;
+  if (typeof value.error === "string") return value.error;
+  if (typeof value.result !== "undefined") return value.result == null ? null : value.result;
+  return String(value);
+}
+function collectGoogleSheetsValuePayloads(wb) {
+  return wb.worksheets.map((ws) => {
+    const rows = [];
+    for (let rowNumber = 1; rowNumber <= (ws.rowCount || 0); rowNumber++) {
+      const values = [];
+      for (let colNumber = 1; colNumber <= (ws.columnCount || 0); colNumber++) {
+        values.push(googleSheetsCellValue(ws.getCell(rowNumber, colNumber)));
+      }
+      while (values.length && values[values.length - 1] == null) values.pop();
+      rows.push(values);
+    }
+    while (rows.length && rows[rows.length - 1].length === 0) rows.pop();
+    return {
+      title: ws.name,
+      rows: ws.rowCount || 0,
+      cols: ws.columnCount || 0,
+      values: rows
+    };
+  });
+}
 async function buildSipFcsBlob(state, options = {}) {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Monthly Report Generator";
   wb.created = /* @__PURE__ */ new Date();
   const { year, month, sheets, rules, includeIndex, changelog } = state;
-  const activeSheets = sheets.filter((s) => s.active);
-  if (includeIndex) {
+  const requestedTitles = new Set((options.onlyTabTitles || []).filter(Boolean));
+  const wantsTitle = (title) => !requestedTitles.size || requestedTitles.has(title);
+  const activeSheets = sheets.filter((s) => s.active && wantsTitle(safeSheetName(s.name)));
+  if (includeIndex && wantsTitle("INDEX")) {
     const idx = wb.addWorksheet("INDEX");
     idx.columns = [
       { header: "Sheet", key: "sheet", width: 26 },
@@ -1415,7 +1451,7 @@ async function buildSipFcsBlob(state, options = {}) {
     else if (s.layout === "flat") buildFlatSheet(ws, s, year, month, rules);
     else if (s.layout === "alarm") buildAlarmSheet(ws, s, rules);
   }
-  if (changelog && changelog.trim()) {
+  if (changelog && changelog.trim() && wantsTitle("CHANGELOG")) {
     const cl = wb.addWorksheet("CHANGELOG");
     cl.getCell("A1").value = `${MONTHS[month]} ${year} — Notes`;
     cl.getCell("A1").font = { bold: true, size: 14 };
@@ -1424,9 +1460,13 @@ async function buildSipFcsBlob(state, options = {}) {
     cl.getColumn(1).width = 100;
   }
   retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
-  const buf = await wb.xlsx.writeBuffer();
   const onlyTwoHourReport = activeSheets.length === 1 && activeSheets[0].layout === "twohour";
   const filename = onlyTwoHourReport ? "2 Hour Report.xlsx" : `${MONTHS[month]}_${year}_SIP_FCS_Hourly_Record.xlsx`;
+  if (options.valuesOnly) {
+    const valueSheets = collectGoogleSheetsValuePayloads(wb);
+    return { blob: null, filename, sheets: valueSheets.map(({ values, ...dims }) => dims), valueSheets };
+  }
+  const buf = await wb.xlsx.writeBuffer();
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 async function generateWorkbook(state) {
@@ -2285,14 +2325,20 @@ async function buildBmrBlob(state, options = {}) {
   if (bmr.includeDay !== false) shifts.push("day");
   if (bmr.includeNight !== false) shifts.push("night");
   if (!shifts.length) shifts.push("day");
+  const requestedTitles = new Set((options.onlyTabTitles || []).filter(Boolean));
   for (const shift of shifts) {
     const name = shift === "day" ? "7AM-7PM" : "7PM-7AM";
+    if (requestedTitles.size && !requestedTitles.has(name)) continue;
     const ws = wb.addWorksheet(name);
     buildBmrSheet(ws, bmr, shift);
   }
   retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
-  const buf = await wb.xlsx.writeBuffer();
   const filename = `BMR_VOIP_${bmrTodayString()}.xlsx`;
+  if (options.valuesOnly) {
+    const valueSheets = collectGoogleSheetsValuePayloads(wb);
+    return { blob: null, filename, sheets: valueSheets.map(({ values, ...dims }) => dims), valueSheets };
+  }
+  const buf = await wb.xlsx.writeBuffer();
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 async function generateBmrWorkbook(state) {
@@ -2528,16 +2574,23 @@ async function buildBmrSmsBlob(state, options = {}) {
   if (sms.includeDay !== false) shifts.push("day");
   if (sms.includeNight !== false) shifts.push("night");
   if (!shifts.length) shifts.push("day");
+  const requestedTitles = new Set((options.onlyTabTitles || []).filter(Boolean));
   shifts.forEach((shift) => {
     ["retail", "wholesale"].forEach((marketKey) => {
       const market = BMR_SMS_MARKETS[marketKey];
-      const ws = wb.addWorksheet(bmrSmsSheetName(market, shift));
+      const title = bmrSmsSheetName(market, shift);
+      if (requestedTitles.size && !requestedTitles.has(title)) return;
+      const ws = wb.addWorksheet(title);
       buildBmrSmsSheet(ws, sms, marketKey, shift);
     });
   });
   retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
-  const buf = await wb.xlsx.writeBuffer();
   const filename = `BMR_SMS_${bmrTodayString()}.xlsx`;
+  if (options.valuesOnly) {
+    const valueSheets = collectGoogleSheetsValuePayloads(wb);
+    return { blob: null, filename, sheets: valueSheets.map(({ values, ...dims }) => dims), valueSheets };
+  }
+  const buf = await wb.xlsx.writeBuffer();
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 async function generateBmrSmsWorkbook(state) {
@@ -2688,6 +2741,16 @@ const googleSheetsSync = (() => {
     err.status = r.status;
     return err;
   }
+  async function fetchWithGoogleRetry(url, options, attempts = 4) {
+    let response;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      response = await fetch(url, options);
+      if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === attempts - 1) return response;
+      const delay = Math.min(4e3, 350 * 2 ** attempt) + Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    return response;
+  }
   async function createSheet(name, blob) {
     const token = await getToken();
     const metadata = { name, mimeType: "application/vnd.google-apps.spreadsheet" };
@@ -2705,7 +2768,7 @@ const googleSheetsSync = (() => {
   async function getSheetTabs(fileId) {
     const token = await getToken();
     const r = await fetch(
-      "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?fields=sheets.properties(sheetId,title,index)",
+      "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?fields=sheets.properties(sheetId,title,index,gridProperties(rowCount,columnCount))",
       { headers: { Authorization: "Bearer " + token } }
     );
     if (!r.ok) throw await driveError(r);
@@ -2725,6 +2788,73 @@ const googleSheetsSync = (() => {
     );
     if (!r.ok) throw await driveError(r);
     return await r.json();
+  }
+  const a1SheetTitle = (title) => "'" + String(title || "").replace(/'/g, "''") + "'";
+  function packValueRanges(valueSheets, maxJsonChars = 14e5) {
+    const ranges = [];
+    (valueSheets || []).forEach((sheet) => {
+      const values = Array.isArray(sheet.values) ? sheet.values : [];
+      for (let start = 0; start < values.length; start += 200) {
+        const block = values.slice(start, start + 200);
+        if (!block.some((row) => Array.isArray(row) && row.length)) continue;
+        ranges.push({
+          range: a1SheetTitle(sheet.title) + "!A" + (start + 1),
+          majorDimension: "ROWS",
+          values: block
+        });
+      }
+    });
+    const packs = [];
+    let current = [];
+    let currentSize = 100;
+    ranges.forEach((range) => {
+      const rangeSize = JSON.stringify(range).length + 1;
+      if (current.length && currentSize + rangeSize > maxJsonChars) {
+        packs.push(current);
+        current = [];
+        currentSize = 100;
+      }
+      current.push(range);
+      currentSize += rangeSize;
+    });
+    if (current.length) packs.push(current);
+    return packs;
+  }
+  async function updateValuesInPlace(fileId, valueSheets) {
+    const wanted = (valueSheets || []).filter((sheet) => sheet && sheet.title);
+    if (!fileId || !wanted.length) throw new Error("Check at least one sheet to update.");
+    const destinationTabs = await getSheetTabs(fileId);
+    const byTitle = new Map(destinationTabs.map((tab) => [tab.title, tab]));
+    const missing = wanted.filter((sheet) => !byTitle.has(sheet.title)).map((sheet) => sheet.title);
+    const present = wanted.filter((sheet) => byTitle.has(sheet.title));
+    const requiresExact = present.filter((sheet) => {
+      const grid = byTitle.get(sheet.title)?.gridProperties || {};
+      return (grid.rowCount || 0) !== sheet.rows || (grid.columnCount || 0) !== sheet.cols;
+    }).map((sheet) => sheet.title);
+    const exactSet = new Set(requiresExact);
+    const updateable = present.filter((sheet) => !exactSet.has(sheet.title));
+    if (!updateable.length) return { updated: [], missing, requiresExact };
+    const token = await getToken();
+    const base = "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId);
+    const clearResp = await fetchWithGoogleRetry(base + "/values:batchClear", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ ranges: updateable.map((sheet) => {
+        const grid = byTitle.get(sheet.title)?.gridProperties || {};
+        return a1SheetTitle(sheet.title) + "!A1:" + colLetter(grid.columnCount) + grid.rowCount;
+      }) })
+    });
+    if (!clearResp.ok) throw await driveError(clearResp);
+    const packs = packValueRanges(updateable);
+    for (const data of packs) {
+      const writeResp = await fetchWithGoogleRetry(base + "/values:batchUpdate", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", includeValuesInResponse: false, data })
+      });
+      if (!writeResp.ok) throw await driveError(writeResp);
+    }
+    return { updated: updateable.map((sheet) => sheet.title), missing, requiresExact };
   }
   async function mapWithConcurrency(items, limit, worker) {
     if (!items.length) return [];
@@ -3087,7 +3217,7 @@ function onEdit(e) {
     if (!r.ok) throw await driveError(r);
     return await r.json();
   }
-  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
 })();
 const backupStore = /* @__PURE__ */ (() => {
   const DB_NAME = "mrg_backups", STORE = "snapshots", MAX = 15;
@@ -4051,7 +4181,7 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
   ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onSetTargetSheet(moduleId, targetDraft), disabled: !targetDraft.trim(), className: "flex-1" }, "Use this sheet"), targetSheetId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => {
     setTargetDraft("");
     onSetTargetSheet(moduleId, "");
-  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Updating…" : `Update checked sheets (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add"), " ", selectedTabLabel ? "uses the selected row." : "copies new tabs without replacing existing ones.", " ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Update"), " uses every checked sheet", selectedTabLabel ? " and ignores the selected row." : "."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString()), moduleId === "sip_fcs" && last?.pasteSumInstalled && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-emerald-500" }, "Paste-to-sum enabled for SIP/FCS tabs"), moduleId === "sip_fcs" && last?.pasteSumError && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-amber-500 leading-relaxed" }, last.pasteSumError)), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
+  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, fastValues: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Fast update values (${checkedTitles.length})`), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Exact rebuild (${checkedTitles.length})`)), url && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add"), " ", selectedTabLabel ? "uses the selected row." : "copies new tabs without replacing existing ones.", " ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Fast update"), " refreshes values/formulas and keeps current formatting.", " ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Exact rebuild"), " also replaces layout and formatting; use it after changing colors, rules, widths, merges, or adding rows/columns."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, "Synced ", new Date(last.at).toLocaleTimeString(), last.mode ? ` · ${last.mode === "fast" ? "Fast" : "Exact"}` : "", last.durationMs ? ` · ${(last.durationMs / 1e3).toFixed(1)}s` : ""), moduleId === "sip_fcs" && last?.pasteSumInstalled && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-emerald-500" }, "Paste-to-sum enabled for SIP/FCS tabs"), moduleId === "sip_fcs" && last?.pasteSumError && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-amber-500 leading-relaxed" }, last.pasteSumError)), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -7964,8 +8094,12 @@ async function buildProcedureBlob(state, options = {}) {
   ws.views = [{ state: "frozen", ySplit: row }];
   ws.autoFilter = { from: { row, column: 1 }, to: { row, column: 5 } };
   retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
-  const buf = await wb.xlsx.writeBuffer();
   const filename = procedureFileStem(proc) + ".xlsx";
+  if (options.valuesOnly) {
+    const valueSheets = collectGoogleSheetsValuePayloads(wb);
+    return { blob: null, filename, sheets: valueSheets.map(({ values, ...dims }) => dims), valueSheets };
+  }
+  const buf = await wb.xlsx.writeBuffer();
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 async function generateProcedureDocx(state) {
@@ -10532,8 +10666,12 @@ async function buildRecorderBlob(state, options = {}) {
   const year = recorderParseIntOr(rec.exportYear, (/* @__PURE__ */ new Date()).getFullYear());
   const wb = recorderBuildWorkbook(rec, year, rec.exportMonth);
   retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
-  const buf = await wb.xlsx.writeBuffer();
   const filename = recorderFileName(rec.filePattern, year, rec.exportMonth);
+  if (options.valuesOnly) {
+    const valueSheets = collectGoogleSheetsValuePayloads(wb);
+    return { blob: null, filename, sheets: valueSheets.map(({ values, ...dims }) => dims), valueSheets };
+  }
+  const buf = await wb.xlsx.writeBuffer();
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, sheets: collectSheetGridDims(wb) };
 }
 function recorderCellText(v) {
@@ -12222,7 +12360,7 @@ function App() {
     googleSheetsSync.disconnect();
     setGoogleConn((c) => ({ ...c, connected: false, email: "", busyModule: null, error: null }));
   }, []);
-  const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = "", onlyTabTitles = [], replaceExisting = false } = {}) => {
+  const syncModuleToSheets = useCallback(async (moduleId, { interactive = false, onlyTabTitle = "", onlyTabTitles = [], replaceExisting = false, fastValues = false } = {}) => {
     const conf = GOOGLE_SYNC_MODULES[moduleId];
     if (!conf) return;
     if (!googleSheetsSync.isConfigured()) {
@@ -12230,7 +12368,7 @@ function App() {
       setTimeout(() => setToast(null), 5e3);
       return;
     }
-    if (replaceExisting) {
+    if (replaceExisting || fastValues) {
       const checkedCount = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean).length : 0;
       if (!checkedCount) {
         setToast({ type: "err", msg: "Check at least one sheet to update." });
@@ -12238,25 +12376,26 @@ function App() {
         return;
       }
       const ok = await confirmDialog({
-        title: `Update ${checkedCount} checked sheet${checkedCount === 1 ? "" : "s"}?`,
-        message: `The ${checkedCount} checked sheet${checkedCount === 1 ? "" : "s"} will replace matching tabs in Google Sheets. Unchecked sheets and all unrelated tabs will remain unchanged.`,
-        confirmText: "Update checked sheets",
-        tone: "danger"
+        title: `${fastValues ? "Fast update" : "Exact rebuild"} ${checkedCount} checked sheet${checkedCount === 1 ? "" : "s"}?`,
+        message: fastValues ? `Values and formulas in the ${checkedCount} matching Google Sheet tab${checkedCount === 1 ? "" : "s"} will be refreshed in place. Existing formatting is preserved; unchecked and unrelated tabs remain unchanged.` : `The ${checkedCount} checked sheet${checkedCount === 1 ? "" : "s"} will replace matching tabs in Google Sheets, including formatting and layout. Unchecked sheets and all unrelated tabs will remain unchanged.`,
+        confirmText: fastValues ? "Fast update values" : "Exact rebuild",
+        tone: fastValues ? "default" : "danger"
       });
       if (!ok) return;
     }
     setGoogleConn((c) => ({ ...c, busyModule: moduleId, error: null }));
     try {
+      const syncStartedAt = performance.now();
       await googleSheetsSync.getToken({ interactive });
       const latest = stateRef.current || DEFAULT_STATE;
       const checkedTitleSet = new Set(Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean) : []);
-      const uploadTitles = replaceExisting ? [...checkedTitleSet] : onlyTabTitle ? [onlyTabTitle] : [];
-      const { blob, sheets } = await conf.build(latest, { onlyTabTitles: uploadTitles });
-      const requestedSheets = replaceExisting ? (sheets || []).filter((s) => checkedTitleSet.has(s.title)) : onlyTabTitle ? (sheets || []).filter((s) => s.title === onlyTabTitle) : sheets || [];
+      const uploadTitles = replaceExisting || fastValues ? [...checkedTitleSet] : onlyTabTitle ? [onlyTabTitle] : [];
+      const { blob, sheets, valueSheets = [] } = await conf.build(latest, { onlyTabTitles: uploadTitles, valuesOnly: fastValues });
+      const requestedSheets = replaceExisting || fastValues ? (sheets || []).filter((s) => checkedTitleSet.has(s.title)) : onlyTabTitle ? (sheets || []).filter((s) => s.title === onlyTabTitle) : sheets || [];
       if (onlyTabTitle && !requestedSheets.length) {
         throw new Error(`The selected tab "${onlyTabTitle}" is not included in the generated workbook. Make sure it is active.`);
       }
-      if (replaceExisting && requestedSheets.length !== checkedTitleSet.size) {
+      if ((replaceExisting || fastValues) && requestedSheets.length !== checkedTitleSet.size) {
         throw new Error("One or more checked sheets are not included in the generated workbook. Refresh the app and try again.");
       }
       const targetId = latest.googleSheets?.targetSheetIds?.[moduleId] || "";
@@ -12267,8 +12406,21 @@ function App() {
       let addedTabs = [];
       let updatedTabs = [];
       let missingUpdateTabs = [];
+      let requiresExactTabs = [];
       let syncedDims = [];
-      if (replaceExisting) {
+      if (fastValues) {
+        if (!existingId) throw new Error("Set or create a destination Google Sheet before using Fast update.");
+        const result = await googleSheetsSync.updateValuesInPlace(existingId, valueSheets);
+        updatedTabs = result.updated;
+        missingUpdateTabs = result.missing;
+        requiresExactTabs = result.requiresExact || [];
+        if (!updatedTabs.length) {
+          if (requiresExactTabs.length) {
+            throw new Error("The generated layout dimensions differ from the existing Google Sheet tab. Use Exact rebuild once, then Fast update will work for later value changes.");
+          }
+          throw new Error("None of the checked sheets exist in the destination yet. Add each new tab first.");
+        }
+      } else if (replaceExisting) {
         if (!existingId) throw new Error("Set or create a destination Google Sheet before updating checked sheets.");
         const result = await googleSheetsSync.replaceExistingTabs(existingId, blob, requestedSheets, conf.sheetName);
         updatedTabs = result.updated;
@@ -12296,7 +12448,7 @@ function App() {
         created = true;
         addedTabs = (sheets || []).map((s) => s.title).filter(Boolean);
       }
-      if (!replaceExisting && fileId && fileId !== existingId) {
+      if (!replaceExisting && !fastValues && fileId && fileId !== existingId) {
         setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, sheetIds: { ...s.googleSheets.sheetIds, [moduleId]: fileId } } }));
       }
       let trimHint = "";
@@ -12313,7 +12465,10 @@ function App() {
       }
       let pasteSumInstalled = false;
       let pasteSumHint = "";
-      if (moduleId === "sip_fcs" && fileId) {
+      if (moduleId === "sip_fcs" && fileId && fastValues) {
+        pasteSumInstalled = !!latest.googleSheets?.pasteSumScriptIds?.[fileId];
+      }
+      if (moduleId === "sip_fcs" && fileId && !fastValues) {
         const pasteSumTabs = (latest.sheets || []).filter((sheet) => sheet && sheet.active).map((sheet) => safeSheetName(sheet.name));
         const rememberedScriptId = latest.googleSheets?.pasteSumScriptIds?.[fileId] || "";
         const needsPasteSumWrite = !rememberedScriptId || created || addedTabs.length > 0;
@@ -12360,17 +12515,20 @@ function App() {
           }
         }
       }
+      const durationMs = Math.round(performance.now() - syncStartedAt);
       setGoogleConn((c) => ({
         ...c,
         connected: true,
         email: googleSheetsSync.email() || c.email,
         busyModule: null,
-        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, pasteSumInstalled, pasteSumError: pasteSumHint } }
+        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, mode: fastValues ? "fast" : "exact", durationMs, pasteSumInstalled, pasteSumError: pasteSumHint } }
       }));
-      const successMsg = updatedTabs.length ? `Updated ${updatedTabs.length} checked sheet${updatedTabs.length === 1 ? "" : "s"}${missingUpdateTabs.length ? `; ${missingUpdateTabs.length} new tab${missingUpdateTabs.length === 1 ? "" : "s"} skipped — use Add selected tab` : ""}. Unchecked tabs were unchanged` : created ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}` : addedTabs.length ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? "" : "s"}; existing data was left unchanged` : onlyTabTitle ? `Tab "${onlyTabTitle}" already exists; no data was changed` : "No new tabs to add; existing Google Sheet data was left unchanged";
-      const syncHint = [trimHint, pasteSumHint].filter(Boolean).join(" ");
+      const successMsg = fastValues && updatedTabs.length ? `Fast-updated values and formulas in ${updatedTabs.length} sheet${updatedTabs.length === 1 ? "" : "s"}; existing formatting was preserved` : updatedTabs.length ? `Updated ${updatedTabs.length} checked sheet${updatedTabs.length === 1 ? "" : "s"}${missingUpdateTabs.length ? `; ${missingUpdateTabs.length} new tab${missingUpdateTabs.length === 1 ? "" : "s"} skipped — use Add selected tab` : ""}. Unchecked tabs were unchanged` : created ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}` : addedTabs.length ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? "" : "s"}; existing data was left unchanged` : onlyTabTitle ? `Tab "${onlyTabTitle}" already exists; no data was changed` : "No new tabs to add; existing Google Sheet data was left unchanged";
+      const exactHint = requiresExactTabs.length ? `${requiresExactTabs.length} sheet${requiresExactTabs.length === 1 ? "" : "s"} need Exact rebuild because their generated layout dimensions changed.` : "";
+      const syncHint = [trimHint, pasteSumHint, exactHint].filter(Boolean).join(" ");
       const pasteSumSuffix = pasteSumInstalled ? " · paste-to-sum enabled" : "";
-      setToast({ type: syncHint ? "err" : "ok", msg: syncHint || successMsg + pasteSumSuffix });
+      const durationSuffix = ` · ${(durationMs / 1e3).toFixed(1)}s`;
+      setToast({ type: syncHint ? "err" : "ok", msg: (syncHint || successMsg + pasteSumSuffix) + durationSuffix });
       setTimeout(() => setToast(null), syncHint ? 1e4 : 5e3);
       return fileId;
     } catch (e) {
