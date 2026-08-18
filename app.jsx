@@ -9078,7 +9078,7 @@ https://bit.ly/4vrcu64`;
       purpose: '',
       prerequisites: '',
       steps: [
-        { id: 'procedure_step_1', title: 'First step', description: '', note: '', image: '' },
+        { id: 'procedure_step_1', type: 'step', title: 'First step', description: '', note: '', image: '' },
       ],
     };
 
@@ -9099,6 +9099,7 @@ https://bit.ly/4vrcu64`;
         prerequisites: String(merged.prerequisites || ''),
         steps: sourceSteps.map((step, index) => ({
           id: String(step?.id || procedureId()),
+          type: step?.type === 'info' ? 'info' : 'step',
           title: step?.title == null ? '' : String(step.title),
           description: String(step?.description || ''),
           note: String(step?.note || ''),
@@ -9112,7 +9113,7 @@ https://bit.ly/4vrcu64`;
         ...DEFAULT_PROCEDURE_STATE,
         lastReviewed: new Date().toISOString().slice(0, 10),
         steps: [
-          { id: procedureId(), title: 'First step', description: '', note: '', image: '' },
+          { id: procedureId(), type: 'step', title: 'First step', description: '', note: '', image: '' },
         ],
       });
     }
@@ -9126,10 +9127,27 @@ https://bit.ly/4vrcu64`;
       return String(value || '').replace(/\r\n/g, '\n').split('\n');
     }
 
-    function procedureVisibleStepTitle(step, index) {
-      const title = String(step?.title || '').trim();
+    function procedureIsInfo(entry) {
+      return entry?.type === 'info';
+    }
+
+    function procedureStepNumber(entries, index) {
+      return entries.slice(0, index + 1).filter(entry => !procedureIsInfo(entry)).length;
+    }
+
+    function procedureStepCount(proc) {
+      return proc.steps.filter(entry => !procedureIsInfo(entry)).length;
+    }
+
+    function procedureInfoCount(proc) {
+      return proc.steps.filter(procedureIsInfo).length;
+    }
+
+    function procedureVisibleEntryTitle(entry, index, entries) {
+      const title = String(entry?.title || '').trim();
       if (!title) return '';
-      return new RegExp(`^step\\s*${index + 1}$`, 'i').test(title) ? '' : title;
+      if (procedureIsInfo(entry)) return /^additional\s+information$/i.test(title) ? '' : title;
+      return new RegExp(`^step\\s*${procedureStepNumber(entries, index)}$`, 'i').test(title) ? '' : title;
     }
 
     function procedureMoveStep(proc, index, delta) {
@@ -9183,12 +9201,13 @@ https://bit.ly/4vrcu64`;
       const normalized = procedureNormalizeState(proc);
       const compact = {
         ...normalized,
-        imageStepIndexes: normalized.steps.flatMap((step, index) => step.image ? [index] : []),
-        steps: normalized.steps.map(step => ({
-          id: step.id,
-          title: step.title,
-          description: step.description,
-          note: step.note,
+        imageItemIndexes: normalized.steps.flatMap((entry, index) => entry.image ? [index] : []),
+        steps: normalized.steps.map(entry => ({
+          id: entry.id,
+          type: entry.type,
+          title: entry.title,
+          description: entry.description,
+          note: entry.note,
         })),
       };
       return PROCEDURE_DOCX_STATE_MARKER + procedureUtf8ToBase64(JSON.stringify(compact));
@@ -9204,8 +9223,8 @@ https://bit.ly/4vrcu64`;
         const decoded = JSON.parse(procedureBase64ToUtf8(encoded));
         return {
           ...procedureNormalizeState(decoded),
-          _imageStepIndexes: Array.isArray(decoded.imageStepIndexes)
-            ? decoded.imageStepIndexes.filter(index => Number.isInteger(index) && index >= 0)
+          _imageItemIndexes: Array.isArray(decoded.imageItemIndexes || decoded.imageStepIndexes)
+            ? (decoded.imageItemIndexes || decoded.imageStepIndexes).filter(index => Number.isInteger(index) && index >= 0)
             : [],
         };
       } catch (error) {
@@ -9241,7 +9260,7 @@ https://bit.ly/4vrcu64`;
       });
       const titleNode = Array.from(root.querySelectorAll('h1,h2,h3,p')).find(node => {
         const value = clean(node.textContent);
-        return value && !/^(Purpose|Prerequisites|STEP\s+\d+)/i.test(value) && !/^(Document ID|Owner|Department|Version|Last reviewed)\s*:/i.test(value);
+        return value && !/^(Purpose|Prerequisites|STEP\s+\d+|Additional Information)/i.test(value) && !/^(Document ID|Owner|Department|Version|Last reviewed)\s*:/i.test(value);
       });
       const fallbackTitle = String(fileName || 'Imported Procedure').replace(/\.docx$/i, '') || 'Imported Procedure';
       const imported = {
@@ -9275,9 +9294,16 @@ https://bit.ly/4vrcu64`;
         if (!value && !node.querySelector('img')) return;
         if (/^Purpose$/i.test(value)) { mode = 'purpose'; currentStep = null; return; }
         if (/^Prerequisites$/i.test(value)) { mode = 'prerequisites'; currentStep = null; return; }
+        const infoMatch = value.match(/^ADDITIONAL\s+INFORMATION(?:\s+(.*))?$/i);
+        if (infoMatch) {
+          currentStep = { id: procedureId(), type: 'info', title: clean(infoMatch[1]), description: '', note: '', image: '' };
+          imported.steps.push(currentStep);
+          mode = 'info';
+          return;
+        }
         const stepMatch = value.match(/^STEP\s+(\d+)(?:\s+(.*))?$/i);
         if (stepMatch) {
-          currentStep = { id: procedureId(), title: clean(stepMatch[2]), description: '', note: '', image: '' };
+          currentStep = { id: procedureId(), type: 'step', title: clean(stepMatch[2]), description: '', note: '', image: '' };
           imported.steps.push(currentStep);
           mode = 'step';
           return;
@@ -9301,7 +9327,7 @@ https://bit.ly/4vrcu64`;
         if (!description && !imported.purpose && !imported.prerequisites) {
           throw new Error('No editable procedure content could be recognized in this Word file.');
         }
-        imported.steps = [{ id: procedureId(), title: '', description, note: '', image: procedureImportedImages(root)[0] || '' }];
+        imported.steps = [{ id: procedureId(), type: 'step', title: '', description, note: '', image: procedureImportedImages(root)[0] || '' }];
       } else if (unassignedLines.length && !imported.purpose) {
         imported.purpose = unassignedLines.join('\n');
       }
@@ -9325,13 +9351,13 @@ https://bit.ly/4vrcu64`;
       const root = procedureHtmlRoot(htmlResult.value);
       const images = procedureImportedImages(root);
       let imageIndex = 0;
-      const imageStepIndexes = new Set(embedded._imageStepIndexes || []);
+      const imageItemIndexes = new Set(embedded._imageItemIndexes || []);
       const steps = embedded.steps.map((step, stepIndex) => {
-        const hasImage = imageStepIndexes.has(stepIndex);
+        const hasImage = imageItemIndexes.has(stepIndex);
         const image = hasImage ? (images[imageIndex++] || '') : '';
         return { ...step, image };
       });
-      const { _imageStepIndexes, ...editable } = embedded;
+      const { _imageItemIndexes, ...editable } = embedded;
       return { procedure: procedureNormalizeState({ ...editable, steps }), exact: true };
     }
 
@@ -9382,7 +9408,7 @@ https://bit.ly/4vrcu64`;
       }
       row += 1;
       const headerRow = ws.getRow(row);
-      ['Step', 'Title', 'Instructions', 'Notes / tips', 'Screenshot'].forEach((value, index) => {
+      ['Item', 'Title', 'Instructions', 'Notes / tips', 'Screenshot'].forEach((value, index) => {
         const cell = headerRow.getCell(index + 1);
         cell.value = value;
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -9391,7 +9417,10 @@ https://bit.ly/4vrcu64`;
       });
       proc.steps.forEach((step, index) => {
         const dataRow = ws.getRow(row + index + 1);
-        dataRow.values = [index + 1, step.title, step.description, step.note, step.image ? 'Attached' : ''];
+        dataRow.values = [
+          procedureIsInfo(step) ? 'Additional information' : `Step ${procedureStepNumber(proc.steps, index)}`,
+          step.title, step.description, step.note, step.image ? 'Attached' : '',
+        ];
         dataRow.alignment = { wrapText: true, vertical: 'top' };
         dataRow.height = step.image
           ? 112
@@ -9478,12 +9507,15 @@ https://bit.ly/4vrcu64`;
       }
       for (let index = 0; index < proc.steps.length; index++) {
         const step = proc.steps[index];
-        const visibleTitle = procedureVisibleStepTitle(step, index);
+        const isInfo = procedureIsInfo(step);
+        const stepNumber = procedureStepNumber(proc.steps, index);
+        const visibleTitle = procedureVisibleEntryTitle(step, index, proc.steps);
+        const headingLabel = isInfo ? 'ADDITIONAL INFORMATION' : `STEP ${stepNumber}`;
         children.push(new D.Paragraph({
           spacing: { before: 360, after: 120 },
           keepNext: true,
           children: [
-            text(`STEP ${index + 1}`, { bold: true, color: '2563EB', size: 18 }),
+            text(headingLabel, { bold: true, color: '2563EB', size: 18 }),
             ...(visibleTitle ? [text(`  ${visibleTitle}`, { bold: true, size: 28 })] : []),
           ],
         }));
@@ -9496,7 +9528,11 @@ https://bit.ly/4vrcu64`;
             const run = rcaSafeImageRun(D, {
               type: rcaImageType(data.mime), data: data.bytes,
               transformation: { width: Math.max(1, Math.round(natural.width * scale)), height: Math.max(1, Math.round(natural.height * scale)) },
-              altText: { title: `Step ${index + 1} screenshot`, description: step.title || '', name: `step-${index + 1}` },
+              altText: {
+                title: isInfo ? 'Additional information screenshot' : `Step ${stepNumber} screenshot`,
+                description: step.title || '',
+                name: isInfo ? `additional-information-${index + 1}` : `step-${stepNumber}`,
+              },
             });
             if (run) children.push(new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { before: 100, after: 120 }, children: [run] }));
           }
@@ -9555,7 +9591,10 @@ https://bit.ly/4vrcu64`;
               <SectionLabel>Document</SectionLabel>
               <div className="rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-1.5">
                 <div className="text-xs text-neutral-200 truncate">{proc.title || 'Untitled Procedure'}</div>
-                <div className="text-[10px] text-neutral-600">{proc.steps.length} step{proc.steps.length === 1 ? '' : 's'} · Version {proc.version || '—'}</div>
+                <div className="text-[10px] text-neutral-600">
+                  {procedureStepCount(proc)} step{procedureStepCount(proc) === 1 ? '' : 's'}
+                  {procedureInfoCount(proc) > 0 ? ` · ${procedureInfoCount(proc)} additional` : ''} · Version {proc.version || '—'}
+                </div>
               </div>
               <input ref={importRef} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="hidden" onChange={async event => {
@@ -9819,8 +9858,10 @@ https://bit.ly/4vrcu64`;
       );
     }
 
-    function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, onImageError, onEditImage }) {
+    function ProcedureStepEditor({ step, index, stepNumber, total, onChange, onMove, onDelete, onImageError, onEditImage }) {
       const inputRef = useRef(null);
+      const isInfo = procedureIsInfo(step);
+      const itemLabel = isInfo ? 'Additional information' : `Step ${stepNumber}`;
       const pickImage = async (file) => {
         if (!file) return;
         try { onChange({ image: await procedureReadImageFile(file) }); }
@@ -9836,14 +9877,17 @@ https://bit.ly/4vrcu64`;
         pickImage(file);
       };
       return (
-        <div onPaste={pasteImage} tabIndex={-1} aria-label={`Procedure step ${index + 1}. Press Control V to paste a screenshot.`}>
+        <div onPaste={pasteImage} tabIndex={-1} aria-label={`${itemLabel}. Press Control V to paste a screenshot.`}>
         <Card className="p-4">
           <div className="flex flex-wrap items-start gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-sm font-bold text-blue-300">{index + 1}</div>
+            <div className={`flex h-8 min-w-8 shrink-0 items-center justify-center rounded-full px-2 text-sm font-bold ${isInfo ? 'bg-amber-500/15 text-amber-300' : 'bg-blue-500/15 text-blue-300'}`}>
+              {isInfo ? 'i' : stepNumber}
+            </div>
             <div className="flex-1 min-w-[240px] space-y-3">
-              <Input value={step.title} onChange={e => onChange({ title: e.target.value })} placeholder={`Step ${index + 1} title`} />
+              <div className={`text-[10px] font-bold uppercase tracking-[0.14em] ${isInfo ? 'text-amber-400' : 'text-blue-400'}`}>{itemLabel}</div>
+              <Input value={step.title} onChange={e => onChange({ title: e.target.value })} placeholder={isInfo ? 'Additional information title (optional)' : `Step ${stepNumber} title`} />
               <textarea value={step.description} onChange={e => onChange({ description: e.target.value })}
-                placeholder="Describe exactly what the reader should do…"
+                placeholder={isInfo ? 'Add context, reference details, or other supporting information…' : 'Describe exactly what the reader should do…'}
                 className="w-full min-h-[105px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" />
               <textarea value={step.note} onChange={e => onChange({ note: e.target.value })}
                 placeholder="Optional note, tip, expected result, or warning…"
@@ -9851,7 +9895,7 @@ https://bit.ly/4vrcu64`;
               <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={e => { pickImage(e.target.files?.[0]); e.target.value = ''; }} />
               {step.image ? (
                 <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-2">
-                  <img src={step.image} alt={`Step ${index + 1}`} className="max-h-[360px] w-full rounded object-contain bg-white" />
+                  <img src={step.image} alt={`${itemLabel} screenshot`} className="max-h-[360px] w-full rounded object-contain bg-white" />
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Btn variant="ghost" size="sm" onClick={() => inputRef.current?.click()}><IconUpload /> Replace</Btn>
                     <Btn variant="ghost" size="sm" onClick={onEditImage}>Edit</Btn>
@@ -9869,7 +9913,7 @@ https://bit.ly/4vrcu64`;
             <div className="flex shrink-0 items-center gap-1">
               <button type="button" onClick={() => onMove(-1)} disabled={index === 0} title="Move up" className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25"><IconUp /></button>
               <button type="button" onClick={() => onMove(1)} disabled={index === total - 1} title="Move down" className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25"><IconDown /></button>
-              <button type="button" onClick={onDelete} disabled={total === 1} title="Delete step" className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25"><IconX /></button>
+              <button type="button" onClick={onDelete} disabled={total === 1} title={`Delete ${itemLabel.toLowerCase()}`} className="rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25"><IconX /></button>
             </div>
           </div>
         </Card>
@@ -9880,7 +9924,10 @@ https://bit.ly/4vrcu64`;
     function ProcedureEditor({ proc, onChange, onImageError }) {
       const [editingStepId, setEditingStepId] = useState(null);
       const updateStep = (id, patch) => onChange({ ...proc, steps: proc.steps.map(step => step.id === id ? { ...step, ...patch } : step) });
-      const addStep = () => onChange({ ...proc, steps: [...proc.steps, { id: procedureId(), title: '', description: '', note: '', image: '' }] });
+      const addEntry = (type) => onChange({
+        ...proc,
+        steps: [...proc.steps, { id: procedureId(), type, title: '', description: '', note: '', image: '' }],
+      });
       const editingStep = proc.steps.find(step => step.id === editingStepId && step.image);
       return (
         <div className="space-y-4">
@@ -9905,15 +9952,27 @@ https://bit.ly/4vrcu64`;
             <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Purpose</label><textarea value={proc.purpose} onChange={e => onChange({ ...proc, purpose: e.target.value })} placeholder="What this procedure accomplishes…" className="w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" /></div>
             <div><label className="block text-[10px] uppercase tracking-wide text-neutral-500 mb-1">Prerequisites</label><textarea value={proc.prerequisites} onChange={e => onChange({ ...proc, prerequisites: e.target.value })} placeholder="One requirement per line…" className="w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" /></div>
           </Card>
-          <div className="flex items-center justify-between gap-3"><SectionLabel hint="screenshots are optional">Steps</SectionLabel><Btn variant="accent" size="sm" onClick={addStep}><IconPlus /> Add step</Btn></div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <SectionLabel hint="Add numbered actions or unnumbered supporting details">Procedure content</SectionLabel>
+            <div className="flex flex-wrap gap-2">
+              <Btn variant="accent" size="sm" onClick={() => addEntry('step')}><IconPlus /> Add step</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => addEntry('info')}><IconPlus /> Add additional information</Btn>
+            </div>
+          </div>
+          <div className="rounded-md border border-neutral-800 bg-neutral-950/50 px-3 py-2 text-[11px] leading-relaxed text-neutral-500">
+            <strong className="text-neutral-300">Quick guide:</strong> use a <span className="text-blue-300">Step</span> when the reader must perform an action. Use <span className="text-amber-300">Additional Information</span> for context, examples, references, or reminders that should not change the step numbering.
+          </div>
           {proc.steps.map((step, index) => (
-            <ProcedureStepEditor key={step.id} step={step} index={index} total={proc.steps.length}
+            <ProcedureStepEditor key={step.id} step={step} index={index} stepNumber={procedureStepNumber(proc.steps, index)} total={proc.steps.length}
               onChange={patch => updateStep(step.id, patch)}
               onMove={delta => onChange(procedureMoveStep(proc, index, delta))}
               onDelete={() => onChange({ ...proc, steps: proc.steps.filter(item => item.id !== step.id) })}
               onImageError={onImageError} onEditImage={() => setEditingStepId(step.id)} />
           ))}
-          <Btn variant="ghost" size="md" onClick={addStep} className="w-full"><IconPlus /> Add another step</Btn>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Btn variant="ghost" size="md" onClick={() => addEntry('step')} className="w-full"><IconPlus /> Add another step</Btn>
+            <Btn variant="ghost" size="md" onClick={() => addEntry('info')} className="w-full"><IconPlus /> Add additional information</Btn>
+          </div>
           {editingStep && <ProcedureImageEditor image={editingStep.image} onCancel={() => setEditingStepId(null)}
             onSave={editedImage => { updateStep(editingStep.id, { image: editedImage }); setEditingStepId(null); }} />}
         </div>
@@ -9921,28 +9980,84 @@ https://bit.ly/4vrcu64`;
     }
 
     function ProcedurePreview({ proc }) {
+      const metadata = [
+        ['Document ID', proc.documentId], ['Owner', proc.owner],
+        ['Department', proc.department], ['Last reviewed', proc.lastReviewed],
+        ...(proc.includeVersionInOutput ? [['Version', proc.version], ['', '']] : []),
+      ];
       return (
-        <div data-procedure-preview-root style={{ colorScheme: 'light' }} className="rounded-lg border border-[#d1d5db] bg-[#ffffff] p-8 text-[#111827] shadow-sm">
-          <div className="border-b-4 border-blue-600 pb-5">
-            <h1 className="mt-2 text-3xl font-bold leading-tight">{proc.title || 'Untitled Procedure'}</h1>
-            <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-[#4b5563]">
-              <div><strong>Document ID:</strong> {proc.documentId || '—'}</div>{proc.includeVersionInOutput && <div><strong>Version:</strong> {proc.version || '—'}</div>}
-              <div><strong>Owner:</strong> {proc.owner || '—'}</div><div><strong>Department:</strong> {proc.department || '—'}</div>
-              <div><strong>Last reviewed:</strong> {proc.lastReviewed || '—'}</div><div><strong>Steps:</strong> {proc.steps.length}</div>
-            </div>
-          </div>
-          {proc.purpose.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">Purpose</h2><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#374151]">{proc.purpose}</p></section>}
-          {proc.prerequisites.trim() && <section className="mt-6"><h2 className="text-sm font-bold uppercase tracking-wide text-[#111827]">Prerequisites</h2><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#374151]">{procedureTextLines(proc.prerequisites).filter(Boolean).map((line, i) => <li key={i}>{line.replace(/^\s*[-•]\s*/, '')}</li>)}</ul></section>}
-          <div className="mt-8 space-y-7">
-            {proc.steps.map((step, index) => (
-              <section key={step.id} data-procedure-step className="break-inside-avoid rounded-lg border border-[#e5e7eb] bg-[#ffffff] p-5 text-[#111827]">
-                <div className="flex items-start gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#2563eb] text-sm font-bold text-[#ffffff]">{index + 1}</div><div><div className="text-[9px] font-bold uppercase tracking-[0.18em] text-[#2563eb]">Step {index + 1}</div>{procedureVisibleStepTitle(step, index) && <h2 className="text-lg font-bold leading-tight text-[#111827]">{procedureVisibleStepTitle(step, index)}</h2>}</div></div>
-                {step.description && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[#374151]">{step.description}</p>}
-                {step.image && <img src={step.image} alt={`Step ${index + 1}`} className="mt-4 max-h-[520px] w-full rounded border border-[#e5e7eb] bg-[#ffffff] object-contain" />}
-                {step.note && <div className="mt-4 rounded-md border-l-4 border-[#3b82f6] bg-[#eff6ff] px-4 py-3 text-xs leading-5 text-[#172554]"><strong>Note:</strong> {step.note}</div>}
-              </section>
+        <div style={{ containerType: 'inline-size' }} className="mx-auto w-full max-w-[816px]">
+        <div
+          data-procedure-preview-root
+          style={{
+            colorScheme: 'light',
+            minHeight: '129.41cqw',
+            padding: '7.35cqw',
+            fontFamily: 'Aptos, Arial, sans-serif',
+            fontSize: 'clamp(9px, 1.8cqw, 14.67px)',
+          }}
+          className="w-full border border-[#d1d5db] bg-[#ffffff] text-[#000000] shadow-md"
+        >
+          <h1 style={{ fontSize: 'clamp(16px, 2.94cqw, 24px)', marginBottom: '0.82cqw' }} className="text-center font-bold leading-tight">
+            {proc.title || 'Untitled Procedure'}
+          </h1>
+          <div className="grid grid-cols-2 border-l border-t border-[#d1d5db]">
+            {metadata.map(([label, value], index) => (
+              <div key={`${label}-${index}`} style={{ padding: '1.22cqw 1.47cqw' }} className="min-w-0 border-b border-r border-[#d1d5db] leading-snug">
+                {label ? <><strong>{label}: </strong>{value || '—'}</> : <span>&nbsp;</span>}
+              </div>
             ))}
           </div>
+          {proc.purpose.trim() && (
+            <section style={{ marginTop: '3.92cqw' }}>
+              <h2 style={{ fontSize: 'clamp(11px, 2.12cqw, 17.33px)', marginBottom: '1.22cqw' }} className="font-bold leading-tight">Purpose</h2>
+              {procedureTextLines(proc.purpose).map((line, index) => <p key={index} style={{ marginBottom: '0.61cqw' }} className="whitespace-pre-wrap leading-normal">{line || ' '}</p>)}
+            </section>
+          )}
+          {proc.prerequisites.trim() && (
+            <section style={{ marginTop: '3.18cqw' }}>
+              <h2 style={{ fontSize: 'clamp(11px, 2.12cqw, 17.33px)', marginBottom: '1.22cqw' }} className="font-bold leading-tight">Prerequisites</h2>
+              <ul style={{ paddingLeft: '3.2cqw' }} className="list-disc">
+                {procedureTextLines(proc.prerequisites).filter(Boolean).map((line, index) => (
+                  <li key={index} style={{ marginBottom: '0.49cqw' }} className="leading-normal">{line.replace(/^\s*[-•]\s*/, '')}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+          <div>
+            {proc.steps.map((step, index) => {
+              const isInfo = procedureIsInfo(step);
+              const stepNumber = procedureStepNumber(proc.steps, index);
+              const visibleTitle = procedureVisibleEntryTitle(step, index, proc.steps);
+              const headingLabel = isInfo ? 'ADDITIONAL INFORMATION' : `STEP ${stepNumber}`;
+              const imageAlt = isInfo ? 'Additional information screenshot' : `Step ${stepNumber} screenshot`;
+              return (
+                <section key={step.id} data-procedure-step style={{ marginTop: '4.41cqw' }} className="break-inside-avoid text-[#000000]">
+                  <div style={{ marginBottom: '1.47cqw' }} className="flex flex-wrap items-baseline gap-x-[1.25cqw] leading-tight">
+                    <span style={{ fontSize: 'clamp(8px, 1.47cqw, 12px)' }} className="font-bold text-[#2563eb]">{headingLabel}</span>
+                    {visibleTitle && <h2 style={{ fontSize: 'clamp(12px, 2.29cqw, 18.67px)' }} className="font-bold">{visibleTitle}</h2>}
+                  </div>
+                  {procedureTextLines(step.description).map((line, lineIndex) => (
+                    <p key={lineIndex} style={{ marginBottom: '0.61cqw' }} className="whitespace-pre-wrap leading-normal">{line || ' '}</p>
+                  ))}
+                  {step.image && (
+                    <img
+                      src={step.image}
+                      alt={imageAlt}
+                      style={{ margin: '1.22cqw auto 1.47cqw', maxWidth: '89.3%', maxHeight: '41.67cqw' }}
+                      className="block h-auto object-contain"
+                    />
+                  )}
+                  {step.note.trim() && (
+                    <div style={{ marginTop: '0.5cqw', padding: '1.22cqw 1.72cqw' }} className="border border-[#d1d5db] bg-[#eff6ff] leading-normal text-[#000000]">
+                      <strong className="text-[#1d4ed8]">Note: </strong><span className="whitespace-pre-wrap">{step.note}</span>
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        </div>
         </div>
       );
     }
@@ -15196,7 +15311,7 @@ match /shared/whitelistSmsTestNumbers {
       const onClearProcedure = async () => {
         const ok = await confirmDialog({
           title: 'Clear this procedure?',
-          message: 'This will remove all procedure details, steps, notes, and screenshots and return the editor to a fresh draft. This action cannot be undone.',
+          message: 'This will remove all procedure details, steps, additional information, notes, and screenshots and return the editor to a fresh draft. This action cannot be undone.',
           confirmText: 'Clear procedure',
           tone: 'danger',
         });
@@ -15368,7 +15483,8 @@ match /shared/whitelistSmsTestNumbers {
                   <h2 className="truncate text-[22px] font-bold tracking-tight">Procedure · {procedure.title || 'Untitled Procedure'}</h2>
                 </div>
                 <div className="app-pill-row hidden xl:flex items-center gap-2">
-                  <Pill>{procedure.steps.length} steps</Pill>
+                  <Pill>{procedureStepCount(procedure)} step{procedureStepCount(procedure) === 1 ? '' : 's'}</Pill>
+                  {procedureInfoCount(procedure) > 0 && <Pill tone="muted">{procedureInfoCount(procedure)} additional</Pill>}
                   <Pill tone={procedure.steps.some(step => step.image) ? 'accent' : 'muted'}>{procedure.steps.filter(step => step.image).length} screenshots</Pill>
                   <Pill>v{procedure.version || '—'}</Pill>
                 </div>
@@ -15385,7 +15501,7 @@ match /shared/whitelistSmsTestNumbers {
               </div>
               <footer className="mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600">
                 <span className="font-mono">Procedure · {procedureFileStem(procedure)}</span>
-                <span>{procedure.steps.length} steps · {procedure.steps.filter(step => step.image).length} screenshots</span>
+                <span>{procedureStepCount(procedure)} step{procedureStepCount(procedure) === 1 ? '' : 's'} · {procedureInfoCount(procedure)} additional · {procedure.steps.filter(step => step.image).length} screenshots</span>
               </footer>
             </main>
             {toast && (

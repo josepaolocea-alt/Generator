@@ -7763,7 +7763,7 @@ const DEFAULT_PROCEDURE_STATE = {
   purpose: "",
   prerequisites: "",
   steps: [
-    { id: "procedure_step_1", title: "First step", description: "", note: "", image: "" }
+    { id: "procedure_step_1", type: "step", title: "First step", description: "", note: "", image: "" }
   ]
 };
 function procedureNormalizeState(raw = {}) {
@@ -7782,6 +7782,7 @@ function procedureNormalizeState(raw = {}) {
     prerequisites: String(merged.prerequisites || ""),
     steps: sourceSteps.map((step, index) => ({
       id: String(step?.id || procedureId()),
+      type: step?.type === "info" ? "info" : "step",
       title: step?.title == null ? "" : String(step.title),
       description: String(step?.description || ""),
       note: String(step?.note || ""),
@@ -7794,7 +7795,7 @@ function procedureFreshState() {
     ...DEFAULT_PROCEDURE_STATE,
     lastReviewed: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
     steps: [
-      { id: procedureId(), title: "First step", description: "", note: "", image: "" }
+      { id: procedureId(), type: "step", title: "First step", description: "", note: "", image: "" }
     ]
   });
 }
@@ -7805,10 +7806,23 @@ function procedureFileStem(proc) {
 function procedureTextLines(value) {
   return String(value || "").replace(/\r\n/g, "\n").split("\n");
 }
-function procedureVisibleStepTitle(step, index) {
-  const title = String(step?.title || "").trim();
+function procedureIsInfo(entry) {
+  return entry?.type === "info";
+}
+function procedureStepNumber(entries, index) {
+  return entries.slice(0, index + 1).filter((entry) => !procedureIsInfo(entry)).length;
+}
+function procedureStepCount(proc) {
+  return proc.steps.filter((entry) => !procedureIsInfo(entry)).length;
+}
+function procedureInfoCount(proc) {
+  return proc.steps.filter(procedureIsInfo).length;
+}
+function procedureVisibleEntryTitle(entry, index, entries) {
+  const title = String(entry?.title || "").trim();
   if (!title) return "";
-  return new RegExp(`^step\\s*${index + 1}$`, "i").test(title) ? "" : title;
+  if (procedureIsInfo(entry)) return /^additional\s+information$/i.test(title) ? "" : title;
+  return new RegExp(`^step\\s*${procedureStepNumber(entries, index)}$`, "i").test(title) ? "" : title;
 }
 function procedureMoveStep(proc, index, delta) {
   const nextIndex = index + delta;
@@ -7854,12 +7868,13 @@ function procedureDocxManifest(proc) {
   const normalized = procedureNormalizeState(proc);
   const compact = {
     ...normalized,
-    imageStepIndexes: normalized.steps.flatMap((step, index) => step.image ? [index] : []),
-    steps: normalized.steps.map((step) => ({
-      id: step.id,
-      title: step.title,
-      description: step.description,
-      note: step.note
+    imageItemIndexes: normalized.steps.flatMap((entry, index) => entry.image ? [index] : []),
+    steps: normalized.steps.map((entry) => ({
+      id: entry.id,
+      type: entry.type,
+      title: entry.title,
+      description: entry.description,
+      note: entry.note
     }))
   };
   return PROCEDURE_DOCX_STATE_MARKER + procedureUtf8ToBase64(JSON.stringify(compact));
@@ -7874,7 +7889,7 @@ function procedureDecodeDocxManifest(rawText) {
     const decoded = JSON.parse(procedureBase64ToUtf8(encoded));
     return {
       ...procedureNormalizeState(decoded),
-      _imageStepIndexes: Array.isArray(decoded.imageStepIndexes) ? decoded.imageStepIndexes.filter((index) => Number.isInteger(index) && index >= 0) : []
+      _imageItemIndexes: Array.isArray(decoded.imageItemIndexes || decoded.imageStepIndexes) ? (decoded.imageItemIndexes || decoded.imageStepIndexes).filter((index) => Number.isInteger(index) && index >= 0) : []
     };
   } catch (error) {
     console.warn("Could not decode the embedded Procedure data", error);
@@ -7904,7 +7919,7 @@ function procedureLegacyDocxState(html, fileName) {
   });
   const titleNode = Array.from(root.querySelectorAll("h1,h2,h3,p")).find((node) => {
     const value = clean(node.textContent);
-    return value && !/^(Purpose|Prerequisites|STEP\s+\d+)/i.test(value) && !/^(Document ID|Owner|Department|Version|Last reviewed)\s*:/i.test(value);
+    return value && !/^(Purpose|Prerequisites|STEP\s+\d+|Additional Information)/i.test(value) && !/^(Document ID|Owner|Department|Version|Last reviewed)\s*:/i.test(value);
   });
   const fallbackTitle = String(fileName || "Imported Procedure").replace(/\.docx$/i, "") || "Imported Procedure";
   const imported = {
@@ -7946,9 +7961,16 @@ function procedureLegacyDocxState(html, fileName) {
       currentStep = null;
       return;
     }
+    const infoMatch = value.match(/^ADDITIONAL\s+INFORMATION(?:\s+(.*))?$/i);
+    if (infoMatch) {
+      currentStep = { id: procedureId(), type: "info", title: clean(infoMatch[1]), description: "", note: "", image: "" };
+      imported.steps.push(currentStep);
+      mode = "info";
+      return;
+    }
     const stepMatch = value.match(/^STEP\s+(\d+)(?:\s+(.*))?$/i);
     if (stepMatch) {
-      currentStep = { id: procedureId(), title: clean(stepMatch[2]), description: "", note: "", image: "" };
+      currentStep = { id: procedureId(), type: "step", title: clean(stepMatch[2]), description: "", note: "", image: "" };
       imported.steps.push(currentStep);
       mode = "step";
       return;
@@ -7972,7 +7994,7 @@ function procedureLegacyDocxState(html, fileName) {
     if (!description && !imported.purpose && !imported.prerequisites) {
       throw new Error("No editable procedure content could be recognized in this Word file.");
     }
-    imported.steps = [{ id: procedureId(), title: "", description, note: "", image: procedureImportedImages(root)[0] || "" }];
+    imported.steps = [{ id: procedureId(), type: "step", title: "", description, note: "", image: procedureImportedImages(root)[0] || "" }];
   } else if (unassignedLines.length && !imported.purpose) {
     imported.purpose = unassignedLines.join("\n");
   }
@@ -7995,13 +8017,13 @@ async function procedureReadDocxFile(file) {
   const root = procedureHtmlRoot(htmlResult.value);
   const images = procedureImportedImages(root);
   let imageIndex = 0;
-  const imageStepIndexes = new Set(embedded._imageStepIndexes || []);
+  const imageItemIndexes = new Set(embedded._imageItemIndexes || []);
   const steps = embedded.steps.map((step, stepIndex) => {
-    const hasImage = imageStepIndexes.has(stepIndex);
+    const hasImage = imageItemIndexes.has(stepIndex);
     const image = hasImage ? images[imageIndex++] || "" : "";
     return { ...step, image };
   });
-  const { _imageStepIndexes, ...editable } = embedded;
+  const { _imageItemIndexes, ...editable } = embedded;
   return { procedure: procedureNormalizeState({ ...editable, steps }), exact: true };
 }
 async function buildProcedureBlob(state, options = {}) {
@@ -8057,7 +8079,7 @@ async function buildProcedureBlob(state, options = {}) {
   }
   row += 1;
   const headerRow = ws.getRow(row);
-  ["Step", "Title", "Instructions", "Notes / tips", "Screenshot"].forEach((value, index) => {
+  ["Item", "Title", "Instructions", "Notes / tips", "Screenshot"].forEach((value, index) => {
     const cell = headerRow.getCell(index + 1);
     cell.value = value;
     cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -8066,7 +8088,13 @@ async function buildProcedureBlob(state, options = {}) {
   });
   proc.steps.forEach((step, index) => {
     const dataRow = ws.getRow(row + index + 1);
-    dataRow.values = [index + 1, step.title, step.description, step.note, step.image ? "Attached" : ""];
+    dataRow.values = [
+      procedureIsInfo(step) ? "Additional information" : `Step ${procedureStepNumber(proc.steps, index)}`,
+      step.title,
+      step.description,
+      step.note,
+      step.image ? "Attached" : ""
+    ];
     dataRow.alignment = { wrapText: true, vertical: "top" };
     dataRow.height = step.image ? 112 : Math.max(34, 16 * Math.max(2, procedureTextLines(step.description).length, procedureTextLines(step.note).length));
     for (let col = 1; col <= 5; col++) {
@@ -8157,12 +8185,15 @@ async function generateProcedureDocx(state) {
   }
   for (let index = 0; index < proc.steps.length; index++) {
     const step = proc.steps[index];
-    const visibleTitle = procedureVisibleStepTitle(step, index);
+    const isInfo = procedureIsInfo(step);
+    const stepNumber = procedureStepNumber(proc.steps, index);
+    const visibleTitle = procedureVisibleEntryTitle(step, index, proc.steps);
+    const headingLabel = isInfo ? "ADDITIONAL INFORMATION" : `STEP ${stepNumber}`;
     children.push(new D.Paragraph({
       spacing: { before: 360, after: 120 },
       keepNext: true,
       children: [
-        text(`STEP ${index + 1}`, { bold: true, color: "2563EB", size: 18 }),
+        text(headingLabel, { bold: true, color: "2563EB", size: 18 }),
         ...visibleTitle ? [text(`  ${visibleTitle}`, { bold: true, size: 28 })] : []
       ]
     }));
@@ -8176,7 +8207,11 @@ async function generateProcedureDocx(state) {
           type: rcaImageType(data.mime),
           data: data.bytes,
           transformation: { width: Math.max(1, Math.round(natural.width * scale)), height: Math.max(1, Math.round(natural.height * scale)) },
-          altText: { title: `Step ${index + 1} screenshot`, description: step.title || "", name: `step-${index + 1}` }
+          altText: {
+            title: isInfo ? "Additional information screenshot" : `Step ${stepNumber} screenshot`,
+            description: step.title || "",
+            name: isInfo ? `additional-information-${index + 1}` : `step-${stepNumber}`
+          }
         });
         if (run) children.push(new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { before: 100, after: 120 }, children: [run] }));
       }
@@ -8229,7 +8264,7 @@ function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, o
     theme === "dark" ? /* @__PURE__ */ React.createElement(IconSun, null) : /* @__PURE__ */ React.createElement(IconMoon, null),
     " ",
     theme === "dark" ? "Light" : "Dark"
-  )), /* @__PURE__ */ React.createElement("h1", { className: "text-[17px] font-bold tracking-tight leading-tight mt-2" }, "Procedure Scribe"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500 mt-1" }, "Build visual, step-by-step guides"), /* @__PURE__ */ React.createElement(AccountChip, { sync })), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto space-y-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Document"), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-neutral-200 truncate" }, proc.title || "Untitled Procedure"), /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, proc.steps.length, " step", proc.steps.length === 1 ? "" : "s", " · Version ", proc.version || "—")), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("h1", { className: "text-[17px] font-bold tracking-tight leading-tight mt-2" }, "Procedure Scribe"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500 mt-1" }, "Build visual, step-by-step guides"), /* @__PURE__ */ React.createElement(AccountChip, { sync })), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto space-y-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Document"), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950 p-3 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-xs text-neutral-200 truncate" }, proc.title || "Untitled Procedure"), /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600" }, procedureStepCount(proc), " step", procedureStepCount(proc) === 1 ? "" : "s", procedureInfoCount(proc) > 0 ? ` · ${procedureInfoCount(proc)} additional` : "", " · Version ", proc.version || "—")), /* @__PURE__ */ React.createElement(
     "input",
     {
       ref: importRef,
@@ -8479,8 +8514,10 @@ function ProcedureImageEditor({ image, onCancel, onSave }) {
     }
   ) : /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-sm text-neutral-400" }, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Loading image")), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3 border-t border-neutral-800 px-4 py-3 sm:px-5" }, /* @__PURE__ */ React.createElement("div", { className: "text-[11px] text-neutral-500" }, imageInfo ? `${imageInfo.width.toLocaleString()} × ${imageInfo.height.toLocaleString()} px · ` : "", actions.length, " edit", actions.length === 1 ? "" : "s", tool === "text" ? " · Enter text, then click where it should appear." : " · Click and drag on the image.", error && /* @__PURE__ */ React.createElement("span", { className: "ml-2 text-red-300" }, error)), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onCancel, disabled: saving }, "Cancel"), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "md", onClick: saveImage, disabled: !imageInfo || saving }, saving ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Saving") : "Save changes")))));
 }
-function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, onImageError, onEditImage }) {
+function ProcedureStepEditor({ step, index, stepNumber, total, onChange, onMove, onDelete, onImageError, onEditImage }) {
   const inputRef = useRef(null);
+  const isInfo = procedureIsInfo(step);
+  const itemLabel2 = isInfo ? "Additional information" : `Step ${stepNumber}`;
   const pickImage = async (file) => {
     if (!file) return;
     try {
@@ -8498,12 +8535,12 @@ function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, o
     event.preventDefault();
     pickImage(file);
   };
-  return /* @__PURE__ */ React.createElement("div", { onPaste: pasteImage, tabIndex: -1, "aria-label": `Procedure step ${index + 1}. Press Control V to paste a screenshot.` }, /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-start gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-sm font-bold text-blue-300" }, index + 1), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-[240px] space-y-3" }, /* @__PURE__ */ React.createElement(Input, { value: step.title, onChange: (e) => onChange({ title: e.target.value }), placeholder: `Step ${index + 1} title` }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { onPaste: pasteImage, tabIndex: -1, "aria-label": `${itemLabel2}. Press Control V to paste a screenshot.` }, /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-start gap-3" }, /* @__PURE__ */ React.createElement("div", { className: `flex h-8 min-w-8 shrink-0 items-center justify-center rounded-full px-2 text-sm font-bold ${isInfo ? "bg-amber-500/15 text-amber-300" : "bg-blue-500/15 text-blue-300"}` }, isInfo ? "i" : stepNumber), /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-w-[240px] space-y-3" }, /* @__PURE__ */ React.createElement("div", { className: `text-[10px] font-bold uppercase tracking-[0.14em] ${isInfo ? "text-amber-400" : "text-blue-400"}` }, itemLabel2), /* @__PURE__ */ React.createElement(Input, { value: step.title, onChange: (e) => onChange({ title: e.target.value }), placeholder: isInfo ? "Additional information title (optional)" : `Step ${stepNumber} title` }), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       value: step.description,
       onChange: (e) => onChange({ description: e.target.value }),
-      placeholder: "Describe exactly what the reader should do…",
+      placeholder: isInfo ? "Add context, reference details, or other supporting information…" : "Describe exactly what the reader should do…",
       className: "w-full min-h-[105px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60"
     }
   ), /* @__PURE__ */ React.createElement(
@@ -8517,7 +8554,7 @@ function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, o
   ), /* @__PURE__ */ React.createElement("input", { ref: inputRef, type: "file", accept: "image/*", className: "hidden", onChange: (e) => {
     pickImage(e.target.files?.[0]);
     e.target.value = "";
-  } }), step.image ? /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-800 bg-neutral-950 p-2" }, /* @__PURE__ */ React.createElement("img", { src: step.image, alt: `Step ${index + 1}`, className: "max-h-[360px] w-full rounded object-contain bg-white" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => inputRef.current?.click() }, /* @__PURE__ */ React.createElement(IconUpload, null), " Replace"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: onEditImage }, "Edit"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onChange({ image: "" }) }, /* @__PURE__ */ React.createElement(IconX, null), " Remove"), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, "or press Ctrl+V in this step"))) : /* @__PURE__ */ React.createElement(
+  } }), step.image ? /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-800 bg-neutral-950 p-2" }, /* @__PURE__ */ React.createElement("img", { src: step.image, alt: `${itemLabel2} screenshot`, className: "max-h-[360px] w-full rounded object-contain bg-white" }), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => inputRef.current?.click() }, /* @__PURE__ */ React.createElement(IconUpload, null), " Replace"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: onEditImage }, "Edit"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onChange({ image: "" }) }, /* @__PURE__ */ React.createElement(IconX, null), " Remove"), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, "or press Ctrl+V in this step"))) : /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -8525,12 +8562,15 @@ function ProcedureStepEditor({ step, index, total, onChange, onMove, onDelete, o
       className: "w-full rounded-lg border border-dashed border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-xs text-neutral-500 hover:border-blue-500/50 hover:text-blue-300 transition-colors"
     },
     /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Paste with Ctrl+V or upload screenshot")
-  )), /* @__PURE__ */ React.createElement("div", { className: "flex shrink-0 items-center gap-1" }, /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(-1), disabled: index === 0, title: "Move up", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconUp, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(1), disabled: index === total - 1, title: "Move down", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconDown, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: onDelete, disabled: total === 1, title: "Delete step", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconX, null))))));
+  )), /* @__PURE__ */ React.createElement("div", { className: "flex shrink-0 items-center gap-1" }, /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(-1), disabled: index === 0, title: "Move up", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconUp, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onMove(1), disabled: index === total - 1, title: "Move down", className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-neutral-100 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconDown, null)), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: onDelete, disabled: total === 1, title: `Delete ${itemLabel2.toLowerCase()}`, className: "rounded border border-neutral-800 p-2 text-neutral-500 hover:text-red-300 disabled:opacity-25" }, /* @__PURE__ */ React.createElement(IconX, null))))));
 }
 function ProcedureEditor({ proc, onChange, onImageError }) {
   const [editingStepId, setEditingStepId] = useState(null);
   const updateStep = (id, patch) => onChange({ ...proc, steps: proc.steps.map((step) => step.id === id ? { ...step, ...patch } : step) });
-  const addStep = () => onChange({ ...proc, steps: [...proc.steps, { id: procedureId(), title: "", description: "", note: "", image: "" }] });
+  const addEntry = (type) => onChange({
+    ...proc,
+    steps: [...proc.steps, { id: procedureId(), type, title: "", description: "", note: "", image: "" }]
+  });
   const editingStep = proc.steps.find((step) => step.id === editingStepId && step.image);
   return /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(Card, { className: "p-4 space-y-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Used on the cover and in file names" }, "Procedure details"), /* @__PURE__ */ React.createElement("div", { className: "grid gap-3 sm:grid-cols-2" }, /* @__PURE__ */ React.createElement("div", { className: "sm:col-span-2" }, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Title"), /* @__PURE__ */ React.createElement(Input, { value: proc.title, onChange: (e) => onChange({ ...proc, title: e.target.value }), placeholder: "Procedure title" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Document ID"), /* @__PURE__ */ React.createElement(Input, { value: proc.documentId, onChange: (e) => onChange({ ...proc, documentId: e.target.value }), placeholder: "SOP-001" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Version"), /* @__PURE__ */ React.createElement(Input, { value: proc.version, onChange: (e) => onChange({ ...proc, version: e.target.value }), placeholder: "1.0" }), /* @__PURE__ */ React.createElement("label", { className: "mt-2 flex items-center gap-2 text-[11px] text-neutral-500" }, /* @__PURE__ */ React.createElement(
     "input",
@@ -8540,12 +8580,13 @@ function ProcedureEditor({ proc, onChange, onImageError }) {
       onChange: (e) => onChange({ ...proc, includeVersionInOutput: e.target.checked }),
       className: "h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500"
     }
-  ), "Include version in generated Word file")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Owner"), /* @__PURE__ */ React.createElement(Input, { value: proc.owner, onChange: (e) => onChange({ ...proc, owner: e.target.value }), placeholder: "Process owner" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Department"), /* @__PURE__ */ React.createElement(Input, { value: proc.department, onChange: (e) => onChange({ ...proc, department: e.target.value }), placeholder: "Department / team" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Last reviewed"), /* @__PURE__ */ React.createElement(Input, { type: "date", value: proc.lastReviewed, onChange: (e) => onChange({ ...proc, lastReviewed: e.target.value }) }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Purpose"), /* @__PURE__ */ React.createElement("textarea", { value: proc.purpose, onChange: (e) => onChange({ ...proc, purpose: e.target.value }), placeholder: "What this procedure accomplishes…", className: "w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Prerequisites"), /* @__PURE__ */ React.createElement("textarea", { value: proc.prerequisites, onChange: (e) => onChange({ ...proc, prerequisites: e.target.value }), placeholder: "One requirement per line…", className: "w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" }))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "screenshots are optional" }, "Steps"), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: addStep }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add step")), proc.steps.map((step, index) => /* @__PURE__ */ React.createElement(
+  ), "Include version in generated Word file")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Owner"), /* @__PURE__ */ React.createElement(Input, { value: proc.owner, onChange: (e) => onChange({ ...proc, owner: e.target.value }), placeholder: "Process owner" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Department"), /* @__PURE__ */ React.createElement(Input, { value: proc.department, onChange: (e) => onChange({ ...proc, department: e.target.value }), placeholder: "Department / team" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Last reviewed"), /* @__PURE__ */ React.createElement(Input, { type: "date", value: proc.lastReviewed, onChange: (e) => onChange({ ...proc, lastReviewed: e.target.value }) }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Purpose"), /* @__PURE__ */ React.createElement("textarea", { value: proc.purpose, onChange: (e) => onChange({ ...proc, purpose: e.target.value }), placeholder: "What this procedure accomplishes…", className: "w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Prerequisites"), /* @__PURE__ */ React.createElement("textarea", { value: proc.prerequisites, onChange: (e) => onChange({ ...proc, prerequisites: e.target.value }), placeholder: "One requirement per line…", className: "w-full min-h-[76px] resize-y rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-700 outline-none focus:border-blue-500/60" }))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Add numbered actions or unnumbered supporting details" }, "Procedure content"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: () => addEntry("step") }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add step"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => addEntry("info") }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add additional information"))), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-800 bg-neutral-950/50 px-3 py-2 text-[11px] leading-relaxed text-neutral-500" }, /* @__PURE__ */ React.createElement("strong", { className: "text-neutral-300" }, "Quick guide:"), " use a ", /* @__PURE__ */ React.createElement("span", { className: "text-blue-300" }, "Step"), " when the reader must perform an action. Use ", /* @__PURE__ */ React.createElement("span", { className: "text-amber-300" }, "Additional Information"), " for context, examples, references, or reminders that should not change the step numbering."), proc.steps.map((step, index) => /* @__PURE__ */ React.createElement(
     ProcedureStepEditor,
     {
       key: step.id,
       step,
       index,
+      stepNumber: procedureStepNumber(proc.steps, index),
       total: proc.steps.length,
       onChange: (patch) => updateStep(step.id, patch),
       onMove: (delta) => onChange(procedureMoveStep(proc, index, delta)),
@@ -8553,7 +8594,7 @@ function ProcedureEditor({ proc, onChange, onImageError }) {
       onImageError,
       onEditImage: () => setEditingStepId(step.id)
     }
-  )), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: addStep, className: "w-full" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add another step"), editingStep && /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { className: "grid gap-2 sm:grid-cols-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => addEntry("step"), className: "w-full" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add another step"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => addEntry("info"), className: "w-full" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add additional information")), editingStep && /* @__PURE__ */ React.createElement(
     ProcedureImageEditor,
     {
       image: editingStep.image,
@@ -8566,7 +8607,47 @@ function ProcedureEditor({ proc, onChange, onImageError }) {
   ));
 }
 function ProcedurePreview({ proc }) {
-  return /* @__PURE__ */ React.createElement("div", { "data-procedure-preview-root": true, style: { colorScheme: "light" }, className: "rounded-lg border border-[#d1d5db] bg-[#ffffff] p-8 text-[#111827] shadow-sm" }, /* @__PURE__ */ React.createElement("div", { className: "border-b-4 border-blue-600 pb-5" }, /* @__PURE__ */ React.createElement("h1", { className: "mt-2 text-3xl font-bold leading-tight" }, proc.title || "Untitled Procedure"), /* @__PURE__ */ React.createElement("div", { className: "mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-[#4b5563]" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Document ID:"), " ", proc.documentId || "—"), proc.includeVersionInOutput && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Version:"), " ", proc.version || "—"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Owner:"), " ", proc.owner || "—"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Department:"), " ", proc.department || "—"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Last reviewed:"), " ", proc.lastReviewed || "—"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Steps:"), " ", proc.steps.length))), proc.purpose.trim() && /* @__PURE__ */ React.createElement("section", { className: "mt-6" }, /* @__PURE__ */ React.createElement("h2", { className: "text-sm font-bold uppercase tracking-wide text-[#111827]" }, "Purpose"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 whitespace-pre-wrap text-sm leading-6 text-[#374151]" }, proc.purpose)), proc.prerequisites.trim() && /* @__PURE__ */ React.createElement("section", { className: "mt-6" }, /* @__PURE__ */ React.createElement("h2", { className: "text-sm font-bold uppercase tracking-wide text-[#111827]" }, "Prerequisites"), /* @__PURE__ */ React.createElement("ul", { className: "mt-2 list-disc space-y-1 pl-5 text-sm text-[#374151]" }, procedureTextLines(proc.prerequisites).filter(Boolean).map((line, i) => /* @__PURE__ */ React.createElement("li", { key: i }, line.replace(/^\s*[-•]\s*/, ""))))), /* @__PURE__ */ React.createElement("div", { className: "mt-8 space-y-7" }, proc.steps.map((step, index) => /* @__PURE__ */ React.createElement("section", { key: step.id, "data-procedure-step": true, className: "break-inside-avoid rounded-lg border border-[#e5e7eb] bg-[#ffffff] p-5 text-[#111827]" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-start gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#2563eb] text-sm font-bold text-[#ffffff]" }, index + 1), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "text-[9px] font-bold uppercase tracking-[0.18em] text-[#2563eb]" }, "Step ", index + 1), procedureVisibleStepTitle(step, index) && /* @__PURE__ */ React.createElement("h2", { className: "text-lg font-bold leading-tight text-[#111827]" }, procedureVisibleStepTitle(step, index)))), step.description && /* @__PURE__ */ React.createElement("p", { className: "mt-4 whitespace-pre-wrap text-sm leading-6 text-[#374151]" }, step.description), step.image && /* @__PURE__ */ React.createElement("img", { src: step.image, alt: `Step ${index + 1}`, className: "mt-4 max-h-[520px] w-full rounded border border-[#e5e7eb] bg-[#ffffff] object-contain" }), step.note && /* @__PURE__ */ React.createElement("div", { className: "mt-4 rounded-md border-l-4 border-[#3b82f6] bg-[#eff6ff] px-4 py-3 text-xs leading-5 text-[#172554]" }, /* @__PURE__ */ React.createElement("strong", null, "Note:"), " ", step.note)))));
+  const metadata = [
+    ["Document ID", proc.documentId],
+    ["Owner", proc.owner],
+    ["Department", proc.department],
+    ["Last reviewed", proc.lastReviewed],
+    ...proc.includeVersionInOutput ? [["Version", proc.version], ["", ""]] : []
+  ];
+  return /* @__PURE__ */ React.createElement("div", { style: { containerType: "inline-size" }, className: "mx-auto w-full max-w-[816px]" }, /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      "data-procedure-preview-root": true,
+      style: {
+        colorScheme: "light",
+        minHeight: "129.41cqw",
+        padding: "7.35cqw",
+        fontFamily: "Aptos, Arial, sans-serif",
+        fontSize: "clamp(9px, 1.8cqw, 14.67px)"
+      },
+      className: "w-full border border-[#d1d5db] bg-[#ffffff] text-[#000000] shadow-md"
+    },
+    /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "clamp(16px, 2.94cqw, 24px)", marginBottom: "0.82cqw" }, className: "text-center font-bold leading-tight" }, proc.title || "Untitled Procedure"),
+    /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 border-l border-t border-[#d1d5db]" }, metadata.map(([label, value], index) => /* @__PURE__ */ React.createElement("div", { key: `${label}-${index}`, style: { padding: "1.22cqw 1.47cqw" }, className: "min-w-0 border-b border-r border-[#d1d5db] leading-snug" }, label ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("strong", null, label, ": "), value || "—") : /* @__PURE__ */ React.createElement("span", null, " ")))),
+    proc.purpose.trim() && /* @__PURE__ */ React.createElement("section", { style: { marginTop: "3.92cqw" } }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "clamp(11px, 2.12cqw, 17.33px)", marginBottom: "1.22cqw" }, className: "font-bold leading-tight" }, "Purpose"), procedureTextLines(proc.purpose).map((line, index) => /* @__PURE__ */ React.createElement("p", { key: index, style: { marginBottom: "0.61cqw" }, className: "whitespace-pre-wrap leading-normal" }, line || " "))),
+    proc.prerequisites.trim() && /* @__PURE__ */ React.createElement("section", { style: { marginTop: "3.18cqw" } }, /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "clamp(11px, 2.12cqw, 17.33px)", marginBottom: "1.22cqw" }, className: "font-bold leading-tight" }, "Prerequisites"), /* @__PURE__ */ React.createElement("ul", { style: { paddingLeft: "3.2cqw" }, className: "list-disc" }, procedureTextLines(proc.prerequisites).filter(Boolean).map((line, index) => /* @__PURE__ */ React.createElement("li", { key: index, style: { marginBottom: "0.49cqw" }, className: "leading-normal" }, line.replace(/^\s*[-•]\s*/, ""))))),
+    /* @__PURE__ */ React.createElement("div", null, proc.steps.map((step, index) => {
+      const isInfo = procedureIsInfo(step);
+      const stepNumber = procedureStepNumber(proc.steps, index);
+      const visibleTitle = procedureVisibleEntryTitle(step, index, proc.steps);
+      const headingLabel = isInfo ? "ADDITIONAL INFORMATION" : `STEP ${stepNumber}`;
+      const imageAlt = isInfo ? "Additional information screenshot" : `Step ${stepNumber} screenshot`;
+      return /* @__PURE__ */ React.createElement("section", { key: step.id, "data-procedure-step": true, style: { marginTop: "4.41cqw" }, className: "break-inside-avoid text-[#000000]" }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "1.47cqw" }, className: "flex flex-wrap items-baseline gap-x-[1.25cqw] leading-tight" }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "clamp(8px, 1.47cqw, 12px)" }, className: "font-bold text-[#2563eb]" }, headingLabel), visibleTitle && /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "clamp(12px, 2.29cqw, 18.67px)" }, className: "font-bold" }, visibleTitle)), procedureTextLines(step.description).map((line, lineIndex) => /* @__PURE__ */ React.createElement("p", { key: lineIndex, style: { marginBottom: "0.61cqw" }, className: "whitespace-pre-wrap leading-normal" }, line || " ")), step.image && /* @__PURE__ */ React.createElement(
+        "img",
+        {
+          src: step.image,
+          alt: imageAlt,
+          style: { margin: "1.22cqw auto 1.47cqw", maxWidth: "89.3%", maxHeight: "41.67cqw" },
+          className: "block h-auto object-contain"
+        }
+      ), step.note.trim() && /* @__PURE__ */ React.createElement("div", { style: { marginTop: "0.5cqw", padding: "1.22cqw 1.72cqw" }, className: "border border-[#d1d5db] bg-[#eff6ff] leading-normal text-[#000000]" }, /* @__PURE__ */ React.createElement("strong", { className: "text-[#1d4ed8]" }, "Note: "), /* @__PURE__ */ React.createElement("span", { className: "whitespace-pre-wrap" }, step.note)));
+    }))
+  ));
 }
 const rcaId = (prefix = "rca") => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 const RCA_DEFAULT_LOGO_DATA_URL = "data:image/png;base64,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";
@@ -12764,7 +12845,7 @@ function App() {
   const onClearProcedure = async () => {
     const ok = await confirmDialog({
       title: "Clear this procedure?",
-      message: "This will remove all procedure details, steps, notes, and screenshots and return the editor to a fresh draft. This action cannot be undone.",
+      message: "This will remove all procedure details, steps, additional information, notes, and screenshots and return the editor to a fresh draft. This action cannot be undone.",
       confirmText: "Clear procedure",
       tone: "danger"
     });
@@ -12927,7 +13008,7 @@ function App() {
         onImport: onImportProcedure,
         onClear: onClearProcedure
       }
-    ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-amber-400 mb-1" }, "Super admin module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Procedure · ", procedure.title || "Untitled Procedure")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, procedure.steps.length, " steps"), /* @__PURE__ */ React.createElement(Pill, { tone: procedure.steps.some((step) => step.image) ? "accent" : "muted" }, procedure.steps.filter((step) => step.image).length, " screenshots"), /* @__PURE__ */ React.createElement(Pill, null, "v", procedure.version || "—")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1800px]" }, /* @__PURE__ */ React.createElement("div", { className: "grid gap-6 xl:grid-cols-[minmax(520px,1fr)_minmax(440px,0.9fr)]" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement(ProcedureEditor, { proc: procedure, onChange: setProcedure, onImageError: (message) => showToast("err", message) })), /* @__PURE__ */ React.createElement("div", { className: "min-w-0 xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Document preview"), /* @__PURE__ */ React.createElement(ProcedurePreview, { proc: procedure })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "Procedure · ", procedureFileStem(procedure)), /* @__PURE__ */ React.createElement("span", null, procedure.steps.length, " steps · ", procedure.steps.filter((step) => step.image).length, " screenshots"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-amber-400 mb-1" }, "Super admin module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Procedure · ", procedure.title || "Untitled Procedure")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, procedureStepCount(procedure), " step", procedureStepCount(procedure) === 1 ? "" : "s"), procedureInfoCount(procedure) > 0 && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, procedureInfoCount(procedure), " additional"), /* @__PURE__ */ React.createElement(Pill, { tone: procedure.steps.some((step) => step.image) ? "accent" : "muted" }, procedure.steps.filter((step) => step.image).length, " screenshots"), /* @__PURE__ */ React.createElement(Pill, null, "v", procedure.version || "—")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1800px]" }, /* @__PURE__ */ React.createElement("div", { className: "grid gap-6 xl:grid-cols-[minmax(520px,1fr)_minmax(440px,0.9fr)]" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement(ProcedureEditor, { proc: procedure, onChange: setProcedure, onImageError: (message) => showToast("err", message) })), /* @__PURE__ */ React.createElement("div", { className: "min-w-0 xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Document preview"), /* @__PURE__ */ React.createElement(ProcedurePreview, { proc: procedure })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "Procedure · ", procedureFileStem(procedure)), /* @__PURE__ */ React.createElement("span", null, procedureStepCount(procedure), " step", procedureStepCount(procedure) === 1 ? "" : "s", " · ", procedureInfoCount(procedure), " additional · ", procedure.steps.filter((step) => step.image).length, " screenshots"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isRecorder) {
     return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(
