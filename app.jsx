@@ -4167,19 +4167,33 @@ https://bit.ly/4vrcu64`;
               </Btn>
               {url && checkedTitles.length > 0 && (
                 <>
-                  <Btn variant="accent" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, fastValues: true })} disabled={busy} className="w-full">
-                    {busy ? 'Syncing…' : `Fast update values (${checkedTitles.length})`}
+                  <Btn variant="accent" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true })} disabled={busy} className="w-full">
+                    {busy ? 'Syncing…' : `Apply app changes — Exact (${checkedTitles.length})`}
                   </Btn>
-                  <Btn variant="danger" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true })} disabled={busy} className="w-full">
-                    {busy ? 'Syncing…' : `Exact rebuild (${checkedTitles.length})`}
+                  <Btn variant="ghost" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, fastValues: true })} disabled={busy} className="w-full">
+                    {busy ? 'Syncing…' : `Quick refresh — Values only (${checkedTitles.length})`}
                   </Btn>
                 </>
               )}
-              {url && <p className="text-[10px] text-neutral-600 leading-relaxed">
-                <span className="text-neutral-400">Add</span> {selectedTabLabel ? 'uses the selected row.' : 'copies new tabs without replacing existing ones.'}{' '}
-                <span className="text-neutral-400">Fast update</span> refreshes values/formulas and keeps current formatting.{' '}
-                <span className="text-neutral-400">Exact rebuild</span> also replaces layout and formatting; use it after changing colors, rules, widths, merges, or adding rows/columns.
-              </p>}
+              {url && (
+                <details className="rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 text-[10px]" open>
+                  <summary className="cursor-pointer font-medium text-neutral-300 select-none">Which sync should I use?</summary>
+                  <div className="mt-2 space-y-2 leading-relaxed text-neutral-500">
+                    <div>
+                      <span className="font-medium text-blue-300">Apply app changes — Exact</span>
+                      <div>Choose this after adding, removing, or renaming clients; creating or editing rules; or changing columns, metrics, shifts, colors, widths, merged cells, layout, or other setup.</div>
+                    </div>
+                    <div>
+                      <span className="font-medium text-neutral-300">Quick refresh — Values only</span>
+                      <div>Choose this only when the sheet setup is unchanged and you only need to refresh existing values or formulas. It keeps the current Google Sheet formatting.</div>
+                    </div>
+                    <div className="rounded border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-amber-300/80">
+                      Added a client or changed a rule? Use <span className="font-semibold">Exact</span>. If unsure, use Exact.
+                    </div>
+                    <div><span className="text-neutral-400">Add selected/new tabs</span> is only for a tab that does not exist in the destination yet.</div>
+                  </div>
+                </details>
+              )}
               <div className="flex items-center justify-between text-[10px]">
                 {url
                   ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">Open sheet ↗</a>
@@ -14723,11 +14737,11 @@ match /shared/whitelistSmsTestNumbers {
             return;
           }
           const ok = await confirmDialog({
-            title: `${fastValues ? 'Fast update' : 'Exact rebuild'} ${checkedCount} checked sheet${checkedCount === 1 ? '' : 's'}?`,
+            title: `${fastValues ? 'Quick refresh' : 'Apply app changes'} to ${checkedCount} checked sheet${checkedCount === 1 ? '' : 's'}?`,
             message: fastValues
-              ? `Values and formulas in the ${checkedCount} matching Google Sheet tab${checkedCount === 1 ? '' : 's'} will be refreshed in place. Existing formatting is preserved; unchecked and unrelated tabs remain unchanged.`
-              : `The ${checkedCount} checked sheet${checkedCount === 1 ? '' : 's'} will replace matching tabs in Google Sheets, including formatting and layout. Unchecked sheets and all unrelated tabs will remain unchanged.`,
-            confirmText: fastValues ? 'Fast update values' : 'Exact rebuild',
+              ? `Use this only when you did not change clients, rules, columns, layout, or formatting. Values and formulas will refresh in place while the current Google Sheet formatting is preserved.`
+              : `This applies client, rule, layout, and formatting changes by exactly rebuilding the ${checkedCount} matching Google Sheet tab${checkedCount === 1 ? '' : 's'}. Unchecked and unrelated tabs remain unchanged.`,
+            confirmText: fastValues ? 'Quick refresh' : 'Apply exact changes',
             tone: fastValues ? 'default' : 'danger',
           });
           if (!ok) return;
