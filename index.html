@@ -262,8 +262,50 @@
        below flips it back to light. */
     html { color-scheme: dark; }
 
+    /* Premium select system: the trigger and menu use layered surfaces instead
+       of native browser chrome so every dropdown feels consistent. */
+    .premium-select-trigger {
+      min-height: 38px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0) 55%),
+        #09090b;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), 0 1px 2px rgba(0,0,0,0.22);
+    }
+    .premium-select-trigger:hover {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.008) 60%),
+        #101014;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 3px 10px rgba(0,0,0,0.18);
+    }
+    .premium-select-menu {
+      animation: premiumSelectIn 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      background:
+        radial-gradient(circle at 14% -20%, rgba(59,130,246,0.12), transparent 45%),
+        linear-gradient(180deg, rgba(255,255,255,0.035), transparent 90px),
+        #19191d;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.46), 0 5px 18px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.045);
+      backdrop-filter: blur(18px);
+    }
+    .premium-select-options { scrollbar-gutter: stable; }
+    @keyframes premiumSelectIn {
+      from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
     /* ===== Light mode overrides ===== */
     html.light { color-scheme: light; }
+    html.light .premium-select-trigger {
+      background: linear-gradient(180deg, #ffffff, #fafafa);
+      box-shadow: inset 0 1px 0 #ffffff, 0 1px 3px rgba(24,24,27,0.08);
+    }
+    html.light .premium-select-trigger:hover {
+      background: linear-gradient(180deg, #ffffff, #f4f4f5);
+      box-shadow: inset 0 1px 0 #ffffff, 0 4px 12px rgba(24,24,27,0.08);
+    }
+    html.light .premium-select-menu {
+      background: radial-gradient(circle at 14% -20%, rgba(59,130,246,0.10), transparent 45%), #ffffff;
+      box-shadow: 0 24px 64px rgba(24,24,27,0.15), 0 5px 18px rgba(24,24,27,0.10), inset 0 1px 0 #ffffff;
+    }
     html.light body { background: #f6f6f7; color: #18181b; }
     html.light ::-webkit-scrollbar-thumb { background: #d4d4d8; }
     html.light ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
@@ -3941,8 +3983,211 @@ function ClearableInput({ value, onClear, clearTitle = "Clear input", className 
     /* @__PURE__ */ React.createElement(IconX, null)
   ));
 }
-function Select({ children, className = "", ...rest }) {
-  return /* @__PURE__ */ React.createElement("select", { ...rest, className: `w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}` }, children);
+function Select({ children, className = "", value, onChange, disabled = false, title, ...rest }) {
+  const [open, setOpen] = useState(false);
+  const [popupPos, setPopupPos] = useState(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const triggerRef = useRef(null);
+  const popupRef = useRef(null);
+  const optionRefs = useRef([]);
+  const typeaheadRef = useRef({ text: "", timer: null });
+  const listboxIdRef = useRef(`premium-select-${Math.random().toString(36).slice(2)}`);
+  const optionText = useCallback((node) => {
+    if (node == null || typeof node === "boolean") return "";
+    if (typeof node === "string" || typeof node === "number") return String(node);
+    if (Array.isArray(node)) return node.map(optionText).join("");
+    if (React.isValidElement(node)) return optionText(node.props.children);
+    return "";
+  }, []);
+  const options = useMemo(() => {
+    const flattened = [];
+    const collect = (nodes) => React.Children.forEach(nodes, (child) => {
+      if (!React.isValidElement(child)) return;
+      if (child.type === React.Fragment) {
+        collect(child.props.children);
+        return;
+      }
+      if (child.type === "optgroup") {
+        collect(child.props.children);
+        return;
+      }
+      if (child.type !== "option") return;
+      const label = optionText(child.props.children);
+      flattened.push({
+        value: String(child.props.value ?? label),
+        label,
+        disabled: !!child.props.disabled,
+        style: child.props.style
+      });
+    });
+    collect(children);
+    return flattened;
+  }, [children, optionText]);
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === String(value ?? "")));
+  const selectedOption = options.find((option) => option.value === String(value ?? "")) || options[0];
+  const computePopupPos = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const rect = trigger.getBoundingClientRect();
+    const margin = 10;
+    const gap = 6;
+    const width = Math.max(220, rect.width);
+    const estimatedHeight = Math.min(314, 49 + options.length * 38);
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    const above = spaceBelow < Math.min(estimatedHeight, 220) && spaceAbove > spaceBelow;
+    const availableHeight = Math.max(120, (above ? spaceAbove : spaceBelow) - gap);
+    let left = rect.left;
+    if (left + width > window.innerWidth - margin) left = window.innerWidth - width - margin;
+    left = Math.max(margin, left);
+    return {
+      top: above ? Math.max(margin, rect.top - Math.min(estimatedHeight, availableHeight) - gap) : rect.bottom + gap,
+      left,
+      width: Math.min(width, window.innerWidth - margin * 2),
+      maxHeight: Math.min(314, availableHeight),
+      above
+    };
+  }, [options.length]);
+  const openMenu = useCallback((preferredIndex = selectedIndex) => {
+    if (disabled || !options.length) return;
+    const nextIndex = options[preferredIndex]?.disabled ? options.findIndex((option) => !option.disabled) : preferredIndex;
+    setActiveIndex(Math.max(0, nextIndex));
+    setPopupPos(computePopupPos());
+    setOpen(true);
+  }, [computePopupPos, disabled, options, selectedIndex]);
+  const chooseOption = useCallback((option) => {
+    if (!option || option.disabled) return;
+    const syntheticEvent = {
+      target: { value: option.value },
+      currentTarget: { value: option.value }
+    };
+    onChange?.(syntheticEvent);
+    setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }, [onChange]);
+  const moveActive = useCallback((direction) => {
+    if (!options.length) return;
+    setActiveIndex((current) => {
+      let next = current;
+      for (let i = 0; i < options.length; i += 1) {
+        next = (next + direction + options.length) % options.length;
+        if (!options[next].disabled) return next;
+      }
+      return current;
+    });
+  }, [options]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event) => {
+      if (!triggerRef.current?.contains(event.target) && !popupRef.current?.contains(event.target)) setOpen(false);
+    };
+    const reposition = () => setPopupPos(computePopupPos());
+    const handleKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        moveActive(event.key === "ArrowDown" ? 1 : -1);
+      } else if (event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        const ordered = event.key === "Home" ? options : [...options].reverse();
+        const found = ordered.findIndex((option) => !option.disabled);
+        setActiveIndex(event.key === "Home" ? found : options.length - 1 - found);
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        chooseOption(options[activeIndex]);
+      } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const state = typeaheadRef.current;
+        window.clearTimeout(state.timer);
+        state.text = `${state.text}${event.key}`.toLowerCase();
+        const match = options.findIndex((option) => !option.disabled && option.label.toLowerCase().startsWith(state.text));
+        if (match >= 0) setActiveIndex(match);
+        state.timer = window.setTimeout(() => {
+          state.text = "";
+        }, 650);
+      }
+    };
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", handleKey);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", handleKey);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+      window.clearTimeout(typeaheadRef.current.timer);
+    };
+  }, [activeIndex, chooseOption, computePopupPos, moveActive, open, options]);
+  useEffect(() => {
+    if (!open) return;
+    optionRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+  const handleTriggerKey = (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) openMenu(selectedIndex);
+    } else if ((event.key === "Enter" || event.key === " ") && !open) {
+      event.preventDefault();
+      openMenu(selectedIndex);
+    }
+  };
+  return /* @__PURE__ */ React.createElement("div", { className: `premium-select relative w-full min-w-0 ${className}` }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      ...rest,
+      ref: triggerRef,
+      type: "button",
+      disabled,
+      title,
+      role: "combobox",
+      "aria-haspopup": "listbox",
+      "aria-expanded": open,
+      "aria-controls": open ? listboxIdRef.current : void 0,
+      onClick: () => open ? setOpen(false) : openMenu(selectedIndex),
+      onKeyDown: handleTriggerKey,
+      className: `premium-select-trigger group no-press flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-all duration-200 ${open ? "border-blue-400/70 ring-2 ring-blue-500/15" : "border-neutral-800 hover:border-neutral-700"} ${disabled ? "cursor-not-allowed opacity-45" : ""}`
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "min-w-0 flex-1 truncate text-neutral-100", style: selectedOption?.style }, selectedOption?.label || "Select an option"),
+    /* @__PURE__ */ React.createElement("span", { className: `premium-select-chevron flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-neutral-800 text-neutral-500 transition-all duration-200 group-hover:border-neutral-700 group-hover:text-neutral-300 ${open ? "rotate-180 border-blue-500/40 bg-blue-500/10 text-blue-300" : ""}` }, /* @__PURE__ */ React.createElement(IconDown, null))
+  ), open && popupPos && ReactDOM.createPortal(
+    /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        ref: popupRef,
+        id: listboxIdRef.current,
+        role: "listbox",
+        "aria-activedescendant": `${listboxIdRef.current}-option-${activeIndex}`,
+        className: `premium-select-menu fixed z-[90] overflow-hidden rounded-xl border border-neutral-800 bg-[#232327] shadow-2xl ${popupPos.above ? "origin-bottom" : "origin-top"}`,
+        style: { top: popupPos.top, left: popupPos.left, width: popupPos.width, maxHeight: popupPos.maxHeight }
+      },
+      /* @__PURE__ */ React.createElement("div", { className: "premium-select-menu-header flex items-center justify-between border-b border-neutral-800/80 px-3 py-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[9px] font-semibold uppercase tracking-[0.18em] text-neutral-500" }, "Choose an option"), /* @__PURE__ */ React.createElement("span", { className: "text-[9px] font-mono text-neutral-600" }, options.length)),
+      /* @__PURE__ */ React.createElement("div", { className: "premium-select-options overflow-y-auto p-1.5", style: { maxHeight: Math.max(74, popupPos.maxHeight - 37) } }, options.map((option, index) => {
+        const selected = option.value === String(value ?? "");
+        const active = index === activeIndex;
+        return /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            key: `${option.value}-${index}`,
+            ref: (node) => optionRefs.current[index] = node,
+            id: `${listboxIdRef.current}-option-${index}`,
+            type: "button",
+            role: "option",
+            "aria-selected": selected,
+            disabled: option.disabled,
+            onMouseEnter: () => !option.disabled && setActiveIndex(index),
+            onClick: () => chooseOption(option),
+            className: `no-press flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${option.disabled ? "cursor-not-allowed opacity-35" : ""} ${active ? "bg-blue-500/10 text-blue-100" : "text-neutral-300 hover:bg-neutral-900/80"} ${selected ? "font-medium" : ""}`
+          },
+          /* @__PURE__ */ React.createElement("span", { className: `flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${selected ? "border-blue-400/50 bg-blue-500/20 text-blue-300" : "border-neutral-800 bg-neutral-950/60 text-transparent"}` }, /* @__PURE__ */ React.createElement("svg", { className: "h-3 w-3", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "20 6 9 17 4 12" }))),
+          /* @__PURE__ */ React.createElement("span", { className: "min-w-0 flex-1 truncate", style: option.style }, option.label || "—")
+        );
+      }))
+    ),
+    document.body
+  ));
 }
 function Textarea({ className = "", autoGrow = false, value, onInput, style, ...rest }) {
   const textareaRef = useRef(null);
