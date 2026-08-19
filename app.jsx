@@ -2508,6 +2508,26 @@
         return (body.sheets || []).map(s => s.properties).filter(p => p && Number.isInteger(p.sheetId) && p.title);
       }
 
+      // Metadata needed by an in-place Exact update. Keeping this separate
+      // from getSheetTabs avoids pulling grid metadata during the much more
+      // common lightweight tab-existence checks.
+      async function getSheetReplacementMetadata(fileId) {
+        const token = await getToken();
+        const fields = 'sheets(' + [
+          'properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))',
+          'conditionalFormats(ranges)',
+          'data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))',
+        ].join(',') + ')';
+        const r = await fetch(
+          'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) +
+          '?includeGridData=true&fields=' + encodeURIComponent(fields),
+          { headers: { Authorization: 'Bearer ' + token } },
+        );
+        if (!r.ok) throw await driveError(r);
+        const body = await r.json();
+        return (body.sheets || []).filter(sheet => Number.isInteger(sheet?.properties?.sheetId));
+      }
+
       async function batchUpdateSheets(fileId, requests) {
         if (!requests.length) return null;
         const token = await getToken();
@@ -2733,10 +2753,51 @@
         }
       }
 
+      function replacementDimensionRequests(sourceSheet, destinationSheetId, dimension, count) {
+        if (!count) return [];
+        const metadataKey = dimension === 'ROWS' ? 'rowMetadata' : 'columnMetadata';
+        const metadata = sourceSheet?.data?.[0]?.[metadataKey] || [];
+        const runs = [];
+        let runStart = 0;
+        let previousKey = '';
+        let previousProperties = {};
+        for (let index = 0; index < count; index++) {
+          const entry = metadata[index] || {};
+          const properties = {};
+          if (Number.isFinite(entry.pixelSize)) properties.pixelSize = entry.pixelSize;
+          if (entry.hiddenByUser) properties.hiddenByUser = true;
+          const key = JSON.stringify(properties);
+          if (index && key !== previousKey) {
+            runs.push({ startIndex: runStart, endIndex: index, properties: previousProperties });
+            runStart = index;
+          }
+          previousKey = key;
+          previousProperties = properties;
+        }
+        runs.push({ startIndex: runStart, endIndex: count, properties: previousProperties });
+        return runs.map(run => ({
+          updateDimensionProperties: {
+            range: {
+              sheetId: destinationSheetId,
+              dimension,
+              startIndex: run.startIndex,
+              endIndex: run.endIndex,
+            },
+            // An omitted property with this field mask resets an old custom
+            // width/height or hidden state back to the source sheet's default.
+            properties: run.properties,
+            fields: 'pixelSize,hiddenByUser',
+          },
+        }));
+      }
+
       // Replace every requested tab that already exists in the destination.
-      // All replacement tabs are copied in first; one atomic batch then swaps
-      // them into the old positions. Requested tabs that are missing are reported
-      // and left for the explicit "Add selected tab" workflow.
+      // The generated tab is used only as a short-lived staging source. Its
+      // complete grid setup is pasted over the ORIGINAL destination sheetId,
+      // and the staging tab is deleted in the same atomic batch. This preserves
+      // links, formulas, scripts and collaborators that refer to the old tab,
+      // and—unlike the former rename/delete swap—cannot leave "Copy of …" as
+      // the replacement tab after a successful Exact update.
       async function replaceExistingTabs(fileId, blob, dims, tempName) {
         const wanted = (dims || []).filter(d => d && d.title);
         if (!fileId || !wanted.length) throw new Error('Check at least one sheet to update.');
@@ -2764,64 +2825,151 @@
             staged.push({ ...item, copied });
           });
 
-          const stamp = Date.now();
-          const renameOld = staged.map(item => ({
-            updateSheetProperties: {
-              properties: { sheetId: item.existing.sheetId, title: '__mrg_old_' + stamp + '_' + item.existing.sheetId },
-              fields: 'title',
-            },
-          }));
-          const deleteOld = [...staged]
-            .sort((a, b) => (b.existing.index || 0) - (a.existing.index || 0))
-            .map(item => ({ deleteSheet: { sheetId: item.existing.sheetId } }));
-          const installNew = [...staged]
-            .sort((a, b) => (a.existing.index || 0) - (b.existing.index || 0))
-            .map(item => ({
-              updateSheetProperties: {
-                properties: { sheetId: item.copied.sheetId, title: item.dim.title, index: item.existing.index || 0 },
-                fields: 'title,index',
+          const metadata = await getSheetReplacementMetadata(fileId);
+          const metadataById = new Map(metadata.map(sheet => [sheet.properties.sheetId, sheet]));
+          const requests = [];
+          staged.forEach((item) => {
+            const destinationId = item.existing.sheetId;
+            const sourceId = item.copied.sheetId;
+            const sourceSheet = metadataById.get(sourceId);
+            const destinationSheet = metadataById.get(destinationId);
+            if (!sourceSheet || !destinationSheet) {
+              throw new Error('Could not read the generated or existing tab metadata for "' + item.dim.title + '".');
+            }
+            const sourceGrid = sourceSheet.properties.gridProperties || {};
+            const destinationGrid = destinationSheet.properties.gridProperties || {};
+            const rows = Math.max(1, item.dim.rows || 1);
+            const cols = Math.max(1, item.dim.cols || 1);
+            const workingRows = Math.max(rows, destinationGrid.rowCount || 1);
+            const workingCols = Math.max(cols, destinationGrid.columnCount || 1);
+
+            // Grow first when needed, so the following paste always has enough
+            // room. Shrinking happens only after the new grid is installed.
+            if (workingRows !== (destinationGrid.rowCount || 0) || workingCols !== (destinationGrid.columnCount || 0)) {
+              requests.push({
+                updateSheetProperties: {
+                  properties: { sheetId: destinationId, gridProperties: { rowCount: workingRows, columnCount: workingCols } },
+                  fields: 'gridProperties.rowCount,gridProperties.columnCount',
+                },
+              });
+            }
+
+            const workingRange = {
+              sheetId: destinationId,
+              startRowIndex: 0,
+              endRowIndex: workingRows,
+              startColumnIndex: 0,
+              endColumnIndex: workingCols,
+            };
+            const sourceRange = {
+              sheetId: sourceId,
+              startRowIndex: 0,
+              endRowIndex: rows,
+              startColumnIndex: 0,
+              endColumnIndex: cols,
+            };
+            const destinationRange = {
+              sheetId: destinationId,
+              startRowIndex: 0,
+              endRowIndex: rows,
+              startColumnIndex: 0,
+              endColumnIndex: cols,
+            };
+
+            // Remove sheet-level setup that a paste does not implicitly clear.
+            // Repeating index 0 is intentional: each deletion shifts the next
+            // rule into index 0 before the following request is applied.
+            requests.push({ unmergeCells: { range: workingRange } });
+            for (let i = 0; i < (destinationSheet.conditionalFormats || []).length; i++) {
+              requests.push({ deleteConditionalFormatRule: { sheetId: destinationId, index: 0 } });
+            }
+
+            requests.push({
+              copyPaste: {
+                source: sourceRange,
+                destination: destinationRange,
+                pasteType: 'PASTE_NORMAL',
+                pasteOrientation: 'NORMAL',
               },
-            }));
-          await batchUpdateSheets(fileId, [...renameOld, ...deleteOld, ...installNew]);
+            });
+            requests.push({
+              copyPaste: {
+                source: sourceRange,
+                destination: destinationRange,
+                pasteType: 'PASTE_DATA_VALIDATION',
+                pasteOrientation: 'NORMAL',
+              },
+            });
+            requests.push({
+              copyPaste: {
+                source: sourceRange,
+                destination: destinationRange,
+                pasteType: 'PASTE_CONDITIONAL_FORMATTING',
+                pasteOrientation: 'NORMAL',
+              },
+            });
+            requests.push(...replacementDimensionRequests(sourceSheet, destinationId, 'ROWS', rows));
+            requests.push(...replacementDimensionRequests(sourceSheet, destinationId, 'COLUMNS', cols));
+
+            const finalProperties = {
+              sheetId: destinationId,
+              rightToLeft: !!sourceSheet.properties.rightToLeft,
+              gridProperties: {
+                rowCount: rows,
+                columnCount: cols,
+                frozenRowCount: sourceGrid.frozenRowCount || 0,
+                frozenColumnCount: sourceGrid.frozenColumnCount || 0,
+                hideGridlines: !!sourceGrid.hideGridlines,
+              },
+            };
+            if (sourceSheet.properties.tabColorStyle) finalProperties.tabColorStyle = sourceSheet.properties.tabColorStyle;
+            requests.push({
+              updateSheetProperties: {
+                properties: finalProperties,
+                fields: 'rightToLeft,tabColorStyle,gridProperties.rowCount,gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount,gridProperties.hideGridlines',
+              },
+            });
+            requests.push({ deleteSheet: { sheetId: sourceId } });
+          });
+          await batchUpdateSheets(fileId, requests);
           return {
             updated: wanted.filter(dim => staged.some(item => item.dim.title === dim.title)).map(dim => dim.title),
             updatedDims: wanted
               .filter(dim => staged.some(item => item.dim.title === dim.title))
               .map(dim => {
-                const copied = staged.find(item => item.dim.title === dim.title)?.copied || {};
-                return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+                const existing = staged.find(item => item.dim.title === dim.title)?.existing || {};
+                return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
               }),
             missing,
           };
         } catch (e) {
-          // On an interrupted response, verify whether the atomic swap actually
-          // completed. Otherwise remove only copied staging tabs while originals
-          // still exist; when state is uncertain, preserve both versions.
+          // On an interrupted response, verify whether the atomic in-place copy
+          // completed. Otherwise remove only copied staging tabs; the original
+          // destination tab is never deleted by this workflow.
           if (staged.length) {
             try {
               const currentTabs = await getSheetTabs(fileId);
               const completed = staged.every(item =>
-                !currentTabs.some(p => p.sheetId === item.existing.sheetId) &&
-                currentTabs.some(p => p.sheetId === item.copied.sheetId && p.title === item.dim.title)
+                currentTabs.some(p => p.sheetId === item.existing.sheetId && p.title === item.dim.title) &&
+                !currentTabs.some(p => p.sheetId === item.copied.sheetId)
               );
               if (completed) return {
                 updated: wanted.filter(dim => staged.some(item => item.dim.title === dim.title)).map(dim => dim.title),
                 updatedDims: wanted
                   .filter(dim => staged.some(item => item.dim.title === dim.title))
                   .map(dim => {
-                    const copied = staged.find(item => item.dim.title === dim.title)?.copied || {};
-                    return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+                    const existing = staged.find(item => item.dim.title === dim.title)?.existing || {};
+                    return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
                   }),
                 missing,
               };
-              const originalsIntact = staged.every(item => currentTabs.some(p => p.sheetId === item.existing.sheetId));
               const stagingIds = staged
                 .filter(item => currentTabs.some(p => p.sheetId === item.copied.sheetId))
                 .map(item => item.copied.sheetId);
-              if (originalsIntact && stagingIds.length) {
+              if (stagingIds.length) {
                 await batchUpdateSheets(fileId, stagingIds.map(sheetId => ({ deleteSheet: { sheetId } })));
               }
-            } catch { /* preserve both versions when the state cannot be verified */ }
+            } catch { /* leave recovery copies only when their state cannot be verified */ }
           }
           throw e;
         } finally {
@@ -3140,12 +3288,12 @@
 
     // Modules that support Google Sheets sync → the in-memory workbook builder
     // and the (static) name used when the app first creates that module's sheet.
-    // Only these four sync; other modules just download as before.
+    // Only these four sync; document modules such as Procedure just download
+    // their native Word output.
     const GOOGLE_SYNC_MODULES = {
       sip_fcs:  { build: buildSipFcsBlob,   sheetName: 'SIP FCS — Hourly Record' },
       bmr:      { build: buildBmrBlob,      sheetName: 'BMR VOIP — Balance Day & Night' },
       bmr_sms:  { build: buildBmrSmsBlob,   sheetName: 'BMR SMS — Balance Day & Night' },
-      procedure:{ build: buildProcedureBlob,sheetName: 'Procedure — Step-by-step Guide' },
       // buildRecorderBlob is a hoisted function declaration defined with the
       // Recorder module code further down this file.
       recorder: { build: buildRecorderBlob, sheetName: 'Recorder — VOS Hourly Record' },
@@ -9567,7 +9715,7 @@ https://bit.ly/4vrcu64`;
       return filename;
     }
 
-    function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport, onImport, onClear }) {
+    function ProcedureSidebar({ state, setState, sync, onRetrySync, busy, onExport, onImport, onClear }) {
       const proc = procedureNormalizeState(state.procedure);
       const theme = state.theme || 'dark';
       const importRef = useRef(null);
@@ -9609,14 +9757,16 @@ https://bit.ly/4vrcu64`;
                 App-generated Word files reopen exactly. Other .docx files are mapped into this Procedure layout for review.
               </p>
             </div>
-            <GoogleSheetSync gsheets={gsheets} moduleId="procedure"
-              sheetId={state.googleSheets?.sheetIds?.procedure}
-              targetSheetId={state.googleSheets?.targetSheetIds?.procedure}
-              selectedTabTitle="Procedure" selectedTabLabel="Procedure" />
+            <div className="rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2.5">
+              <div className="text-[11px] font-medium text-blue-200">Word document (.docx)</div>
+              <p className="mt-1 text-[10px] leading-relaxed text-neutral-500">
+                Create an editable Microsoft Word file from the current procedure. No Google Sheet is created.
+              </p>
+            </div>
           </div>
           <div className="p-5 border-t border-neutral-900 space-y-2">
             <Btn variant="primary" size="lg" onClick={onExport} disabled={busy} className="w-full">
-              {busy ? <><span className="loader"></span> Generating</> : <><IconDownload /> Generate Word</>}
+              {busy ? <><span className="loader"></span> Creating Word file</> : <><IconDownload /> Create my Word file (.docx)</>}
             </Btn>
             <Btn variant="danger" size="md" onClick={onClear} disabled={busy} className="w-full">
               <IconX /> Clear Procedure
@@ -15267,10 +15417,6 @@ match /shared/whitelistSmsTestNumbers {
         try {
           const filename = await generateProcedureDocx(stateRef.current || state);
           setToast({ type: 'ok', msg: `Generated ${filename}` });
-          if (googleConn.connected) {
-            try { await syncModuleToSheets('procedure', { interactive: false }); }
-            catch { /* the sync handler shows its own actionable toast */ }
-          }
         } catch (e) {
           console.error(e);
           setToast({ type: 'err', msg: 'Generation failed: ' + (e.message || e) });
@@ -15474,7 +15620,7 @@ match /shared/whitelistSmsTestNumbers {
         return (
           <div className="flex min-h-screen text-neutral-100">
             <ProcedureSidebar state={state} setState={setState} sync={sync} onRetrySync={retrySync}
-              gsheets={googleSyncProps} busy={busy} onExport={onGenerateProcedure} onImport={onImportProcedure}
+              busy={busy} onExport={onGenerateProcedure} onImport={onImportProcedure}
               onClear={onClearProcedure} />
             <main className="flex-1 min-w-0 flex flex-col">
               <header className="app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20">

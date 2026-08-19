@@ -335,6 +335,7 @@
     html.light .bg-\[\#17171a\]            { background-color: #fafafa !important; }
     html.light .bg-\[\#1a1a1d\]            { background-color: #f0f0f1 !important; }
     html.light .bg-neutral-950             { background-color: #ffffff !important; }
+    html.light .bg-neutral-950\/50         { background-color: rgba(255,255,255,0.92) !important; }
     html.light .bg-neutral-950\/60         { background-color: rgba(255,255,255,0.88) !important; }
     html.light .bg-neutral-900             { background-color: #f4f4f5 !important; }
     html.light .bg-neutral-900\/80         { background-color: rgba(244,244,245,0.8) !important; }
@@ -2775,6 +2776,21 @@ const googleSheetsSync = (() => {
     const body = await r.json();
     return (body.sheets || []).map((s) => s.properties).filter((p) => p && Number.isInteger(p.sheetId) && p.title);
   }
+  async function getSheetReplacementMetadata(fileId) {
+    const token = await getToken();
+    const fields = "sheets(" + [
+      "properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))",
+      "conditionalFormats(ranges)",
+      "data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))"
+    ].join(",") + ")";
+    const r = await fetch(
+      "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?includeGridData=true&fields=" + encodeURIComponent(fields),
+      { headers: { Authorization: "Bearer " + token } }
+    );
+    if (!r.ok) throw await driveError(r);
+    const body = await r.json();
+    return (body.sheets || []).filter((sheet) => Number.isInteger(sheet?.properties?.sheetId));
+  }
   async function batchUpdateSheets(fileId, requests) {
     if (!requests.length) return null;
     const token = await getToken();
@@ -2972,6 +2988,43 @@ const googleSheetsSync = (() => {
       }
     }
   }
+  function replacementDimensionRequests(sourceSheet, destinationSheetId, dimension, count) {
+    if (!count) return [];
+    const metadataKey = dimension === "ROWS" ? "rowMetadata" : "columnMetadata";
+    const metadata = sourceSheet?.data?.[0]?.[metadataKey] || [];
+    const runs = [];
+    let runStart = 0;
+    let previousKey = "";
+    let previousProperties = {};
+    for (let index = 0; index < count; index++) {
+      const entry = metadata[index] || {};
+      const properties = {};
+      if (Number.isFinite(entry.pixelSize)) properties.pixelSize = entry.pixelSize;
+      if (entry.hiddenByUser) properties.hiddenByUser = true;
+      const key = JSON.stringify(properties);
+      if (index && key !== previousKey) {
+        runs.push({ startIndex: runStart, endIndex: index, properties: previousProperties });
+        runStart = index;
+      }
+      previousKey = key;
+      previousProperties = properties;
+    }
+    runs.push({ startIndex: runStart, endIndex: count, properties: previousProperties });
+    return runs.map((run) => ({
+      updateDimensionProperties: {
+        range: {
+          sheetId: destinationSheetId,
+          dimension,
+          startIndex: run.startIndex,
+          endIndex: run.endIndex
+        },
+        // An omitted property with this field mask resets an old custom
+        // width/height or hidden state back to the source sheet's default.
+        properties: run.properties,
+        fields: "pixelSize,hiddenByUser"
+      }
+    }));
+  }
   async function replaceExistingTabs(fileId, blob, dims, tempName) {
     const wanted = (dims || []).filter((d) => d && d.title);
     if (!fileId || !wanted.length) throw new Error("Check at least one sheet to update.");
@@ -2995,26 +3048,108 @@ const googleSheetsSync = (() => {
         const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
         staged.push({ ...item, copied });
       });
-      const stamp = Date.now();
-      const renameOld = staged.map((item) => ({
-        updateSheetProperties: {
-          properties: { sheetId: item.existing.sheetId, title: "__mrg_old_" + stamp + "_" + item.existing.sheetId },
-          fields: "title"
+      const metadata = await getSheetReplacementMetadata(fileId);
+      const metadataById = new Map(metadata.map((sheet) => [sheet.properties.sheetId, sheet]));
+      const requests = [];
+      staged.forEach((item) => {
+        const destinationId = item.existing.sheetId;
+        const sourceId = item.copied.sheetId;
+        const sourceSheet = metadataById.get(sourceId);
+        const destinationSheet = metadataById.get(destinationId);
+        if (!sourceSheet || !destinationSheet) {
+          throw new Error('Could not read the generated or existing tab metadata for "' + item.dim.title + '".');
         }
-      }));
-      const deleteOld = [...staged].sort((a, b) => (b.existing.index || 0) - (a.existing.index || 0)).map((item) => ({ deleteSheet: { sheetId: item.existing.sheetId } }));
-      const installNew = [...staged].sort((a, b) => (a.existing.index || 0) - (b.existing.index || 0)).map((item) => ({
-        updateSheetProperties: {
-          properties: { sheetId: item.copied.sheetId, title: item.dim.title, index: item.existing.index || 0 },
-          fields: "title,index"
+        const sourceGrid = sourceSheet.properties.gridProperties || {};
+        const destinationGrid = destinationSheet.properties.gridProperties || {};
+        const rows = Math.max(1, item.dim.rows || 1);
+        const cols = Math.max(1, item.dim.cols || 1);
+        const workingRows = Math.max(rows, destinationGrid.rowCount || 1);
+        const workingCols = Math.max(cols, destinationGrid.columnCount || 1);
+        if (workingRows !== (destinationGrid.rowCount || 0) || workingCols !== (destinationGrid.columnCount || 0)) {
+          requests.push({
+            updateSheetProperties: {
+              properties: { sheetId: destinationId, gridProperties: { rowCount: workingRows, columnCount: workingCols } },
+              fields: "gridProperties.rowCount,gridProperties.columnCount"
+            }
+          });
         }
-      }));
-      await batchUpdateSheets(fileId, [...renameOld, ...deleteOld, ...installNew]);
+        const workingRange = {
+          sheetId: destinationId,
+          startRowIndex: 0,
+          endRowIndex: workingRows,
+          startColumnIndex: 0,
+          endColumnIndex: workingCols
+        };
+        const sourceRange = {
+          sheetId: sourceId,
+          startRowIndex: 0,
+          endRowIndex: rows,
+          startColumnIndex: 0,
+          endColumnIndex: cols
+        };
+        const destinationRange = {
+          sheetId: destinationId,
+          startRowIndex: 0,
+          endRowIndex: rows,
+          startColumnIndex: 0,
+          endColumnIndex: cols
+        };
+        requests.push({ unmergeCells: { range: workingRange } });
+        for (let i = 0; i < (destinationSheet.conditionalFormats || []).length; i++) {
+          requests.push({ deleteConditionalFormatRule: { sheetId: destinationId, index: 0 } });
+        }
+        requests.push({
+          copyPaste: {
+            source: sourceRange,
+            destination: destinationRange,
+            pasteType: "PASTE_NORMAL",
+            pasteOrientation: "NORMAL"
+          }
+        });
+        requests.push({
+          copyPaste: {
+            source: sourceRange,
+            destination: destinationRange,
+            pasteType: "PASTE_DATA_VALIDATION",
+            pasteOrientation: "NORMAL"
+          }
+        });
+        requests.push({
+          copyPaste: {
+            source: sourceRange,
+            destination: destinationRange,
+            pasteType: "PASTE_CONDITIONAL_FORMATTING",
+            pasteOrientation: "NORMAL"
+          }
+        });
+        requests.push(...replacementDimensionRequests(sourceSheet, destinationId, "ROWS", rows));
+        requests.push(...replacementDimensionRequests(sourceSheet, destinationId, "COLUMNS", cols));
+        const finalProperties = {
+          sheetId: destinationId,
+          rightToLeft: !!sourceSheet.properties.rightToLeft,
+          gridProperties: {
+            rowCount: rows,
+            columnCount: cols,
+            frozenRowCount: sourceGrid.frozenRowCount || 0,
+            frozenColumnCount: sourceGrid.frozenColumnCount || 0,
+            hideGridlines: !!sourceGrid.hideGridlines
+          }
+        };
+        if (sourceSheet.properties.tabColorStyle) finalProperties.tabColorStyle = sourceSheet.properties.tabColorStyle;
+        requests.push({
+          updateSheetProperties: {
+            properties: finalProperties,
+            fields: "rightToLeft,tabColorStyle,gridProperties.rowCount,gridProperties.columnCount,gridProperties.frozenRowCount,gridProperties.frozenColumnCount,gridProperties.hideGridlines"
+          }
+        });
+        requests.push({ deleteSheet: { sheetId: sourceId } });
+      });
+      await batchUpdateSheets(fileId, requests);
       return {
         updated: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => dim.title),
         updatedDims: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => {
-          const copied = staged.find((item) => item.dim.title === dim.title)?.copied || {};
-          return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+          const existing = staged.find((item) => item.dim.title === dim.title)?.existing || {};
+          return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
         }),
         missing
       };
@@ -3023,19 +3158,18 @@ const googleSheetsSync = (() => {
         try {
           const currentTabs = await getSheetTabs(fileId);
           const completed = staged.every(
-            (item) => !currentTabs.some((p) => p.sheetId === item.existing.sheetId) && currentTabs.some((p) => p.sheetId === item.copied.sheetId && p.title === item.dim.title)
+            (item) => currentTabs.some((p) => p.sheetId === item.existing.sheetId && p.title === item.dim.title) && !currentTabs.some((p) => p.sheetId === item.copied.sheetId)
           );
           if (completed) return {
             updated: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => dim.title),
             updatedDims: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => {
-              const copied = staged.find((item) => item.dim.title === dim.title)?.copied || {};
-              return { ...dim, sheetId: copied.sheetId, gridProperties: copied.gridProperties };
+              const existing = staged.find((item) => item.dim.title === dim.title)?.existing || {};
+              return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
             }),
             missing
           };
-          const originalsIntact = staged.every((item) => currentTabs.some((p) => p.sheetId === item.existing.sheetId));
           const stagingIds = staged.filter((item) => currentTabs.some((p) => p.sheetId === item.copied.sheetId)).map((item) => item.copied.sheetId);
-          if (originalsIntact && stagingIds.length) {
+          if (stagingIds.length) {
             await batchUpdateSheets(fileId, stagingIds.map((sheetId) => ({ deleteSheet: { sheetId } })));
           }
         } catch {
@@ -3324,7 +3458,6 @@ const GOOGLE_SYNC_MODULES = {
   sip_fcs: { build: buildSipFcsBlob, sheetName: "SIP FCS — Hourly Record" },
   bmr: { build: buildBmrBlob, sheetName: "BMR VOIP — Balance Day & Night" },
   bmr_sms: { build: buildBmrSmsBlob, sheetName: "BMR SMS — Balance Day & Night" },
-  procedure: { build: buildProcedureBlob, sheetName: "Procedure — Step-by-step Guide" },
   // buildRecorderBlob is a hoisted function declaration defined with the
   // Recorder module code further down this file.
   recorder: { build: buildRecorderBlob, sheetName: "Recorder — VOS Hourly Record" }
@@ -8250,7 +8383,7 @@ async function generateProcedureDocx(state) {
   saveAs(blob, filename);
   return filename;
 }
-function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, onExport, onImport, onClear }) {
+function ProcedureSidebar({ state, setState, sync, onRetrySync, busy, onExport, onImport, onClear }) {
   const proc = procedureNormalizeState(state.procedure);
   const theme = state.theme || "dark";
   const importRef = useRef(null);
@@ -8277,17 +8410,7 @@ function ProcedureSidebar({ state, setState, sync, onRetrySync, gsheets, busy, o
         if (file) await onImport(file);
       }
     }
-  ), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => importRef.current?.click(), disabled: busy, className: "w-full mt-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Import Word"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "App-generated Word files reopen exactly. Other .docx files are mapped into this Procedure layout for review.")), /* @__PURE__ */ React.createElement(
-    GoogleSheetSync,
-    {
-      gsheets,
-      moduleId: "procedure",
-      sheetId: state.googleSheets?.sheetIds?.procedure,
-      targetSheetId: state.googleSheets?.targetSheetIds?.procedure,
-      selectedTabTitle: "Procedure",
-      selectedTabLabel: "Procedure"
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Generating") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Generate Word")), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onClear, disabled: busy, className: "w-full" }, /* @__PURE__ */ React.createElement(IconX, null), " Clear Procedure")));
+  ), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => importRef.current?.click(), disabled: busy, className: "w-full mt-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Import Word"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "App-generated Word files reopen exactly. Other .docx files are mapped into this Procedure layout for review.")), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-[11px] font-medium text-blue-200" }, "Word document (.docx)"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-[10px] leading-relaxed text-neutral-500" }, "Create an editable Microsoft Word file from the current procedure. No Google Sheet is created."))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Creating Word file") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Create my Word file (.docx)")), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onClear, disabled: busy, className: "w-full" }, /* @__PURE__ */ React.createElement(IconX, null), " Clear Procedure")));
 }
 function procedureEditorRect(action) {
   return {
@@ -12805,12 +12928,6 @@ function App() {
     try {
       const filename = await generateProcedureDocx(stateRef.current || state);
       setToast({ type: "ok", msg: `Generated ${filename}` });
-      if (googleConn.connected) {
-        try {
-          await syncModuleToSheets("procedure", { interactive: false });
-        } catch {
-        }
-      }
     } catch (e) {
       console.error(e);
       setToast({ type: "err", msg: "Generation failed: " + (e.message || e) });
@@ -13002,7 +13119,6 @@ function App() {
         setState,
         sync,
         onRetrySync: retrySync,
-        gsheets: googleSyncProps,
         busy,
         onExport: onGenerateProcedure,
         onImport: onImportProcedure,
