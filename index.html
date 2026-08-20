@@ -292,6 +292,246 @@
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
+    /* Premium shared controls ------------------------------------------------
+       These classes sit on the app's existing primitives, so every module gets
+       the same visual quality without introducing parallel component systems. */
+    .premium-input,
+    .premium-textarea {
+      min-height: 40px;
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.025), transparent 55%),
+        #111114;
+      border-color: #34343a;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.025), 0 1px 2px rgba(0,0,0,0.20);
+      transition: border-color 150ms cubic-bezier(0.22,1,0.36,1), box-shadow 150ms cubic-bezier(0.22,1,0.36,1), background-color 150ms cubic-bezier(0.22,1,0.36,1);
+    }
+    .premium-input:hover,
+    .premium-textarea:hover { border-color: #50505a; }
+    .premium-input:focus,
+    .premium-textarea:focus {
+      border-color: rgba(96,165,250,0.78) !important;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.14), inset 0 1px 0 rgba(255,255,255,0.035) !important;
+      background-color: #141419;
+    }
+    .premium-textarea { line-height: 1.55; }
+    .premium-input[type="date"],
+    .premium-input[type="time"] {
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+    }
+    .premium-input[type="date"]::-webkit-calendar-picker-indicator,
+    .premium-input[type="time"]::-webkit-calendar-picker-indicator {
+      cursor: pointer;
+      opacity: 0.72;
+      border-radius: 6px;
+      padding: 4px;
+      transition: opacity 140ms ease, background-color 140ms ease;
+    }
+    .premium-input[type="date"]::-webkit-calendar-picker-indicator:hover,
+    .premium-input[type="time"]::-webkit-calendar-picker-indicator:hover {
+      opacity: 1;
+      background-color: rgba(59,130,246,0.12);
+    }
+
+    .premium-button {
+      min-height: 36px;
+      border-radius: 9px;
+      position: relative;
+      isolation: isolate;
+      letter-spacing: -0.005em;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.22);
+      transition: transform 140ms cubic-bezier(0.22,1,0.36,1), box-shadow 140ms cubic-bezier(0.22,1,0.36,1), background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+    .premium-button:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 7px 18px rgba(0,0,0,0.22);
+    }
+    .premium-button[data-variant="primary"] {
+      background: linear-gradient(180deg, #ffffff, #e8e8eb);
+      box-shadow: inset 0 1px 0 #fff, 0 7px 18px rgba(0,0,0,0.20);
+    }
+    .premium-button[data-variant="accent"] {
+      background: linear-gradient(180deg, #4f9cff, #2879e8);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 8px 20px rgba(37,99,235,0.28);
+    }
+    .premium-button[data-variant="ghost"] {
+      background: linear-gradient(180deg, rgba(255,255,255,0.032), rgba(255,255,255,0.008));
+    }
+    .premium-button[data-variant="danger"] {
+      background: linear-gradient(180deg, rgba(239,68,68,0.11), rgba(239,68,68,0.045));
+    }
+
+    input[type="checkbox"]:not(.sr-only) {
+      appearance: none;
+      -webkit-appearance: none;
+      display: inline-grid;
+      place-content: center;
+      width: 16px !important;
+      height: 16px !important;
+      min-width: 16px;
+      border: 1px solid #4c4c54 !important;
+      border-radius: 5px !important;
+      background: linear-gradient(180deg, #242429, #17171b) !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28);
+      cursor: pointer;
+      transition: background 130ms ease, border-color 130ms ease, box-shadow 130ms ease, transform 100ms ease;
+    }
+    input[type="checkbox"]:not(.sr-only)::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      transform: scale(0.35);
+      opacity: 0;
+      transition: transform 120ms cubic-bezier(0.22,1,0.36,1), opacity 100ms ease;
+      background: white;
+      clip-path: polygon(14% 44%, 0 59%, 40% 100%, 100% 23%, 84% 8%, 39% 71%);
+    }
+    input[type="checkbox"]:not(.sr-only):checked {
+      border-color: #60a5fa !important;
+      background: linear-gradient(180deg, #4f9cff, #2563eb) !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), 0 0 0 3px rgba(59,130,246,0.12);
+    }
+    input[type="checkbox"]:not(.sr-only):checked::before { transform: scale(1); opacity: 1; }
+    input[type="checkbox"]:not(.sr-only):focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,0.24); }
+    input[type="checkbox"]:not(.sr-only):disabled { cursor: not-allowed; opacity: 0.42; }
+
+    .premium-card {
+      background:
+        linear-gradient(145deg, rgba(255,255,255,0.026), transparent 42%),
+        #232327;
+      border-color: rgba(76,76,84,0.60);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.025), 0 6px 18px rgba(0,0,0,0.08);
+      transition: border-color 160ms ease, box-shadow 180ms ease;
+    }
+    .premium-card:hover { border-color: rgba(97,97,106,0.78); box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), 0 10px 26px rgba(0,0,0,0.12); }
+    .premium-chip {
+      min-height: 24px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.045), 0 1px 3px rgba(0,0,0,0.12);
+      backdrop-filter: blur(8px);
+      transition: transform 130ms ease, border-color 130ms ease, background-color 130ms ease;
+    }
+    .premium-chip[onClick]:hover,
+    .premium-chip.cursor-pointer:hover { transform: translateY(-1px); }
+
+    body > #root aside {
+      background:
+        radial-gradient(circle at 15% -5%, rgba(59,130,246,0.09), transparent 27%),
+        linear-gradient(180deg, #1a1a1e, #151518 58%, #121215);
+      border-right-color: rgba(76,76,84,0.65) !important;
+      box-shadow: 12px 0 38px rgba(0,0,0,0.12);
+    }
+    .app-topbar {
+      background: rgba(28,28,31,0.82) !important;
+      border-bottom-color: rgba(76,76,84,0.58) !important;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.10);
+      backdrop-filter: blur(18px) saturate(1.25);
+    }
+    .app-topbar h2 { letter-spacing: -0.035em; }
+    .app-tab-nav {
+      padding: 4px !important;
+      border-radius: 11px !important;
+      background: rgba(9,9,11,0.72) !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), 0 3px 12px rgba(0,0,0,0.12);
+    }
+    .premium-tabs,
+    .app-segmented {
+      padding: 4px !important;
+      border-radius: 11px !important;
+      background: rgba(9,9,11,0.68) !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.035), 0 3px 12px rgba(0,0,0,0.10);
+    }
+    .premium-tabs button,
+    .app-segmented > button { min-height: 32px; border-radius: 8px !important; transition: transform 140ms ease, background-color 140ms ease, color 140ms ease, box-shadow 140ms ease; }
+    .premium-tabs button:hover,
+    .app-segmented > button:hover { transform: translateY(-1px); }
+    .app-tab-nav button { border-radius: 8px !important; transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
+    .app-tab-nav button:not(.app-tab-active):hover { transform: translateY(-1px); }
+    .app-tab-active { box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 3px 10px rgba(0,0,0,0.18); }
+
+    main table:not([data-plain-table]) {
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.08);
+    }
+    main table:not([data-plain-table]) thead { background: rgba(9,9,11,0.58); }
+    main table:not([data-plain-table]) tbody tr { transition: background-color 120ms ease; }
+    main table:not([data-plain-table]) tbody tr:hover { background-color: rgba(59,130,246,0.065); }
+    main table:not([data-plain-table]) th { font-weight: 600; letter-spacing: 0.025em; }
+
+    .anim-toast {
+      z-index: 110;
+      max-width: min(430px, calc(100vw - 32px));
+      border-radius: 14px !important;
+      padding: 13px 16px !important;
+      font-weight: 500;
+      line-height: 1.45;
+      box-shadow: 0 22px 60px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.08) !important;
+      backdrop-filter: blur(20px) saturate(1.3);
+    }
+    .premium-upload-zone {
+      position: relative;
+      background:
+        radial-gradient(circle at 50% -35%, rgba(59,130,246,0.14), transparent 55%),
+        rgba(9,9,11,0.52);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.025);
+      transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+    }
+    .premium-upload-zone:hover,
+    .premium-upload-zone.is-dragging {
+      border-color: rgba(96,165,250,0.78) !important;
+      background-color: rgba(59,130,246,0.07);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 14px 34px rgba(37,99,235,0.10);
+    }
+    label:has(input[type="file"]) { transition: transform 140ms ease, filter 140ms ease; }
+    label:has(input[type="file"]):hover { filter: brightness(1.08); transform: translateY(-1px); }
+
+    .premium-search-icon { pointer-events: none; transition: color 140ms ease; }
+    .premium-search:focus-within .premium-search-icon { color: #60a5fa !important; }
+    .premium-empty-state {
+      border: 1px dashed rgba(76,76,84,0.65);
+      border-radius: 10px;
+      background: rgba(9,9,11,0.32);
+    }
+    .premium-auth-backdrop {
+      background:
+        radial-gradient(circle at 50% 18%, rgba(37,99,235,0.20), transparent 32%),
+        rgba(6,6,9,0.84) !important;
+      backdrop-filter: blur(12px) saturate(0.9);
+    }
+    .premium-auth-panel {
+      position: relative;
+      overflow: hidden;
+      border-radius: 20px !important;
+      padding: 30px !important;
+      background:
+        radial-gradient(circle at 0 -10%, rgba(59,130,246,0.16), transparent 38%),
+        linear-gradient(145deg, rgba(255,255,255,0.04), transparent 46%),
+        #202025 !important;
+      border-color: rgba(96,165,250,0.22) !important;
+      box-shadow: 0 42px 100px rgba(0,0,0,0.52), inset 0 1px 0 rgba(255,255,255,0.06) !important;
+    }
+    .premium-auth-panel::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #60a5fa, #8b5cf6, transparent);
+      opacity: 0.8;
+    }
+    .premium-auth-tabs {
+      padding: 4px !important;
+      border-radius: 11px !important;
+      background: rgba(9,9,11,0.56) !important;
+    }
+    .premium-auth-tabs button { min-height: 34px; border-radius: 8px !important; }
+
+    @media (hover: hover) {
+      a, summary, button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { transition-timing-function: cubic-bezier(0.22,1,0.36,1); }
+      a:hover { text-underline-offset: 3px; }
+    }
+
     /* ===== Light mode overrides ===== */
     html.light { color-scheme: light; }
     html.light .premium-select-trigger {
@@ -324,6 +564,73 @@
       border-color: rgba(37,99,235,0.42) !important;
       background-color: rgba(59,130,246,0.14) !important;
     }
+    html.light .premium-input,
+    html.light .premium-textarea {
+      color: #18181b !important;
+      background: linear-gradient(180deg, #ffffff, #fbfbfc) !important;
+      border-color: #d4d4d8 !important;
+      box-shadow: inset 0 1px 0 #ffffff, 0 1px 3px rgba(24,24,27,0.07);
+    }
+    html.light .premium-input:hover,
+    html.light .premium-textarea:hover { border-color: #a1a1aa !important; }
+    html.light .premium-input:focus,
+    html.light .premium-textarea:focus {
+      background: #ffffff !important;
+      border-color: #3b82f6 !important;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.13), 0 5px 16px rgba(24,24,27,0.06) !important;
+    }
+    html.light input[type="checkbox"]:not(.sr-only) {
+      border-color: #a1a1aa !important;
+      background: linear-gradient(180deg, #ffffff, #f4f4f5) !important;
+      box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px rgba(24,24,27,0.10);
+    }
+    html.light input[type="checkbox"]:not(.sr-only):checked {
+      border-color: #2563eb !important;
+      background: linear-gradient(180deg, #4f9cff, #2563eb) !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.30), 0 0 0 3px rgba(59,130,246,0.12);
+    }
+    html.light .premium-button { box-shadow: inset 0 1px 0 rgba(255,255,255,0.75), 0 2px 5px rgba(24,24,27,0.08); }
+    html.light .premium-button:not(:disabled):hover { box-shadow: inset 0 1px 0 #fff, 0 8px 20px rgba(24,24,27,0.12); }
+    html.light .premium-button[data-variant="primary"] { background: linear-gradient(180deg, #27272a, #18181b) !important; color: #fafafa !important; }
+    html.light .premium-button[data-variant="ghost"] { background: linear-gradient(180deg, #ffffff, #f7f7f8) !important; }
+    html.light .premium-button[data-variant="danger"] { background: linear-gradient(180deg, #fff, #fef2f2) !important; }
+    html.light .premium-card {
+      background: linear-gradient(145deg, #ffffff, #fcfcfd 62%) !important;
+      border-color: #e4e4e7 !important;
+      box-shadow: inset 0 1px 0 #fff, 0 7px 22px rgba(24,24,27,0.045);
+    }
+    html.light .premium-card:hover { border-color: #d4d4d8 !important; box-shadow: inset 0 1px 0 #fff, 0 11px 28px rgba(24,24,27,0.07); }
+    html.light body > #root aside {
+      background: radial-gradient(circle at 15% -5%, rgba(59,130,246,0.08), transparent 28%), linear-gradient(180deg, #ffffff, #fafafa 58%, #f7f7f8) !important;
+      border-right-color: #e4e4e7 !important;
+      box-shadow: 12px 0 38px rgba(24,24,27,0.045);
+    }
+    html.light .app-topbar {
+      background: rgba(250,250,250,0.84) !important;
+      border-bottom-color: rgba(212,212,216,0.82) !important;
+      box-shadow: 0 10px 30px rgba(24,24,27,0.045);
+    }
+    html.light .app-tab-nav,
+    html.light .premium-tabs,
+    html.light .app-segmented { background: rgba(228,228,231,0.68) !important; box-shadow: inset 0 1px 0 #fff, 0 3px 12px rgba(24,24,27,0.06); }
+    html.light main table:not([data-plain-table]) { box-shadow: 0 7px 22px rgba(24,24,27,0.055); }
+    html.light main table:not([data-plain-table]) thead { background: rgba(244,244,245,0.92); }
+    html.light main table:not([data-plain-table]) tbody tr:hover { background-color: rgba(59,130,246,0.055); }
+    html.light .anim-toast { box-shadow: 0 22px 60px rgba(24,24,27,0.18), inset 0 1px 0 rgba(255,255,255,0.72) !important; }
+    html.light .premium-upload-zone {
+      background: radial-gradient(circle at 50% -35%, rgba(59,130,246,0.12), transparent 55%), rgba(255,255,255,0.90) !important;
+      box-shadow: inset 0 1px 0 #fff;
+    }
+    html.light .premium-empty-state { border-color: #d4d4d8; background: #fafafa; }
+    html.light .premium-auth-backdrop {
+      background: radial-gradient(circle at 50% 18%, rgba(37,99,235,0.13), transparent 34%), rgba(244,244,245,0.86) !important;
+    }
+    html.light .premium-auth-panel {
+      background: radial-gradient(circle at 0 -10%, rgba(59,130,246,0.12), transparent 38%), linear-gradient(145deg, #ffffff, #fafafa 58%) !important;
+      border-color: rgba(59,130,246,0.20) !important;
+      box-shadow: 0 42px 100px rgba(24,24,27,0.17), inset 0 1px 0 #ffffff !important;
+    }
+    html.light .premium-auth-tabs { background: #f4f4f5 !important; border-color: #e4e4e7 !important; }
     html.light body { background: #f6f6f7; color: #18181b; }
     html.light ::-webkit-scrollbar-thumb { background: #d4d4d8; }
     html.light ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
@@ -4055,7 +4362,7 @@ function Pill({ children, tone = "default", onClick, className = "" }) {
     "span",
     {
       onClick,
-      className: `inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide ${tones[tone]} ${onClick ? "cursor-pointer hover:bg-neutral-800" : ""} ${className}`
+      className: `premium-chip inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide ${tones[tone]} ${onClick ? "cursor-pointer hover:bg-neutral-800" : ""} ${className}`
     },
     children
   );
@@ -4075,7 +4382,8 @@ function Btn({ children, onClick, variant = "primary", size = "md", disabled, cl
       title,
       onClick,
       disabled,
-      className: `inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${variants[variant]} ${sizes[size]} ${className}`
+      "data-variant": variant,
+      className: `premium-button inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${variants[variant]} ${sizes[size]} ${className}`
     },
     children
   );
@@ -4231,7 +4539,7 @@ function CollapsibleSection({ sid, title, hint, defaultCollapsed = false, childr
   ), !collapsed && children);
 }
 function Card({ children, className = "" }) {
-  return /* @__PURE__ */ React.createElement("div", { className: `rounded-lg border border-neutral-900 bg-[#232327] ${className}` }, children);
+  return /* @__PURE__ */ React.createElement("div", { className: `premium-card rounded-lg border border-neutral-900 bg-[#232327] ${className}` }, children);
 }
 function IconSheet() {
   return /* @__PURE__ */ React.createElement("svg", { className: "w-3.5 h-3.5 text-emerald-500 shrink-0", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }), /* @__PURE__ */ React.createElement("line", { x1: "3", y1: "9", x2: "21", y2: "9" }), /* @__PURE__ */ React.createElement("line", { x1: "3", y1: "15", x2: "21", y2: "15" }), /* @__PURE__ */ React.createElement("line", { x1: "9", y1: "3", x2: "9", y2: "21" }));
@@ -4328,10 +4636,10 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
 }
 function Input(props) {
   const { className = "", ...rest } = props;
-  return /* @__PURE__ */ React.createElement("input", { ...rest, className: `w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}` });
+  return /* @__PURE__ */ React.createElement("input", { ...rest, className: `premium-input w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}` });
 }
 function ClearableInput({ value, onClear, clearTitle = "Clear input", className = "", inputClassName = "", ...rest }) {
-  return /* @__PURE__ */ React.createElement("div", { className: `relative ${className}` }, /* @__PURE__ */ React.createElement(Input, { ...rest, value, className: `pr-9 ${inputClassName}` }), !!value && /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: `premium-search relative ${className}` }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", className: "premium-search-icon absolute left-3 top-1/2 -translate-y-1/2 text-neutral-600" }, /* @__PURE__ */ React.createElement("svg", { className: "h-3.5 w-3.5", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "11", cy: "11", r: "7" }), /* @__PURE__ */ React.createElement("path", { d: "m20 20-3.2-3.2" }))), /* @__PURE__ */ React.createElement(Input, { ...rest, value, className: `pl-9 pr-9 ${inputClassName}` }), !!value && /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -4344,12 +4652,14 @@ function ClearableInput({ value, onClear, clearTitle = "Clear input", className 
     /* @__PURE__ */ React.createElement(IconX, null)
   ));
 }
-function Select({ children, className = "", value, onChange, disabled = false, title, ...rest }) {
+function Select({ children, className = "", value, onChange, disabled = false, title, searchable, ...rest }) {
   const [open, setOpen] = useState(false);
   const [popupPos, setPopupPos] = useState(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [query, setQuery] = useState("");
   const triggerRef = useRef(null);
   const popupRef = useRef(null);
+  const searchRef = useRef(null);
   const optionRefs = useRef([]);
   const typeaheadRef = useRef({ text: "", timer: null });
   const listboxIdRef = useRef(`premium-select-${Math.random().toString(36).slice(2)}`);
@@ -4386,6 +4696,11 @@ function Select({ children, className = "", value, onChange, disabled = false, t
   }, [children, optionText]);
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === String(value ?? "")));
   const selectedOption = options.find((option) => option.value === String(value ?? "")) || options[0];
+  const isSearchable = searchable == null ? options.length >= 8 : !!searchable;
+  const visibleOptions = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return options.map((option, index) => ({ ...option, originalIndex: index })).filter((option) => !term || option.label.toLowerCase().includes(term));
+  }, [options, query]);
   const computePopupPos = useCallback(() => {
     const trigger = triggerRef.current;
     if (!trigger) return null;
@@ -4411,6 +4726,7 @@ function Select({ children, className = "", value, onChange, disabled = false, t
   }, [options.length]);
   const openMenu = useCallback((preferredIndex = selectedIndex) => {
     if (disabled || !options.length) return;
+    setQuery("");
     const nextIndex = options[preferredIndex]?.disabled ? options.findIndex((option) => !option.disabled) : preferredIndex;
     setActiveIndex(Math.max(0, nextIndex));
     setPopupPos(computePopupPos());
@@ -4422,21 +4738,23 @@ function Select({ children, className = "", value, onChange, disabled = false, t
       target: { value: option.value },
       currentTarget: { value: option.value }
     };
-    onChange?.(syntheticEvent);
     setOpen(false);
-    requestAnimationFrame(() => triggerRef.current?.focus());
+    setQuery("");
+    onChange?.(syntheticEvent);
+    requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
   }, [onChange]);
   const moveActive = useCallback((direction) => {
-    if (!options.length) return;
+    if (!visibleOptions.length) return;
     setActiveIndex((current) => {
-      let next = current;
-      for (let i = 0; i < options.length; i += 1) {
-        next = (next + direction + options.length) % options.length;
-        if (!options[next].disabled) return next;
+      let position = visibleOptions.findIndex((option) => option.originalIndex === current);
+      if (position < 0) position = direction > 0 ? -1 : 0;
+      for (let i = 0; i < visibleOptions.length; i += 1) {
+        position = (position + direction + visibleOptions.length) % visibleOptions.length;
+        if (!visibleOptions[position].disabled) return visibleOptions[position].originalIndex;
       }
       return current;
     });
-  }, [options]);
+  }, [visibleOptions]);
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event) => {
@@ -4453,13 +4771,14 @@ function Select({ children, className = "", value, onChange, disabled = false, t
         moveActive(event.key === "ArrowDown" ? 1 : -1);
       } else if (event.key === "Home" || event.key === "End") {
         event.preventDefault();
-        const ordered = event.key === "Home" ? options : [...options].reverse();
+        const ordered = event.key === "Home" ? visibleOptions : [...visibleOptions].reverse();
         const found = ordered.findIndex((option) => !option.disabled);
-        setActiveIndex(event.key === "Home" ? found : options.length - 1 - found);
+        if (found >= 0) setActiveIndex(ordered[found].originalIndex);
       } else if (event.key === "Enter" || event.key === " ") {
+        if (event.target === searchRef.current && event.key === " ") return;
         event.preventDefault();
         chooseOption(options[activeIndex]);
-      } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      } else if (event.target !== searchRef.current && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
         const state = typeaheadRef.current;
         window.clearTimeout(state.timer);
         state.text = `${state.text}${event.key}`.toLowerCase();
@@ -4481,10 +4800,30 @@ function Select({ children, className = "", value, onChange, disabled = false, t
       window.removeEventListener("scroll", reposition, true);
       window.clearTimeout(typeaheadRef.current.timer);
     };
-  }, [activeIndex, chooseOption, computePopupPos, moveActive, open, options]);
+  }, [activeIndex, chooseOption, computePopupPos, moveActive, open, options, visibleOptions]);
+  useEffect(() => {
+    if (!open || !isSearchable) return;
+    requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }));
+  }, [open, isSearchable]);
+  useEffect(() => {
+    if (!open || !visibleOptions.length) return;
+    if (!visibleOptions.some((option) => option.originalIndex === activeIndex && !option.disabled)) {
+      const first = visibleOptions.find((option) => !option.disabled);
+      if (first) setActiveIndex(first.originalIndex);
+    }
+  }, [activeIndex, open, visibleOptions]);
   useEffect(() => {
     if (!open) return;
-    optionRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+    const option = optionRefs.current[activeIndex];
+    const scroller = popupRef.current?.querySelector(".premium-select-options");
+    if (!option || !scroller) return;
+    const optionRect = option.getBoundingClientRect();
+    const scrollerRect = scroller.getBoundingClientRect();
+    if (optionRect.top < scrollerRect.top) {
+      scroller.scrollTop -= scrollerRect.top - optionRect.top;
+    } else if (optionRect.bottom > scrollerRect.bottom) {
+      scroller.scrollTop += optionRect.bottom - scrollerRect.bottom;
+    }
   }, [activeIndex, open]);
   const handleTriggerKey = (event) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -4524,8 +4863,20 @@ function Select({ children, className = "", value, onChange, disabled = false, t
         className: `premium-select-menu fixed z-[90] overflow-hidden rounded-xl border border-neutral-800 bg-[#232327] shadow-2xl ${popupPos.above ? "origin-bottom" : "origin-top"}`,
         style: { top: popupPos.top, left: popupPos.left, width: popupPos.width, maxHeight: popupPos.maxHeight }
       },
-      /* @__PURE__ */ React.createElement("div", { className: "premium-select-menu-header flex items-center justify-between border-b border-neutral-800/80 px-3 py-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[9px] font-semibold uppercase tracking-[0.18em] text-neutral-500" }, "Choose an option"), /* @__PURE__ */ React.createElement("span", { className: "text-[9px] font-mono text-neutral-600" }, options.length)),
-      /* @__PURE__ */ React.createElement("div", { className: "premium-select-options overflow-y-auto p-1.5", style: { maxHeight: Math.max(74, popupPos.maxHeight - 37) } }, options.map((option, index) => {
+      /* @__PURE__ */ React.createElement("div", { className: "premium-select-menu-header flex items-center justify-between border-b border-neutral-800/80 px-3 py-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[9px] font-semibold uppercase tracking-[0.18em] text-neutral-500" }, "Choose an option"), /* @__PURE__ */ React.createElement("span", { className: "text-[9px] font-mono text-neutral-600" }, visibleOptions.length, isSearchable ? `/${options.length}` : "")),
+      isSearchable && /* @__PURE__ */ React.createElement("div", { className: "premium-select-search border-b border-neutral-800/80 p-2" }, /* @__PURE__ */ React.createElement("div", { className: "relative" }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", className: "absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600" }, /* @__PURE__ */ React.createElement("svg", { className: "h-3.5 w-3.5", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" }, /* @__PURE__ */ React.createElement("circle", { cx: "11", cy: "11", r: "7" }), /* @__PURE__ */ React.createElement("path", { d: "m20 20-3.2-3.2" }))), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          ref: searchRef,
+          value: query,
+          onChange: (event) => setQuery(event.target.value),
+          placeholder: "Search options…",
+          "aria-label": "Search options",
+          className: "premium-input w-full rounded-lg border border-neutral-800 bg-neutral-950 py-2 pl-8 pr-3 text-xs text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15"
+        }
+      ))),
+      /* @__PURE__ */ React.createElement("div", { className: "premium-select-options overflow-y-auto p-1.5", style: { maxHeight: Math.max(74, popupPos.maxHeight - (isSearchable ? 94 : 37)) } }, visibleOptions.map((option) => {
+        const index = option.originalIndex;
         const selected = option.value === String(value ?? "");
         const active = index === activeIndex;
         return /* @__PURE__ */ React.createElement(
@@ -4546,7 +4897,7 @@ function Select({ children, className = "", value, onChange, disabled = false, t
           /* @__PURE__ */ React.createElement("span", { className: `flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${selected ? "border-blue-400/50 bg-blue-500/20 text-blue-300" : "border-neutral-800 bg-neutral-950/60 text-transparent"}` }, /* @__PURE__ */ React.createElement("svg", { className: "h-3 w-3", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "20 6 9 17 4 12" }))),
           /* @__PURE__ */ React.createElement("span", { className: "min-w-0 flex-1 truncate", style: option.style }, option.label || "—")
         );
-      }))
+      }), !visibleOptions.length && /* @__PURE__ */ React.createElement("div", { className: "premium-empty-state px-4 py-7 text-center text-xs text-neutral-500" }, "No matching options"))
     ),
     document.body
   ));
@@ -4574,7 +4925,7 @@ function Textarea({ className = "", autoGrow = false, value, onInput, style, ...
         onInput?.(e);
       },
       style: { ...style, ...autoGrow ? { overflowY: "hidden" } : {} },
-      className: `w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${autoGrow ? "resize-none overflow-hidden" : "resize-y"} ${className}`
+      className: `premium-textarea w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${autoGrow ? "resize-none overflow-hidden" : "resize-y"} ${className}`
     }
   );
 }
@@ -4867,7 +5218,7 @@ function AuthModal() {
       setBusy(false);
     }
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3 mb-1" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 512 512", className: "w-9 h-9 rounded-md shrink-0", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("rect", { width: "512", height: "512", rx: "100", fill: "#2196F3" }), /* @__PURE__ */ React.createElement("text", { x: "256", y: "370", textAnchor: "middle", fontFamily: "Inter, system-ui, sans-serif", fontSize: "340", fontWeight: "900", fill: "white" }, "G")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { className: "text-base font-bold tracking-tight" }, "Monthly Report Generator"), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 mt-0.5" }, "Sign in to sync across sessions"))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d] mt-5" }, [["signin", "Sign in"], ["signup", "Create account"]].map(([m, label]) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "premium-auth-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay" }, /* @__PURE__ */ React.createElement("div", { className: "premium-auth-panel w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3 mb-1" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 512 512", className: "w-9 h-9 rounded-md shrink-0", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("rect", { width: "512", height: "512", rx: "100", fill: "#2196F3" }), /* @__PURE__ */ React.createElement("text", { x: "256", y: "370", textAnchor: "middle", fontFamily: "Inter, system-ui, sans-serif", fontSize: "340", fontWeight: "900", fill: "white" }, "G")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", { className: "text-base font-bold tracking-tight" }, "Monthly Report Generator"), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 mt-0.5" }, "Sign in to sync across sessions"))), /* @__PURE__ */ React.createElement("div", { className: "premium-auth-tabs flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d] mt-5" }, [["signin", "Sign in"], ["signup", "Create account"]].map(([m, label]) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: m,
@@ -4961,7 +5312,7 @@ function UploadedSidebar({ state, setState }) {
       className: "text-neutral-500 hover:text-neutral-200 transition-colors -mt-2"
     },
     /* @__PURE__ */ React.createElement("svg", { className: "w-4 h-4", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "15 18 9 12 15 6" }))
-  )), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 -mt-1" }, "Sheets parsed from an uploaded .xlsx. Add the ones you want into the main sidebar.")), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto min-h-0" }, imported.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-[12px] text-neutral-400" }, "No uploaded sheets yet"), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-1.5 leading-relaxed" }, "Open the ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, "Config"), " tab and use ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, "Import .xlsx"), " in the Templates section.")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, imported.map((it) => {
+  )), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 -mt-1" }, "Sheets parsed from an uploaded .xlsx. Add the ones you want into the main sidebar.")), /* @__PURE__ */ React.createElement("div", { className: "p-5 flex-1 overflow-y-auto min-h-0" }, imported.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "premium-empty-state rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-[12px] text-neutral-400" }, "No uploaded sheets yet"), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-1.5 leading-relaxed" }, "Open the ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, "Config"), " tab and use ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, "Import .xlsx"), " in the Templates section.")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, imported.map((it) => {
     const count = it.layout === "hourly" || it.layout === "twohour" ? `${(it.metrics || []).length} metrics` : `${(it.columns || []).length} cols`;
     return /* @__PURE__ */ React.createElement(
       "div",
@@ -5478,7 +5829,7 @@ function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
     fontStyle: (sheet.noteItalic !== void 0 ? sheet.noteItalic : true) ? "italic" : "normal",
     textDecoration: sheet.noteUnderline ? "underline" : "none",
     textAlign: sheet.noteAlign || "left"
-  } }, sheet.note))), sheet.layout === "hourly" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "cols", title: "Column headers", hint: "Shown in the header row above each column" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-3 max-w-lg" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Date column label"), /* @__PURE__ */ React.createElement(Input, { value: sheet.dateHeader ?? "DATE", onChange: (e) => update({ dateHeader: e.target.value }), placeholder: "DATE" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Metric column label"), /* @__PURE__ */ React.createElement(Input, { value: sheet.metricHeader ?? "", onChange: (e) => update({ metricHeader: e.target.value }), placeholder: "METRIC" })))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "dayblock", title: "Day block spacing", hint: "Controls whether a blank row is inserted between each daily block", defaultCollapsed: true }, /* @__PURE__ */ React.createElement("div", { className: "inline-flex rounded-md border border-neutral-900 bg-neutral-950 p-0.5" }, [
+  } }, sheet.note))), sheet.layout === "hourly" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "cols", title: "Column headers", hint: "Shown in the header row above each column" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-3 max-w-lg" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Date column label"), /* @__PURE__ */ React.createElement(Input, { value: sheet.dateHeader ?? "DATE", onChange: (e) => update({ dateHeader: e.target.value }), placeholder: "DATE" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Metric column label"), /* @__PURE__ */ React.createElement(Input, { value: sheet.metricHeader ?? "", onChange: (e) => update({ metricHeader: e.target.value }), placeholder: "METRIC" })))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "dayblock", title: "Day block spacing", hint: "Controls whether a blank row is inserted between each daily block", defaultCollapsed: true }, /* @__PURE__ */ React.createElement("div", { className: "premium-tabs inline-flex rounded-md border border-neutral-900 bg-neutral-950 p-0.5" }, [
     [true, "With row separator"],
     [false, "No row separator"]
   ].map(([value, label]) => /* @__PURE__ */ React.createElement(
@@ -5591,7 +5942,7 @@ function FormattingRules({ rules, sheets, onChange }) {
   };
   const scopedRules = rules.map((rule, index) => ({ rule, index })).filter(({ rule }) => sipRuleScopeMatches(rule, ruleScope));
   const scopeLabel = ruleScope === "__view_all__" ? "all rules" : ruleScope === "__all__" ? "all sheets" : SIP_LAYOUT_RULE_SCOPES.find((scope) => scope.value === ruleScope)?.label || sheets.find((sheet) => sheet.id === ruleScope)?.name || "selected sheet";
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-sm" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Rule set"), /* @__PURE__ */ React.createElement(Select, { value: ruleScope, onChange: (e) => setRuleScope(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "__view_all__" }, "All rules"), /* @__PURE__ */ React.createElement("option", { value: "__all__" }, "Global rules - all sheets"), SIP_LAYOUT_RULE_SCOPES.map((scope) => /* @__PURE__ */ React.createElement("option", { key: scope.value, value: scope.value }, scope.label)), sheets.map((sheet) => /* @__PURE__ */ React.createElement("option", { key: sheet.id, value: sheet.id }, sheet.name)))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2 pb-0.5" }, /* @__PURE__ */ React.createElement(Pill, null, scopedRules.filter(({ rule }) => rule.enabled).length, " enabled"), /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, scopedRules.length, " shown"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => add() }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add rule")), /* @__PURE__ */ React.createElement("p", { className: "w-full text-[11px] text-neutral-500" }, "Rules can be global, layout-wide, row-separator-specific, or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, max-in-column, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.")), rules.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-dashed border-neutral-800 px-5 py-12 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-neutral-300" }, "No formatting rules yet"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-600 mt-1" }, "Add rules to highlight peaks, flag missing data, mark weekends, etc."), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => add(), className: "mt-4" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add your first rule")), rules.length > 0 && scopedRules.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-dashed border-neutral-800 px-5 py-10 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-neutral-300" }, "No rules for ", scopeLabel), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-600 mt-1" }, "Add a rule here to keep this sheet's formatting separate."), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => add(), className: "mt-4" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add rule")), scopedRules.map(({ rule: r, index: idx }, displayIdx) => {
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-sm" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Rule set"), /* @__PURE__ */ React.createElement(Select, { value: ruleScope, onChange: (e) => setRuleScope(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "__view_all__" }, "All rules"), /* @__PURE__ */ React.createElement("option", { value: "__all__" }, "Global rules - all sheets"), SIP_LAYOUT_RULE_SCOPES.map((scope) => /* @__PURE__ */ React.createElement("option", { key: scope.value, value: scope.value }, scope.label)), sheets.map((sheet) => /* @__PURE__ */ React.createElement("option", { key: sheet.id, value: sheet.id }, sheet.name)))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2 pb-0.5" }, /* @__PURE__ */ React.createElement(Pill, null, scopedRules.filter(({ rule }) => rule.enabled).length, " enabled"), /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, scopedRules.length, " shown"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => add() }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add rule")), /* @__PURE__ */ React.createElement("p", { className: "w-full text-[11px] text-neutral-500" }, "Rules can be global, layout-wide, row-separator-specific, or assigned to one sheet. Unchecked rules are disabled and will not be applied during generation. Max-in-row, max-in-column, weekend, separator, and metric-name rules are hourly-only; threshold, blank, and zero rules also work on flat/alarm sheets.")), rules.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "premium-empty-state rounded-lg border border-dashed border-neutral-800 px-5 py-12 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-neutral-300" }, "No formatting rules yet"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-600 mt-1" }, "Add rules to highlight peaks, flag missing data, mark weekends, etc."), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => add(), className: "mt-4" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add your first rule")), rules.length > 0 && scopedRules.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "premium-empty-state rounded-lg border border-dashed border-neutral-800 px-5 py-10 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-neutral-300" }, "No rules for ", scopeLabel), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-600 mt-1" }, "Add a rule here to keep this sheet's formatting separate."), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => add(), className: "mt-4" }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add rule")), scopedRules.map(({ rule: r, index: idx }, displayIdx) => {
     const typeDef = RULE_TYPES.find((t) => t.value === r.type);
     return /* @__PURE__ */ React.createElement(Card, { key: r.id, className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3 mb-4" }, /* @__PURE__ */ React.createElement(
       "input",
@@ -7064,7 +7415,7 @@ function BmrSmsClientsEditor({ sms, onChange }) {
       };
     });
   }, [market.clientsKey, onChange, otherMarket.clientsKey]);
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Separate management for RES and WHS" }, "SMS clients"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500" }, "Retail and Wholesale keep separate client orders, colors, managers, and hidden rows.")), /* @__PURE__ */ React.createElement("div", { className: "inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5" }, [
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Separate management for RES and WHS" }, "SMS clients"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-500" }, "Retail and Wholesale keep separate client orders, colors, managers, and hidden rows.")), /* @__PURE__ */ React.createElement("div", { className: "premium-tabs inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5" }, [
     { id: "retail", label: "Retail / RES", count: visibleRetail },
     { id: "wholesale", label: "Wholesale / WHS", count: visibleWholesale }
   ].map((item) => /* @__PURE__ */ React.createElement(
@@ -7704,7 +8055,7 @@ function WlSmsContentPanel({ wl, onChange }) {
     loadText(fixed);
   };
   const modeHint = mode === "lines" ? "Every non-empty line becomes one content" : "Splits on ———— / === lines, or blank lines if no dashes";
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(WlSmsLinkBuilder, { wl, onChange }), /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: modeHint }, "Paste content"), /* @__PURE__ */ React.createElement("div", { className: "mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#1a1a1d] p-0.5 w-fit" }, [
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(WlSmsLinkBuilder, { wl, onChange }), /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: modeHint }, "Paste content"), /* @__PURE__ */ React.createElement("div", { className: "premium-tabs mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#1a1a1d] p-0.5 w-fit" }, [
     { id: "auto", label: "With separator" },
     { id: "lines", label: "Without separator" }
   ].map((opt) => /* @__PURE__ */ React.createElement(
@@ -7724,7 +8075,7 @@ function WlSmsContentPanel({ wl, onChange }) {
       onChange: (e) => setPasteText(e.target.value),
       placeholder: mode === "lines" ? `Paste blast content here. Each non-empty line will be treated as one content.` : `Paste blast content here. Use a divider line like ———————— between each content, or leave a blank line between them.`
     }
-  ), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => loadText(pasteText), disabled: !pasteText }, "Parse pasted text"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: clearAll, disabled: !pasteText && !(wl.contents || []).length }, "Clear all"), /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500" }, (wl.contents || []).length, " content block", (wl.contents || []).length === 1 ? "" : "s"), pasteText.trim() && /* @__PURE__ */ React.createElement(WlSmsUtfStatusPill, { analysis: pasteAnalysis }), pasteText.trim() && /* @__PURE__ */ React.createElement(WlSmsLengthPill, { length: pasteAnalysis.length })), pasteText.trim() && pasteAnalysis.length.parts > 1 && /* @__PURE__ */ React.createElement("div", { className: "mt-3" }, /* @__PURE__ */ React.createElement(WlSmsLengthWarning, { length: pasteAnalysis.length })), pasteText.trim() && pasteAnalysis.isUtf && /* @__PURE__ */ React.createElement("div", { className: "mt-3 space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[11px] font-semibold text-red-300" }, "Special characters detected — this will be sent as UTF (70 chars per SMS part)."), pasteFixable && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: applyPasteFixes }, "Apply safe replacements")), /* @__PURE__ */ React.createElement(WlSmsUtfHighlight, { segments: pasteAnalysis.segments }), /* @__PURE__ */ React.createElement(WlSmsUtfOffenderChips, { offenders: pasteAnalysis.offenders }))), /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "One block = one row in column B" }, "Parsed contents"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, (wl.contents || []).length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[12px] text-neutral-500 italic" }, "Nothing parsed yet. Paste content above."), (wl.contents || []).map((block, i) => {
+  ), /* @__PURE__ */ React.createElement("div", { className: "mt-2 flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => loadText(pasteText), disabled: !pasteText }, "Parse pasted text"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: clearAll, disabled: !pasteText && !(wl.contents || []).length }, "Clear all"), /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500" }, (wl.contents || []).length, " content block", (wl.contents || []).length === 1 ? "" : "s"), pasteText.trim() && /* @__PURE__ */ React.createElement(WlSmsUtfStatusPill, { analysis: pasteAnalysis }), pasteText.trim() && /* @__PURE__ */ React.createElement(WlSmsLengthPill, { length: pasteAnalysis.length })), pasteText.trim() && pasteAnalysis.length.parts > 1 && /* @__PURE__ */ React.createElement("div", { className: "mt-3" }, /* @__PURE__ */ React.createElement(WlSmsLengthWarning, { length: pasteAnalysis.length })), pasteText.trim() && pasteAnalysis.isUtf && /* @__PURE__ */ React.createElement("div", { className: "mt-3 space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[11px] font-semibold text-red-300" }, "Special characters detected — this will be sent as UTF (70 chars per SMS part)."), pasteFixable && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: applyPasteFixes }, "Apply safe replacements")), /* @__PURE__ */ React.createElement(WlSmsUtfHighlight, { segments: pasteAnalysis.segments }), /* @__PURE__ */ React.createElement(WlSmsUtfOffenderChips, { offenders: pasteAnalysis.offenders }))), /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "One block = one row in column B" }, "Parsed contents"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, (wl.contents || []).length === 0 && /* @__PURE__ */ React.createElement("div", { className: "premium-empty-state px-4 py-7 text-center text-[12px] text-neutral-500" }, "Nothing parsed yet. Paste content above."), (wl.contents || []).map((block, i) => {
     const analysis = wlSmsAnalyzeUtf(block);
     return /* @__PURE__ */ React.createElement("div", { key: i, className: "rounded-md border border-neutral-900 bg-neutral-950 p-2" }, /* @__PURE__ */ React.createElement("div", { className: "mb-1 flex flex-wrap items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Content ", i + 1), String(block || "").trim() && /* @__PURE__ */ React.createElement(WlSmsUtfStatusPill, { analysis }), String(block || "").trim() && /* @__PURE__ */ React.createElement(WlSmsLengthPill, { length: analysis.length })), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-3" }, /* @__PURE__ */ React.createElement(
       "button",
@@ -9453,7 +9804,7 @@ function RcaSignatoriesPanel({ state, setState, sync }) {
     next.splice(j, 0, item);
     setSignatories(next);
   };
-  return /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "mb-3 flex flex-wrap items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Add to your library and tick who signs this RCA" }, "Signatories"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addSignatory }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add signatory")), signatories.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-dashed border-neutral-800 px-3 py-4 text-xs text-neutral-500" }, 'No signatories saved yet. Click "Add signatory" to create one.') : /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, signatories.map((s, idx) => /* @__PURE__ */ React.createElement("div", { key: s.id, className: "rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-2 mb-2" }, /* @__PURE__ */ React.createElement("label", { className: "inline-flex items-center gap-2 cursor-pointer text-sm" }, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { className: "p-4" }, /* @__PURE__ */ React.createElement("div", { className: "mb-3 flex flex-wrap items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Add to your library and tick who signs this RCA" }, "Signatories"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addSignatory }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add signatory")), signatories.length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "premium-empty-state rounded-md border border-dashed border-neutral-800 px-3 py-4 text-xs text-neutral-500" }, 'No signatories saved yet. Click "Add signatory" to create one.') : /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, signatories.map((s, idx) => /* @__PURE__ */ React.createElement("div", { key: s.id, className: "rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-2 mb-2" }, /* @__PURE__ */ React.createElement("label", { className: "inline-flex items-center gap-2 cursor-pointer text-sm" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "checkbox",
@@ -11030,7 +11381,7 @@ function RecorderDropZone({ onFiles, engine }) {
         const files = [...e.dataTransfer && e.dataTransfer.files || []].filter((f) => String(f.type || "").startsWith("image/"));
         if (files.length) onFiles(files);
       },
-      className: `rounded-lg border-2 border-dashed px-6 py-9 text-center transition-colors ${over ? "border-blue-500/70 bg-blue-500/5" : "border-neutral-800 bg-neutral-950/60"}`
+      className: `premium-upload-zone rounded-lg border-2 border-dashed px-6 py-9 text-center transition-colors ${over ? "is-dragging border-blue-500/70 bg-blue-500/5" : "border-neutral-800 bg-neutral-950/60"}`
     },
     /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-center gap-2 text-sm text-neutral-300 font-medium" }, /* @__PURE__ */ React.createElement("kbd", { className: "rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300" }, "Ctrl"), /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "+"), /* @__PURE__ */ React.createElement("kbd", { className: "rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300" }, "V"), /* @__PURE__ */ React.createElement("span", null, "paste a screenshot — or drop image files here")),
     /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 text-xs text-neutral-600" }, "Gateway tables and Current/Max Inbound-Outbound cards are detected automatically. Queue as many screenshots as you need for the hour."),
@@ -11902,7 +12253,7 @@ function UsersAdminPanel({ sync }) {
   const formatDate = (ms) => ms ? new Date(ms).toLocaleString() : "—";
   const term = filter.trim().toLowerCase();
   const visible = term ? rows.filter((r) => (r.email || "").toLowerCase().includes(term) || (r.uid || "").toLowerCase().includes(term)) : rows;
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${rows.length} signed-up users · admins see every module · semi-admins see Whitelist SMS + Editor` }, "User access"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2 mb-3" }, /* @__PURE__ */ React.createElement(Input, { placeholder: "Filter by email or UID…", value: filter, onChange: (e) => setFilter(e.target.value), className: "max-w-xs" }), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: load, disabled: loading }, loading ? "Loading…" : "Refresh")), error && /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-[12px] text-red-300 mb-3" }, error), /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-800 overflow-hidden" }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "bg-neutral-950/60 text-[10px] uppercase tracking-[0.2em] text-neutral-500" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium" }, "Email"), /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium" }, "Role"), /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium hidden md:table-cell" }, "Last updated"), /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium hidden lg:table-cell" }, "UID"))), /* @__PURE__ */ React.createElement("tbody", null, loading && /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 4, className: "px-4 py-6 text-center text-neutral-500 text-xs" }, "Loading users…")), !loading && visible.length === 0 && /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 4, className: "px-4 py-6 text-center text-neutral-500 text-xs" }, rows.length === 0 ? "No user profiles yet. Users appear here after they sign in for the first time." : "No users match this filter.")), !loading && visible.map((r) => {
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${rows.length} signed-up users · admins see every module · semi-admins see Whitelist SMS + Editor` }, "User access"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2 mb-3" }, /* @__PURE__ */ React.createElement(ClearableInput, { placeholder: "Filter by email or UID…", value: filter, onChange: (e) => setFilter(e.target.value), onClear: () => setFilter(""), className: "w-full max-w-xs" }), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: load, disabled: loading }, loading ? "Loading…" : "Refresh")), error && /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-[12px] text-red-300 mb-3" }, error), /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-neutral-800 overflow-hidden" }, /* @__PURE__ */ React.createElement("table", { className: "w-full text-sm" }, /* @__PURE__ */ React.createElement("thead", { className: "bg-neutral-950/60 text-[10px] uppercase tracking-[0.2em] text-neutral-500" }, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium" }, "Email"), /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium" }, "Role"), /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium hidden md:table-cell" }, "Last updated"), /* @__PURE__ */ React.createElement("th", { className: "text-left px-4 py-2.5 font-medium hidden lg:table-cell" }, "UID"))), /* @__PURE__ */ React.createElement("tbody", null, loading && /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 4, className: "px-4 py-6 text-center text-neutral-500 text-xs" }, "Loading users…")), !loading && visible.length === 0 && /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("td", { colSpan: 4, className: "px-4 py-6 text-center text-neutral-500 text-xs" }, rows.length === 0 ? "No user profiles yet. Users appear here after they sign in for the first time." : "No users match this filter.")), !loading && visible.map((r) => {
     const isSelf = r.uid === sync.uid;
     const isSuper = isSuperAdminEmail(r.email);
     const effective = effectiveRole(r.email, r.dbRole);

@@ -3990,7 +3990,7 @@ https://bit.ly/4vrcu64`;
       };
       return (
         <span onClick={onClick}
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide ${tones[tone]} ${onClick ? 'cursor-pointer hover:bg-neutral-800' : ''} ${className}`}>
+          className={`premium-chip inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium tracking-wide ${tones[tone]} ${onClick ? 'cursor-pointer hover:bg-neutral-800' : ''} ${className}`}>
           {children}
         </span>
       );
@@ -4006,7 +4006,8 @@ https://bit.ly/4vrcu64`;
       const sizes = { sm: 'px-2.5 py-1 text-xs', md: 'px-3.5 py-2 text-sm', lg: 'px-5 py-2.5 text-sm' };
       return (
         <button type={type} title={title} onClick={onClick} disabled={disabled}
-          className={`inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${variants[variant]} ${sizes[size]} ${className}`}>
+          data-variant={variant}
+          className={`premium-button inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${variants[variant]} ${sizes[size]} ${className}`}>
           {children}
         </button>
       );
@@ -4167,7 +4168,7 @@ https://bit.ly/4vrcu64`;
     }
 
     function Card({ children, className = '' }) {
-      return <div className={`rounded-lg border border-neutral-900 bg-[#232327] ${className}`}>{children}</div>;
+      return <div className={`premium-card rounded-lg border border-neutral-900 bg-[#232327] ${className}`}>{children}</div>;
     }
 
     function IconSheet() {
@@ -4380,13 +4381,16 @@ https://bit.ly/4vrcu64`;
 
     function Input(props) {
       const { className = '', ...rest } = props;
-      return <input {...rest} className={`w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}`} />;
+      return <input {...rest} className={`premium-input w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}`} />;
     }
 
     function ClearableInput({ value, onClear, clearTitle = 'Clear input', className = '', inputClassName = '', ...rest }) {
       return (
-        <div className={`relative ${className}`}>
-          <Input {...rest} value={value} className={`pr-9 ${inputClassName}`} />
+        <div className={`premium-search relative ${className}`}>
+          <span aria-hidden="true" className="premium-search-icon absolute left-3 top-1/2 -translate-y-1/2 text-neutral-600">
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+          </span>
+          <Input {...rest} value={value} className={`pl-9 pr-9 ${inputClassName}`} />
           {!!value && (
             <button type="button" onMouseDown={e => e.preventDefault()} onClick={onClear}
               className="no-press input-clear-button absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40"
@@ -4398,12 +4402,14 @@ https://bit.ly/4vrcu64`;
       );
     }
 
-    function Select({ children, className = '', value, onChange, disabled = false, title, ...rest }) {
+    function Select({ children, className = '', value, onChange, disabled = false, title, searchable, ...rest }) {
       const [open, setOpen] = useState(false);
       const [popupPos, setPopupPos] = useState(null);
       const [activeIndex, setActiveIndex] = useState(0);
+      const [query, setQuery] = useState('');
       const triggerRef = useRef(null);
       const popupRef = useRef(null);
+      const searchRef = useRef(null);
       const optionRefs = useRef([]);
       const typeaheadRef = useRef({ text: '', timer: null });
       const listboxIdRef = useRef(`premium-select-${Math.random().toString(36).slice(2)}`);
@@ -4443,6 +4449,13 @@ https://bit.ly/4vrcu64`;
 
       const selectedIndex = Math.max(0, options.findIndex(option => option.value === String(value ?? '')));
       const selectedOption = options.find(option => option.value === String(value ?? '')) || options[0];
+      const isSearchable = searchable == null ? options.length >= 8 : !!searchable;
+      const visibleOptions = useMemo(() => {
+        const term = query.trim().toLowerCase();
+        return options
+          .map((option, index) => ({ ...option, originalIndex: index }))
+          .filter(option => !term || option.label.toLowerCase().includes(term));
+      }, [options, query]);
 
       const computePopupPos = useCallback(() => {
         const trigger = triggerRef.current;
@@ -4470,6 +4483,7 @@ https://bit.ly/4vrcu64`;
 
       const openMenu = useCallback((preferredIndex = selectedIndex) => {
         if (disabled || !options.length) return;
+        setQuery('');
         const nextIndex = options[preferredIndex]?.disabled
           ? options.findIndex(option => !option.disabled)
           : preferredIndex;
@@ -4484,22 +4498,28 @@ https://bit.ly/4vrcu64`;
           target: { value: option.value },
           currentTarget: { value: option.value },
         };
-        onChange?.(syntheticEvent);
         setOpen(false);
-        requestAnimationFrame(() => triggerRef.current?.focus());
+        setQuery('');
+        onChange?.(syntheticEvent);
+        // Returning focus to a rule/client selector must not scroll the page.
+        // Long client menus are rendered in a fixed portal, and the browser's
+        // default focus behavior could otherwise jump from the target rules
+        // down to the usage-rule section after a client is chosen.
+        requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
       }, [onChange]);
 
       const moveActive = useCallback((direction) => {
-        if (!options.length) return;
+        if (!visibleOptions.length) return;
         setActiveIndex(current => {
-          let next = current;
-          for (let i = 0; i < options.length; i += 1) {
-            next = (next + direction + options.length) % options.length;
-            if (!options[next].disabled) return next;
+          let position = visibleOptions.findIndex(option => option.originalIndex === current);
+          if (position < 0) position = direction > 0 ? -1 : 0;
+          for (let i = 0; i < visibleOptions.length; i += 1) {
+            position = (position + direction + visibleOptions.length) % visibleOptions.length;
+            if (!visibleOptions[position].disabled) return visibleOptions[position].originalIndex;
           }
           return current;
         });
-      }, [options]);
+      }, [visibleOptions]);
 
       useEffect(() => {
         if (!open) return;
@@ -4517,13 +4537,14 @@ https://bit.ly/4vrcu64`;
             moveActive(event.key === 'ArrowDown' ? 1 : -1);
           } else if (event.key === 'Home' || event.key === 'End') {
             event.preventDefault();
-            const ordered = event.key === 'Home' ? options : [...options].reverse();
+            const ordered = event.key === 'Home' ? visibleOptions : [...visibleOptions].reverse();
             const found = ordered.findIndex(option => !option.disabled);
-            setActiveIndex(event.key === 'Home' ? found : options.length - 1 - found);
+            if (found >= 0) setActiveIndex(ordered[found].originalIndex);
           } else if (event.key === 'Enter' || event.key === ' ') {
+            if (event.target === searchRef.current && event.key === ' ') return;
             event.preventDefault();
             chooseOption(options[activeIndex]);
-          } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          } else if (event.target !== searchRef.current && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
             const state = typeaheadRef.current;
             window.clearTimeout(state.timer);
             state.text = `${state.text}${event.key}`.toLowerCase();
@@ -4543,11 +4564,36 @@ https://bit.ly/4vrcu64`;
           window.removeEventListener('scroll', reposition, true);
           window.clearTimeout(typeaheadRef.current.timer);
         };
-      }, [activeIndex, chooseOption, computePopupPos, moveActive, open, options]);
+      }, [activeIndex, chooseOption, computePopupPos, moveActive, open, options, visibleOptions]);
+
+      useEffect(() => {
+        if (!open || !isSearchable) return;
+        requestAnimationFrame(() => searchRef.current?.focus({ preventScroll: true }));
+      }, [open, isSearchable]);
+
+      useEffect(() => {
+        if (!open || !visibleOptions.length) return;
+        if (!visibleOptions.some(option => option.originalIndex === activeIndex && !option.disabled)) {
+          const first = visibleOptions.find(option => !option.disabled);
+          if (first) setActiveIndex(first.originalIndex);
+        }
+      }, [activeIndex, open, visibleOptions]);
 
       useEffect(() => {
         if (!open) return;
-        optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
+        const option = optionRefs.current[activeIndex];
+        const scroller = popupRef.current?.querySelector('.premium-select-options');
+        if (!option || !scroller) return;
+        // Scroll only the menu's options pane. Element.scrollIntoView() also
+        // walks outer scroll containers and can move the document when this
+        // fixed portal contains hundreds of client choices.
+        const optionRect = option.getBoundingClientRect();
+        const scrollerRect = scroller.getBoundingClientRect();
+        if (optionRect.top < scrollerRect.top) {
+          scroller.scrollTop -= scrollerRect.top - optionRect.top;
+        } else if (optionRect.bottom > scrollerRect.bottom) {
+          scroller.scrollTop += optionRect.bottom - scrollerRect.bottom;
+        }
       }, [activeIndex, open]);
 
       const handleTriggerKey = (event) => {
@@ -4578,10 +4624,21 @@ https://bit.ly/4vrcu64`;
               style={{ top: popupPos.top, left: popupPos.left, width: popupPos.width, maxHeight: popupPos.maxHeight }}>
               <div className="premium-select-menu-header flex items-center justify-between border-b border-neutral-800/80 px-3 py-2">
                 <span className="text-[9px] font-semibold uppercase tracking-[0.18em] text-neutral-500">Choose an option</span>
-                <span className="text-[9px] font-mono text-neutral-600">{options.length}</span>
+                <span className="text-[9px] font-mono text-neutral-600">{visibleOptions.length}{isSearchable ? `/${options.length}` : ''}</span>
               </div>
-              <div className="premium-select-options overflow-y-auto p-1.5" style={{ maxHeight: Math.max(74, popupPos.maxHeight - 37) }}>
-                {options.map((option, index) => {
+              {isSearchable && (
+                <div className="premium-select-search border-b border-neutral-800/80 p-2">
+                  <div className="relative">
+                    <span aria-hidden="true" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-600"><svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg></span>
+                    <input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)}
+                      placeholder="Search options…" aria-label="Search options"
+                      className="premium-input w-full rounded-lg border border-neutral-800 bg-neutral-950 py-2 pl-8 pr-3 text-xs text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15" />
+                  </div>
+                </div>
+              )}
+              <div className="premium-select-options overflow-y-auto p-1.5" style={{ maxHeight: Math.max(74, popupPos.maxHeight - (isSearchable ? 94 : 37)) }}>
+                {visibleOptions.map((option) => {
+                  const index = option.originalIndex;
                   const selected = option.value === String(value ?? '');
                   const active = index === activeIndex;
                   return (
@@ -4598,6 +4655,9 @@ https://bit.ly/4vrcu64`;
                     </button>
                   );
                 })}
+                {!visibleOptions.length && (
+                  <div className="premium-empty-state px-4 py-7 text-center text-xs text-neutral-500">No matching options</div>
+                )}
               </div>
             </div>,
             document.body
@@ -4625,7 +4685,7 @@ https://bit.ly/4vrcu64`;
         <textarea {...rest} ref={textareaRef} value={value}
           onInput={e => { resizeToContent(); onInput?.(e); }}
           style={{ ...style, ...(autoGrow ? { overflowY: 'hidden' } : {}) }}
-          className={`w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${autoGrow ? 'resize-none overflow-hidden' : 'resize-y'} ${className}`} />
+          className={`premium-textarea w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${autoGrow ? 'resize-none overflow-hidden' : 'resize-y'} ${className}`} />
       );
     }
 
@@ -4892,8 +4952,8 @@ https://bit.ly/4vrcu64`;
       };
 
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay">
-          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel">
+        <div className="premium-auth-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 anim-overlay">
+          <div className="premium-auth-panel w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel">
             <div className="flex items-center gap-3 mb-1">
               <svg viewBox="0 0 512 512" className="w-9 h-9 rounded-md shrink-0" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <rect width="512" height="512" rx="100" fill="#2196F3"/>
@@ -4905,7 +4965,7 @@ https://bit.ly/4vrcu64`;
               </div>
             </div>
 
-            <div className="flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d] mt-5">
+            <div className="premium-auth-tabs flex items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d] mt-5">
               {[['signin','Sign in'], ['signup','Create account']].map(([m, label]) => (
                 <button key={m} type="button"
                   onClick={() => { setMode(m); setError(null); setInfo(null); }}
@@ -5025,7 +5085,7 @@ https://bit.ly/4vrcu64`;
 
           <div className="p-5 flex-1 overflow-y-auto min-h-0">
             {imported.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center">
+              <div className="premium-empty-state rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center">
                 <p className="text-[12px] text-neutral-400">No uploaded sheets yet</p>
                 <p className="text-[11px] text-neutral-600 mt-1.5 leading-relaxed">Open the <span className="text-neutral-300">Config</span> tab and use <span className="text-neutral-300">Import .xlsx</span> in the Templates section.</p>
               </div>
@@ -5600,7 +5660,7 @@ https://bit.ly/4vrcu64`;
                 </div>
               </CollapsibleSection>
               <CollapsibleSection sid="dayblock" title="Day block spacing" hint="Controls whether a blank row is inserted between each daily block" defaultCollapsed>
-                <div className="inline-flex rounded-md border border-neutral-900 bg-neutral-950 p-0.5">
+                <div className="premium-tabs inline-flex rounded-md border border-neutral-900 bg-neutral-950 p-0.5">
                   {[
                     [true, 'With row separator'],
                     [false, 'No row separator'],
@@ -5831,14 +5891,14 @@ https://bit.ly/4vrcu64`;
             </p>
           </div>
           {rules.length === 0 && (
-            <div className="rounded-lg border border-dashed border-neutral-800 px-5 py-12 text-center">
+            <div className="premium-empty-state rounded-lg border border-dashed border-neutral-800 px-5 py-12 text-center">
               <p className="text-sm text-neutral-300">No formatting rules yet</p>
               <p className="text-xs text-neutral-600 mt-1">Add rules to highlight peaks, flag missing data, mark weekends, etc.</p>
               <Btn variant="ghost" size="md" onClick={() => add()} className="mt-4"><IconPlus /> Add your first rule</Btn>
             </div>
           )}
           {rules.length > 0 && scopedRules.length === 0 && (
-            <div className="rounded-lg border border-dashed border-neutral-800 px-5 py-10 text-center">
+            <div className="premium-empty-state rounded-lg border border-dashed border-neutral-800 px-5 py-10 text-center">
               <p className="text-sm text-neutral-300">No rules for {scopeLabel}</p>
               <p className="text-xs text-neutral-600 mt-1">Add a rule here to keep this sheet's formatting separate.</p>
               <Btn variant="ghost" size="md" onClick={() => add()} className="mt-4"><IconPlus /> Add rule</Btn>
@@ -7814,7 +7874,7 @@ https://bit.ly/4vrcu64`;
               <SectionLabel hint="Separate management for RES and WHS">SMS clients</SectionLabel>
               <p className="text-xs text-neutral-500">Retail and Wholesale keep separate client orders, colors, managers, and hidden rows.</p>
             </div>
-            <div className="inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5">
+            <div className="premium-tabs inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5">
               {[
                 { id: 'retail', label: 'Retail / RES', count: visibleRetail },
                 { id: 'wholesale', label: 'Wholesale / WHS', count: visibleWholesale },
@@ -8799,7 +8859,7 @@ https://bit.ly/4vrcu64`;
 
           <Card className="p-4">
             <SectionLabel hint={modeHint}>Paste content</SectionLabel>
-            <div className="mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#1a1a1d] p-0.5 w-fit">
+            <div className="premium-tabs mb-2 flex flex-wrap items-center gap-1 rounded-md border border-neutral-800 bg-[#1a1a1d] p-0.5 w-fit">
               {[
                 { id: 'auto',  label: 'With separator' },
                 { id: 'lines', label: 'Without separator' },
@@ -8843,7 +8903,7 @@ https://bit.ly/4vrcu64`;
             <SectionLabel hint="One block = one row in column B">Parsed contents</SectionLabel>
             <div className="space-y-2">
               {(wl.contents || []).length === 0 && (
-                <div className="text-[12px] text-neutral-500 italic">Nothing parsed yet. Paste content above.</div>
+                <div className="premium-empty-state px-4 py-7 text-center text-[12px] text-neutral-500">Nothing parsed yet. Paste content above.</div>
               )}
               {(wl.contents || []).map((block, i) => {
                 const analysis = wlSmsAnalyzeUtf(block);
@@ -11053,7 +11113,7 @@ https://bit.ly/4vrcu64`;
             <Btn variant="ghost" size="sm" onClick={addSignatory}><IconPlus /> Add signatory</Btn>
           </div>
           {signatories.length === 0 ? (
-            <div className="rounded-md border border-dashed border-neutral-800 px-3 py-4 text-xs text-neutral-500">
+            <div className="premium-empty-state rounded-md border border-dashed border-neutral-800 px-3 py-4 text-xs text-neutral-500">
               No signatories saved yet. Click "Add signatory" to create one.
             </div>
           ) : (
@@ -13005,7 +13065,7 @@ https://bit.ly/4vrcu64`;
             const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter(f => String(f.type || '').startsWith('image/'));
             if (files.length) onFiles(files);
           }}
-          className={`rounded-lg border-2 border-dashed px-6 py-9 text-center transition-colors ${over ? 'border-blue-500/70 bg-blue-500/5' : 'border-neutral-800 bg-neutral-950/60'}`}>
+          className={`premium-upload-zone rounded-lg border-2 border-dashed px-6 py-9 text-center transition-colors ${over ? 'is-dragging border-blue-500/70 bg-blue-500/5' : 'border-neutral-800 bg-neutral-950/60'}`}>
           <div className="flex items-center justify-center gap-2 text-sm text-neutral-300 font-medium">
             <kbd className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">Ctrl</kbd>
             <span className="text-neutral-600">+</span>
@@ -14179,7 +14239,7 @@ https://bit.ly/4vrcu64`;
           <div>
             <SectionLabel hint={`${rows.length} signed-up users · admins see every module · semi-admins see Whitelist SMS + Editor`}>User access</SectionLabel>
             <div className="flex flex-wrap items-center gap-2 mb-3">
-              <Input placeholder="Filter by email or UID…" value={filter} onChange={e => setFilter(e.target.value)} className="max-w-xs" />
+              <ClearableInput placeholder="Filter by email or UID…" value={filter} onChange={e => setFilter(e.target.value)} onClear={() => setFilter('')} className="w-full max-w-xs" />
               <Btn variant="ghost" size="sm" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</Btn>
             </div>
 
