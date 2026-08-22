@@ -639,6 +639,157 @@
       box-shadow: 0 0 0 3px rgba(59,130,246,0.18);
     }
     .premium-date-day:disabled { cursor: not-allowed; opacity: 0.22; }
+    .premium-datetime-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 292px) minmax(0, 1fr);
+      gap: 14px;
+    }
+    .premium-date-calendar-pane { min-width: 0; }
+    .premium-time-pane {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      padding: 4px 2px 2px 15px;
+      border-left: 1px solid rgba(63,63,70,0.76);
+    }
+    .premium-time-pane-heading {
+      display: flex;
+      flex-direction: column;
+      padding: 1px 2px 10px;
+      border-bottom: 1px solid rgba(63,63,70,0.58);
+    }
+    .premium-time-pane-heading strong {
+      margin-top: 3px;
+      color: #f4f4f5;
+      font-size: 18px;
+      font-weight: 680;
+      letter-spacing: -0.025em;
+      font-variant-numeric: tabular-nums;
+    }
+    .premium-time-pane-heading > span:last-child {
+      margin-top: 2px;
+      color: #61616a;
+      font-size: 9px;
+    }
+    .premium-time-units {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 10px minmax(0, 1fr);
+      align-items: center;
+      gap: 5px;
+      margin-top: 12px;
+    }
+    .premium-time-unit {
+      display: grid;
+      grid-template-columns: 1fr 24px;
+      gap: 4px;
+    }
+    .premium-time-unit > span {
+      grid-column: 1 / -1;
+      margin-bottom: 1px;
+      color: #61616a;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+    .premium-time-unit > input {
+      grid-column: 1;
+      grid-row: 2 / 4;
+      width: 100%;
+      min-width: 0;
+      border: 1px solid #3a3a40;
+      border-radius: 9px;
+      outline: none;
+      color: #f4f4f5;
+      background: linear-gradient(180deg, rgba(255,255,255,0.035), transparent), #111114;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+      font-size: 18px;
+      font-weight: 680;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .premium-time-unit > input:focus {
+      border-color: rgba(96,165,250,0.75);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.13), inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .premium-time-step {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border: 1px solid #3a3a40;
+      border-radius: 7px;
+      color: #a1a1aa;
+      background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.01));
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .premium-time-step:hover { color: #fff; border-color: #52525b; background-color: rgba(255,255,255,0.05); }
+    .premium-time-separator {
+      margin-top: 14px;
+      color: #71717a;
+      font-size: 17px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .premium-time-meridiem {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px;
+      margin-top: 12px;
+      padding: 3px;
+      border: 1px solid #34343a;
+      border-radius: 10px;
+      background: rgba(9,9,11,0.48);
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.20);
+    }
+    .premium-time-meridiem button {
+      min-height: 31px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: #71717a;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+    .premium-time-meridiem button:hover { color: #e4e4e7; }
+    .premium-time-meridiem button.is-active {
+      color: #dbeafe;
+      border-color: rgba(96,165,250,0.34);
+      background: linear-gradient(180deg, rgba(59,130,246,0.24), rgba(37,99,235,0.12));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 4px 12px rgba(37,99,235,0.13);
+    }
+    .premium-time-presets {
+      margin-top: auto;
+      padding-top: 12px;
+    }
+    .premium-time-presets > span {
+      display: block;
+      margin-bottom: 6px;
+      color: #61616a;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+    .premium-time-presets > div {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+    }
+    .premium-time-presets button {
+      min-height: 28px;
+      border: 1px solid #34343a;
+      border-radius: 7px;
+      color: #71717a;
+      background: rgba(255,255,255,0.018);
+      font-size: 9px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .premium-time-presets button:hover { color: #e4e4e7; border-color: #52525b; }
+    .premium-time-presets button.is-active { color: #bfdbfe; border-color: rgba(59,130,246,0.36); background: rgba(59,130,246,0.11); }
     .premium-date-footer {
       display: flex;
       align-items: center;
@@ -679,6 +830,19 @@
       border-radius: 999px;
       background: #60a5fa;
       box-shadow: 0 0 0 3px rgba(59,130,246,0.12), 0 0 8px rgba(96,165,250,0.38);
+    }
+    @media (max-width: 659px) {
+      .premium-date-popover.is-datetime {
+        max-height: calc(100vh - 20px);
+        overflow-y: auto;
+      }
+      .premium-datetime-layout { grid-template-columns: minmax(0, 1fr); }
+      .premium-time-pane {
+        padding: 13px 2px 2px;
+        border-top: 1px solid rgba(63,63,70,0.76);
+        border-left: 0;
+      }
+      .premium-time-presets { margin-top: 12px; }
     }
 
     input[type="checkbox"]:not(.sr-only) {
@@ -962,6 +1126,26 @@
     html.light .premium-date-day.is-outside { color: #c4c4cc; }
     html.light .premium-date-day.is-today:not(.is-selected) { color: #2563eb; border-color: rgba(37,99,235,0.28); background: rgba(59,130,246,0.07); }
     html.light .premium-date-day.is-selected { color: #fff; }
+    html.light .premium-time-pane { border-color: #e4e4e7; }
+    html.light .premium-time-pane-heading { border-color: #e4e4e7; }
+    html.light .premium-time-pane-heading strong { color: #27272a; }
+    html.light .premium-time-pane-heading > span:last-child,
+    html.light .premium-time-unit > span,
+    html.light .premium-time-presets > span { color: #a1a1aa; }
+    html.light .premium-time-unit > input {
+      color: #27272a;
+      border-color: #d4d4d8;
+      background: linear-gradient(180deg, #fff, #fafafa);
+      box-shadow: inset 0 1px 0 #fff;
+    }
+    html.light .premium-time-step { color: #52525b; border-color: #d4d4d8; background: linear-gradient(180deg, #fff, #f4f4f5); }
+    html.light .premium-time-step:hover { color: #18181b; border-color: #a1a1aa; }
+    html.light .premium-time-meridiem { border-color: #d4d4d8; background: #f4f4f5; box-shadow: inset 0 1px 2px rgba(24,24,27,0.05); }
+    html.light .premium-time-meridiem button { color: #71717a; }
+    html.light .premium-time-meridiem button.is-active { color: #1d4ed8; border-color: rgba(37,99,235,0.25); background: rgba(59,130,246,0.10); }
+    html.light .premium-time-presets button { color: #71717a; border-color: #d4d4d8; background: #fafafa; }
+    html.light .premium-time-presets button:hover { color: #27272a; border-color: #a1a1aa; }
+    html.light .premium-time-presets button.is-active { color: #1d4ed8; border-color: rgba(37,99,235,0.26); background: rgba(59,130,246,0.08); }
     html.light .premium-date-footer { border-top-color: #e4e4e7; }
     html.light .premium-date-footer-button { color: #71717a; }
     html.light .premium-date-footer-button:hover { color: #27272a; background: #f4f4f5; }
@@ -5164,12 +5348,38 @@ function premiumDateLongLabel(value) {
   if (!date) return "Choose a date";
   return `${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][date.getDay()]}, ${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}`;
 }
+function premiumDateTimeParts(value, fallbackDate = /* @__PURE__ */ new Date()) {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+  const hour24 = match ? Number(match[2]) : fallbackDate.getHours();
+  return {
+    date: match?.[1] || premiumDateToIso(fallbackDate),
+    hour: hour24 % 12 || 12,
+    minute: match ? Number(match[3]) : fallbackDate.getMinutes(),
+    meridiem: hour24 >= 12 ? "PM" : "AM"
+  };
+}
+function premiumDateTimeValue(parts) {
+  const hour12 = Math.min(12, Math.max(1, Number(parts.hour) || 12));
+  const hour24 = hour12 % 12 + (parts.meridiem === "PM" ? 12 : 0);
+  const minute = Math.min(59, Math.max(0, Number(parts.minute) || 0));
+  return `${parts.date}T${pad(hour24)}:${pad(minute)}`;
+}
+function premiumDateTimeLabel(value) {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+  if (!match) return "Select date & time";
+  const hour24 = Number(match[2]);
+  const hour12 = hour24 % 12 || 12;
+  return `${premiumDateLabel(match[1])} · ${hour12}:${match[3]} ${hour24 >= 12 ? "PM" : "AM"}`;
+}
 function PremiumDateInput({ type: _nativeType, value = "", onChange, className = "", disabled = false, min, max, name, id, required, title, ...rest }) {
-  const selected = premiumDateFromIso(value);
+  const isDateTime = _nativeType === "datetime-local";
+  const dateValue = isDateTime ? String(value || "").slice(0, 10) : value;
+  const selected = premiumDateFromIso(dateValue);
   const today = /* @__PURE__ */ new Date();
   const initial = selected || today;
   const [open, setOpen] = useState(false);
   const [view, setView] = useState(() => ({ year: initial.getFullYear(), month: initial.getMonth() }));
+  const [draftDateTime, setDraftDateTime] = useState(() => premiumDateTimeParts(value, today));
   const [popupPos, setPopupPos] = useState(null);
   const triggerRef = useRef(null);
   const popupRef = useRef(null);
@@ -5179,19 +5389,21 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
     const trigger = triggerRef.current;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    const width = Math.min(314, window.innerWidth - 20);
-    const estimatedHeight = 410;
+    const stacked = isDateTime && window.innerWidth < 660;
+    const width = Math.min(isDateTime ? 560 : 314, window.innerWidth - 20);
+    const estimatedHeight = stacked ? Math.min(650, window.innerHeight - 20) : 410;
     const above = window.innerHeight - rect.bottom < estimatedHeight + 12 && rect.top > estimatedHeight;
     const left = Math.min(window.innerWidth - width - 10, Math.max(10, rect.left));
     const top = above ? Math.max(10, rect.top - estimatedHeight - 8) : Math.min(window.innerHeight - estimatedHeight - 10, rect.bottom + 8);
     setPopupPos({ left, top: Math.max(10, top), width, above });
-  }, []);
+  }, [isDateTime]);
   const openCalendar = useCallback(() => {
     if (disabled) return;
-    const base = premiumDateFromIso(value) || /* @__PURE__ */ new Date();
+    const base = premiumDateFromIso(dateValue) || /* @__PURE__ */ new Date();
+    if (isDateTime) setDraftDateTime(premiumDateTimeParts(value, base));
     setView({ year: base.getFullYear(), month: base.getMonth() });
     setOpen(true);
-  }, [disabled, value]);
+  }, [dateValue, disabled, isDateTime, value]);
   useLayoutEffect(() => {
     if (open) positionPopup();
   }, [open, positionPopup, view]);
@@ -5213,7 +5425,7 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
     document.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("resize", closeOnViewportChange);
     window.addEventListener("scroll", closeOnViewportChange, true);
-    const focusIso = value || premiumDateToIso(/* @__PURE__ */ new Date());
+    const focusIso = dateValue || premiumDateToIso(/* @__PURE__ */ new Date());
     requestAnimationFrame(() => dayRefs.current[focusIso]?.focus());
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
@@ -5221,17 +5433,40 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
       window.removeEventListener("resize", closeOnViewportChange);
       window.removeEventListener("scroll", closeOnViewportChange, true);
     };
-  }, [open, value]);
+  }, [dateValue, open]);
   const emitChange = useCallback((nextValue) => {
     onChange?.({ target: { value: nextValue, name }, currentTarget: { value: nextValue, name } });
   }, [name, onChange]);
   const chooseDate = useCallback((date) => {
     const next = premiumDateToIso(date);
+    const minDate = min ? String(min).slice(0, 10) : "";
+    const maxDate = max ? String(max).slice(0, 10) : "";
+    if (minDate && next < minDate || maxDate && next > maxDate) return;
+    if (isDateTime) {
+      setDraftDateTime((current) => ({ ...current, date: next }));
+      if (date.getMonth() !== view.month || date.getFullYear() !== view.year) {
+        setView({ year: date.getFullYear(), month: date.getMonth() });
+      }
+      return;
+    }
+    emitChange(next);
+    setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }, [emitChange, isDateTime, max, min, view.month, view.year]);
+  const applyDateTime = useCallback((parts = draftDateTime) => {
+    const next = premiumDateTimeValue(parts);
     if (min && next < min || max && next > max) return;
     emitChange(next);
     setOpen(false);
     requestAnimationFrame(() => triggerRef.current?.focus());
-  }, [emitChange, max, min]);
+  }, [draftDateTime, emitChange, max, min]);
+  const applyNow = useCallback(() => {
+    const now = /* @__PURE__ */ new Date();
+    const parts = premiumDateTimeParts("", now);
+    setDraftDateTime(parts);
+    setView({ year: now.getFullYear(), month: now.getMonth() });
+    applyDateTime(parts);
+  }, [applyDateTime]);
   const moveMonth = (offset) => setView((current) => {
     const next = new Date(current.year, current.month + offset, 1);
     return { year: next.getFullYear(), month: next.getMonth() };
@@ -5252,7 +5487,7 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
       "aria-haspopup": "dialog",
       "aria-expanded": open,
       "aria-controls": open ? calendarIdRef.current : void 0,
-      "data-ui": "premium-date-picker",
+      "data-ui": isDateTime ? "premium-datetime-picker" : "premium-date-picker",
       onClick: () => open ? setOpen(false) : openCalendar(),
       onKeyDown: (event) => {
         if (!open && (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ")) {
@@ -5262,8 +5497,8 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
       },
       className: `premium-input premium-date-trigger no-press w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 ${!value ? "is-placeholder" : ""} ${className}`
     },
-    /* @__PURE__ */ React.createElement("span", { className: "truncate" }, premiumDateLabel(value)),
-    /* @__PURE__ */ React.createElement("svg", { className: "h-4 w-4 shrink-0", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "5", width: "18", height: "16", rx: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M16 3v4M8 3v4M3 10h18" }))
+    /* @__PURE__ */ React.createElement("span", { className: "truncate" }, isDateTime ? premiumDateTimeLabel(value) : premiumDateLabel(value)),
+    /* @__PURE__ */ React.createElement("svg", { className: "h-4 w-4 shrink-0", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "5", width: "18", height: "16", rx: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M16 3v4M8 3v4M3 10h18" }), isDateTime && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("circle", { cx: "16", cy: "16", r: "3.2" }), /* @__PURE__ */ React.createElement("path", { d: "M16 14.4V16l1.1.8" })))
   ), name && /* @__PURE__ */ React.createElement("input", { type: "hidden", name, value: value || "", required }), open && popupPos && ReactDOM.createPortal(
     /* @__PURE__ */ React.createElement(
       "div",
@@ -5272,20 +5507,20 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
         id: calendarIdRef.current,
         role: "dialog",
         "aria-modal": "false",
-        "aria-label": "Choose date",
-        "data-ui": "premium-date-popover",
-        className: `premium-date-popover ${popupPos.above ? "origin-bottom" : "origin-top"}`,
+        "aria-label": isDateTime ? "Choose date and time" : "Choose date",
+        "data-ui": isDateTime ? "premium-datetime-popover" : "premium-date-popover",
+        className: `premium-date-popover ${isDateTime ? "is-datetime" : ""} ${popupPos.above ? "origin-bottom" : "origin-top"}`,
         style: { left: popupPos.left, top: popupPos.top, width: popupPos.width }
       },
-      /* @__PURE__ */ React.createElement("div", { className: "premium-date-hero" }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-hero-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "5", width: "18", height: "16", rx: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M16 3v4M8 3v4M3 10h18" }), /* @__PURE__ */ React.createElement("path", { d: "m9 15 2 2 4-4" }))), /* @__PURE__ */ React.createElement("span", { className: "premium-date-hero-copy" }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-eyebrow" }, "Date picker"), /* @__PURE__ */ React.createElement("strong", null, premiumDateLongLabel(value)), /* @__PURE__ */ React.createElement("span", null, selected ? selected.getFullYear() : "Select from the calendar")), /* @__PURE__ */ React.createElement("span", { className: "premium-date-status", "aria-hidden": "true" }, "Local")),
-      /* @__PURE__ */ React.createElement("div", { className: "premium-date-header" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-nav no-press", onClick: () => moveMonth(-1), "data-premium-tooltip": "Previous month", "aria-label": "Previous month" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "m15 18-6-6 6-6" }))), /* @__PURE__ */ React.createElement("div", { className: "premium-date-heading" }, /* @__PURE__ */ React.createElement("span", null, PREMIUM_DATE_MONTHS[view.month]), /* @__PURE__ */ React.createElement("span", null, view.year)), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-nav no-press", onClick: () => moveMonth(1), "data-premium-tooltip": "Next month", "aria-label": "Next month" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "m9 18 6-6-6-6" })))),
-      /* @__PURE__ */ React.createElement("div", { className: "premium-date-weekdays", "aria-hidden": "true" }, PREMIUM_DATE_WEEKDAYS.map((day) => /* @__PURE__ */ React.createElement("span", { key: day }, day))),
-      /* @__PURE__ */ React.createElement("div", { className: "premium-date-grid", role: "grid" }, days.map((date) => {
+      /* @__PURE__ */ React.createElement("div", { className: "premium-date-hero" }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-hero-icon", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "5", width: "18", height: "16", rx: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M16 3v4M8 3v4M3 10h18" }), /* @__PURE__ */ React.createElement("path", { d: "m9 15 2 2 4-4" }))), /* @__PURE__ */ React.createElement("span", { className: "premium-date-hero-copy" }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-eyebrow" }, isDateTime ? "Date & time" : "Date picker"), /* @__PURE__ */ React.createElement("strong", null, premiumDateLongLabel(isDateTime ? draftDateTime.date : dateValue)), /* @__PURE__ */ React.createElement("span", null, isDateTime ? `${draftDateTime.hour}:${pad(draftDateTime.minute)} ${draftDateTime.meridiem}` : selected ? selected.getFullYear() : "Select from the calendar")), /* @__PURE__ */ React.createElement("span", { className: "premium-date-status", "aria-hidden": "true" }, "Local")),
+      /* @__PURE__ */ React.createElement("div", { className: isDateTime ? "premium-datetime-layout" : "" }, /* @__PURE__ */ React.createElement("div", { className: "premium-date-calendar-pane" }, /* @__PURE__ */ React.createElement("div", { className: "premium-date-header" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-nav no-press", onClick: () => moveMonth(-1), "data-premium-tooltip": "Previous month", "aria-label": "Previous month" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "m15 18-6-6 6-6" }))), /* @__PURE__ */ React.createElement("div", { className: "premium-date-heading" }, /* @__PURE__ */ React.createElement("span", null, PREMIUM_DATE_MONTHS[view.month]), /* @__PURE__ */ React.createElement("span", null, view.year)), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-nav no-press", onClick: () => moveMonth(1), "data-premium-tooltip": "Next month", "aria-label": "Next month" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "m9 18 6-6-6-6" })))), /* @__PURE__ */ React.createElement("div", { className: "premium-date-weekdays", "aria-hidden": "true" }, PREMIUM_DATE_WEEKDAYS.map((day) => /* @__PURE__ */ React.createElement("span", { key: day }, day))), /* @__PURE__ */ React.createElement("div", { className: "premium-date-grid", role: "grid" }, days.map((date) => {
         const iso = premiumDateToIso(date);
         const outside = date.getMonth() !== view.month;
-        const isSelected = iso === value;
+        const isSelected = iso === (isDateTime ? draftDateTime.date : dateValue);
         const isToday = iso === todayIso;
-        const isDisabled = !!(min && iso < min || max && iso > max);
+        const minDate = min ? String(min).slice(0, 10) : "";
+        const maxDate = max ? String(max).slice(0, 10) : "";
+        const isDisabled = !!(minDate && iso < minDate || maxDate && iso > maxDate);
         return /* @__PURE__ */ React.createElement(
           "button",
           {
@@ -5304,21 +5539,27 @@ function PremiumDateInput({ type: _nativeType, value = "", onChange, className =
           },
           date.getDate()
         );
-      })),
+      }))), isDateTime && /* @__PURE__ */ React.createElement("div", { className: "premium-time-pane" }, /* @__PURE__ */ React.createElement("div", { className: "premium-time-pane-heading" }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-eyebrow" }, "Time"), /* @__PURE__ */ React.createElement("strong", null, draftDateTime.hour, ":", pad(draftDateTime.minute), " ", draftDateTime.meridiem), /* @__PURE__ */ React.createElement("span", null, "Set the exact incident time")), /* @__PURE__ */ React.createElement("div", { className: "premium-time-units" }, /* @__PURE__ */ React.createElement("div", { className: "premium-time-unit" }, /* @__PURE__ */ React.createElement("span", null, "Hour"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-time-step no-press", "aria-label": "Increase hour", onClick: () => setDraftDateTime((current) => ({ ...current, hour: current.hour === 12 ? 1 : current.hour + 1 })) }, "+"), /* @__PURE__ */ React.createElement("input", { type: "text", inputMode: "numeric", maxLength: "2", "aria-label": "Hour", value: pad(draftDateTime.hour), onChange: (event) => {
+        const number = Number(event.target.value.replace(/\D/g, ""));
+        if (number >= 1 && number <= 12) setDraftDateTime((current) => ({ ...current, hour: number }));
+      } }), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-time-step no-press", "aria-label": "Decrease hour", onClick: () => setDraftDateTime((current) => ({ ...current, hour: current.hour === 1 ? 12 : current.hour - 1 })) }, "−")), /* @__PURE__ */ React.createElement("span", { className: "premium-time-separator", "aria-hidden": "true" }, ":"), /* @__PURE__ */ React.createElement("div", { className: "premium-time-unit" }, /* @__PURE__ */ React.createElement("span", null, "Minute"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-time-step no-press", "aria-label": "Increase minute", onClick: () => setDraftDateTime((current) => ({ ...current, minute: (current.minute + 1) % 60 })) }, "+"), /* @__PURE__ */ React.createElement("input", { type: "text", inputMode: "numeric", maxLength: "2", "aria-label": "Minute", value: pad(draftDateTime.minute), onChange: (event) => {
+        const number = Number(event.target.value.replace(/\D/g, ""));
+        if (number >= 0 && number <= 59) setDraftDateTime((current) => ({ ...current, minute: number }));
+      } }), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-time-step no-press", "aria-label": "Decrease minute", onClick: () => setDraftDateTime((current) => ({ ...current, minute: current.minute === 0 ? 59 : current.minute - 1 })) }, "−"))), /* @__PURE__ */ React.createElement("div", { className: "premium-time-meridiem", role: "group", "aria-label": "AM or PM" }, ["AM", "PM"].map((period) => /* @__PURE__ */ React.createElement("button", { key: period, type: "button", className: `no-press ${draftDateTime.meridiem === period ? "is-active" : ""}`, "aria-pressed": draftDateTime.meridiem === period, onClick: () => setDraftDateTime((current) => ({ ...current, meridiem: period })) }, period))), /* @__PURE__ */ React.createElement("div", { className: "premium-time-presets" }, /* @__PURE__ */ React.createElement("span", null, "Quick minutes"), /* @__PURE__ */ React.createElement("div", null, [0, 15, 30, 45].map((minute) => /* @__PURE__ */ React.createElement("button", { key: minute, type: "button", className: `no-press ${draftDateTime.minute === minute ? "is-active" : ""}`, onClick: () => setDraftDateTime((current) => ({ ...current, minute })) }, ":", pad(minute))))))),
       /* @__PURE__ */ React.createElement("div", { className: "premium-date-footer" }, !required && /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button no-press", onClick: () => {
         emitChange("");
         setOpen(false);
-      } }, "Clear"), /* @__PURE__ */ React.createElement("span", { className: "premium-date-footer-spacer" }), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button no-press", onClick: () => {
+      } }, "Clear"), /* @__PURE__ */ React.createElement("span", { className: "premium-date-footer-spacer" }), isDateTime ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button no-press", onClick: applyNow }, "Use now"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button is-accent no-press", onClick: () => applyDateTime() }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-today-dot", "aria-hidden": "true" }), "Apply date & time")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button no-press", onClick: () => {
         const tomorrow = /* @__PURE__ */ new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         chooseDate(tomorrow);
-      } }, "Tomorrow"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button is-accent no-press", onClick: () => chooseDate(/* @__PURE__ */ new Date()) }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-today-dot", "aria-hidden": "true" }), "Today"))
+      } }, "Tomorrow"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button is-accent no-press", onClick: () => chooseDate(/* @__PURE__ */ new Date()) }, /* @__PURE__ */ React.createElement("span", { className: "premium-date-today-dot", "aria-hidden": "true" }), "Today")))
     ),
     document.body
   ));
 }
 function Input(props) {
-  if (props.type === "date") return /* @__PURE__ */ React.createElement(PremiumDateInput, { ...props });
+  if (props.type === "date" || props.type === "datetime-local") return /* @__PURE__ */ React.createElement(PremiumDateInput, { ...props });
   const { className = "", ...rest } = props;
   return /* @__PURE__ */ React.createElement("input", { ...rest, className: `premium-input w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}` });
 }

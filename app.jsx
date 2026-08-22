@@ -4553,12 +4553,41 @@ https://bit.ly/4vrcu64`;
       return `${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][date.getDay()]}, ${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}`;
     }
 
+    function premiumDateTimeParts(value, fallbackDate = new Date()) {
+      const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+      const hour24 = match ? Number(match[2]) : fallbackDate.getHours();
+      return {
+        date: match?.[1] || premiumDateToIso(fallbackDate),
+        hour: hour24 % 12 || 12,
+        minute: match ? Number(match[3]) : fallbackDate.getMinutes(),
+        meridiem: hour24 >= 12 ? 'PM' : 'AM',
+      };
+    }
+
+    function premiumDateTimeValue(parts) {
+      const hour12 = Math.min(12, Math.max(1, Number(parts.hour) || 12));
+      const hour24 = (hour12 % 12) + (parts.meridiem === 'PM' ? 12 : 0);
+      const minute = Math.min(59, Math.max(0, Number(parts.minute) || 0));
+      return `${parts.date}T${pad(hour24)}:${pad(minute)}`;
+    }
+
+    function premiumDateTimeLabel(value) {
+      const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+      if (!match) return 'Select date & time';
+      const hour24 = Number(match[2]);
+      const hour12 = hour24 % 12 || 12;
+      return `${premiumDateLabel(match[1])} · ${hour12}:${match[3]} ${hour24 >= 12 ? 'PM' : 'AM'}`;
+    }
+
     function PremiumDateInput({ type: _nativeType, value = '', onChange, className = '', disabled = false, min, max, name, id, required, title, ...rest }) {
-      const selected = premiumDateFromIso(value);
+      const isDateTime = _nativeType === 'datetime-local';
+      const dateValue = isDateTime ? String(value || '').slice(0, 10) : value;
+      const selected = premiumDateFromIso(dateValue);
       const today = new Date();
       const initial = selected || today;
       const [open, setOpen] = useState(false);
       const [view, setView] = useState(() => ({ year: initial.getFullYear(), month: initial.getMonth() }));
+      const [draftDateTime, setDraftDateTime] = useState(() => premiumDateTimeParts(value, today));
       const [popupPos, setPopupPos] = useState(null);
       const triggerRef = useRef(null);
       const popupRef = useRef(null);
@@ -4569,22 +4598,24 @@ https://bit.ly/4vrcu64`;
         const trigger = triggerRef.current;
         if (!trigger) return;
         const rect = trigger.getBoundingClientRect();
-        const width = Math.min(314, window.innerWidth - 20);
-        const estimatedHeight = 410;
+        const stacked = isDateTime && window.innerWidth < 660;
+        const width = Math.min(isDateTime ? 560 : 314, window.innerWidth - 20);
+        const estimatedHeight = stacked ? Math.min(650, window.innerHeight - 20) : 410;
         const above = window.innerHeight - rect.bottom < estimatedHeight + 12 && rect.top > estimatedHeight;
         const left = Math.min(window.innerWidth - width - 10, Math.max(10, rect.left));
         const top = above
           ? Math.max(10, rect.top - estimatedHeight - 8)
           : Math.min(window.innerHeight - estimatedHeight - 10, rect.bottom + 8);
         setPopupPos({ left, top: Math.max(10, top), width, above });
-      }, []);
+      }, [isDateTime]);
 
       const openCalendar = useCallback(() => {
         if (disabled) return;
-        const base = premiumDateFromIso(value) || new Date();
+        const base = premiumDateFromIso(dateValue) || new Date();
+        if (isDateTime) setDraftDateTime(premiumDateTimeParts(value, base));
         setView({ year: base.getFullYear(), month: base.getMonth() });
         setOpen(true);
-      }, [disabled, value]);
+      }, [dateValue, disabled, isDateTime, value]);
 
       useLayoutEffect(() => {
         if (open) positionPopup();
@@ -4608,7 +4639,7 @@ https://bit.ly/4vrcu64`;
         document.addEventListener('keydown', onKeyDown, true);
         window.addEventListener('resize', closeOnViewportChange);
         window.addEventListener('scroll', closeOnViewportChange, true);
-        const focusIso = value || premiumDateToIso(new Date());
+        const focusIso = dateValue || premiumDateToIso(new Date());
         requestAnimationFrame(() => dayRefs.current[focusIso]?.focus());
         return () => {
           document.removeEventListener('pointerdown', onPointerDown, true);
@@ -4616,7 +4647,7 @@ https://bit.ly/4vrcu64`;
           window.removeEventListener('resize', closeOnViewportChange);
           window.removeEventListener('scroll', closeOnViewportChange, true);
         };
-      }, [open, value]);
+      }, [dateValue, open]);
 
       const emitChange = useCallback((nextValue) => {
         onChange?.({ target: { value: nextValue, name }, currentTarget: { value: nextValue, name } });
@@ -4624,11 +4655,36 @@ https://bit.ly/4vrcu64`;
 
       const chooseDate = useCallback((date) => {
         const next = premiumDateToIso(date);
+        const minDate = min ? String(min).slice(0, 10) : '';
+        const maxDate = max ? String(max).slice(0, 10) : '';
+        if ((minDate && next < minDate) || (maxDate && next > maxDate)) return;
+        if (isDateTime) {
+          setDraftDateTime(current => ({ ...current, date: next }));
+          if (date.getMonth() !== view.month || date.getFullYear() !== view.year) {
+            setView({ year: date.getFullYear(), month: date.getMonth() });
+          }
+          return;
+        }
+        emitChange(next);
+        setOpen(false);
+        requestAnimationFrame(() => triggerRef.current?.focus());
+      }, [emitChange, isDateTime, max, min, view.month, view.year]);
+
+      const applyDateTime = useCallback((parts = draftDateTime) => {
+        const next = premiumDateTimeValue(parts);
         if ((min && next < min) || (max && next > max)) return;
         emitChange(next);
         setOpen(false);
         requestAnimationFrame(() => triggerRef.current?.focus());
-      }, [emitChange, max, min]);
+      }, [draftDateTime, emitChange, max, min]);
+
+      const applyNow = useCallback(() => {
+        const now = new Date();
+        const parts = premiumDateTimeParts('', now);
+        setDraftDateTime(parts);
+        setView({ year: now.getFullYear(), month: now.getMonth() });
+        applyDateTime(parts);
+      }, [applyDateTime]);
 
       const moveMonth = (offset) => setView(current => {
         const next = new Date(current.year, current.month + offset, 1);
@@ -4652,7 +4708,7 @@ https://bit.ly/4vrcu64`;
             aria-haspopup="dialog"
             aria-expanded={open}
             aria-controls={open ? calendarIdRef.current : undefined}
-            data-ui="premium-date-picker"
+            data-ui={isDateTime ? 'premium-datetime-picker' : 'premium-date-picker'}
             onClick={() => open ? setOpen(false) : openCalendar()}
             onKeyDown={event => {
               if (!open && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
@@ -4661,9 +4717,9 @@ https://bit.ly/4vrcu64`;
               }
             }}
             className={`premium-input premium-date-trigger no-press w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 ${!value ? 'is-placeholder' : ''} ${className}`}>
-            <span className="truncate">{premiumDateLabel(value)}</span>
+            <span className="truncate">{isDateTime ? premiumDateTimeLabel(value) : premiumDateLabel(value)}</span>
             <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>
+              <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>{isDateTime && <><circle cx="16" cy="16" r="3.2"/><path d="M16 14.4V16l1.1.8"/></>}
             </svg>
           </button>
           {name && <input type="hidden" name={name} value={value || ''} required={required} />}
@@ -4673,66 +4729,110 @@ https://bit.ly/4vrcu64`;
               id={calendarIdRef.current}
               role="dialog"
               aria-modal="false"
-              aria-label="Choose date"
-              data-ui="premium-date-popover"
-              className={`premium-date-popover ${popupPos.above ? 'origin-bottom' : 'origin-top'}`}
+              aria-label={isDateTime ? 'Choose date and time' : 'Choose date'}
+              data-ui={isDateTime ? 'premium-datetime-popover' : 'premium-date-popover'}
+              className={`premium-date-popover ${isDateTime ? 'is-datetime' : ''} ${popupPos.above ? 'origin-bottom' : 'origin-top'}`}
               style={{ left: popupPos.left, top: popupPos.top, width: popupPos.width }}>
               <div className="premium-date-hero">
                 <span className="premium-date-hero-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/><path d="m9 15 2 2 4-4"/></svg>
                 </span>
                 <span className="premium-date-hero-copy">
-                  <span className="premium-date-eyebrow">Date picker</span>
-                  <strong>{premiumDateLongLabel(value)}</strong>
-                  <span>{selected ? selected.getFullYear() : 'Select from the calendar'}</span>
+                  <span className="premium-date-eyebrow">{isDateTime ? 'Date & time' : 'Date picker'}</span>
+                  <strong>{premiumDateLongLabel(isDateTime ? draftDateTime.date : dateValue)}</strong>
+                  <span>{isDateTime ? `${draftDateTime.hour}:${pad(draftDateTime.minute)} ${draftDateTime.meridiem}` : (selected ? selected.getFullYear() : 'Select from the calendar')}</span>
                 </span>
                 <span className="premium-date-status" aria-hidden="true">Local</span>
               </div>
-              <div className="premium-date-header">
-                <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(-1)} data-premium-tooltip="Previous month" aria-label="Previous month">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-                </button>
-                <div className="premium-date-heading">
-                  <span>{PREMIUM_DATE_MONTHS[view.month]}</span>
-                  <span>{view.year}</span>
-                </div>
-                <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(1)} data-premium-tooltip="Next month" aria-label="Next month">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
-                </button>
-              </div>
-              <div className="premium-date-weekdays" aria-hidden="true">
-                {PREMIUM_DATE_WEEKDAYS.map(day => <span key={day}>{day}</span>)}
-              </div>
-              <div className="premium-date-grid" role="grid">
-                {days.map(date => {
-                  const iso = premiumDateToIso(date);
-                  const outside = date.getMonth() !== view.month;
-                  const isSelected = iso === value;
-                  const isToday = iso === todayIso;
-                  const isDisabled = !!((min && iso < min) || (max && iso > max));
-                  return (
-                    <button
-                      key={iso}
-                      ref={node => { if (node) dayRefs.current[iso] = node; else delete dayRefs.current[iso]; }}
-                      type="button"
-                      role="gridcell"
-                      disabled={isDisabled}
-                      aria-selected={isSelected}
-                      aria-label={`${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`}
-                      onClick={() => chooseDate(date)}
-                      className={`premium-date-day no-press ${outside ? 'is-outside' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''}`}>
-                      {date.getDate()}
+              <div className={isDateTime ? 'premium-datetime-layout' : ''}>
+                <div className="premium-date-calendar-pane">
+                  <div className="premium-date-header">
+                    <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(-1)} data-premium-tooltip="Previous month" aria-label="Previous month">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
                     </button>
-                  );
-                })}
+                    <div className="premium-date-heading">
+                      <span>{PREMIUM_DATE_MONTHS[view.month]}</span>
+                      <span>{view.year}</span>
+                    </div>
+                    <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(1)} data-premium-tooltip="Next month" aria-label="Next month">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                    </button>
+                  </div>
+                  <div className="premium-date-weekdays" aria-hidden="true">
+                    {PREMIUM_DATE_WEEKDAYS.map(day => <span key={day}>{day}</span>)}
+                  </div>
+                  <div className="premium-date-grid" role="grid">
+                    {days.map(date => {
+                      const iso = premiumDateToIso(date);
+                      const outside = date.getMonth() !== view.month;
+                      const isSelected = iso === (isDateTime ? draftDateTime.date : dateValue);
+                      const isToday = iso === todayIso;
+                      const minDate = min ? String(min).slice(0, 10) : '';
+                      const maxDate = max ? String(max).slice(0, 10) : '';
+                      const isDisabled = !!((minDate && iso < minDate) || (maxDate && iso > maxDate));
+                      return (
+                        <button
+                          key={iso}
+                          ref={node => { if (node) dayRefs.current[iso] = node; else delete dayRefs.current[iso]; }}
+                          type="button"
+                          role="gridcell"
+                          disabled={isDisabled}
+                          aria-selected={isSelected}
+                          aria-label={`${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`}
+                          onClick={() => chooseDate(date)}
+                          className={`premium-date-day no-press ${outside ? 'is-outside' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''}`}>
+                          {date.getDate()}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {isDateTime && (
+                  <div className="premium-time-pane">
+                    <div className="premium-time-pane-heading">
+                      <span className="premium-date-eyebrow">Time</span>
+                      <strong>{draftDateTime.hour}:{pad(draftDateTime.minute)} {draftDateTime.meridiem}</strong>
+                      <span>Set the exact incident time</span>
+                    </div>
+                    <div className="premium-time-units">
+                      <div className="premium-time-unit">
+                        <span>Hour</span>
+                        <button type="button" className="premium-time-step no-press" aria-label="Increase hour" onClick={() => setDraftDateTime(current => ({ ...current, hour: current.hour === 12 ? 1 : current.hour + 1 }))}>+</button>
+                        <input type="text" inputMode="numeric" maxLength="2" aria-label="Hour" value={pad(draftDateTime.hour)} onChange={event => { const number = Number(event.target.value.replace(/\D/g, '')); if (number >= 1 && number <= 12) setDraftDateTime(current => ({ ...current, hour: number })); }} />
+                        <button type="button" className="premium-time-step no-press" aria-label="Decrease hour" onClick={() => setDraftDateTime(current => ({ ...current, hour: current.hour === 1 ? 12 : current.hour - 1 }))}>−</button>
+                      </div>
+                      <span className="premium-time-separator" aria-hidden="true">:</span>
+                      <div className="premium-time-unit">
+                        <span>Minute</span>
+                        <button type="button" className="premium-time-step no-press" aria-label="Increase minute" onClick={() => setDraftDateTime(current => ({ ...current, minute: (current.minute + 1) % 60 }))}>+</button>
+                        <input type="text" inputMode="numeric" maxLength="2" aria-label="Minute" value={pad(draftDateTime.minute)} onChange={event => { const number = Number(event.target.value.replace(/\D/g, '')); if (number >= 0 && number <= 59) setDraftDateTime(current => ({ ...current, minute: number })); }} />
+                        <button type="button" className="premium-time-step no-press" aria-label="Decrease minute" onClick={() => setDraftDateTime(current => ({ ...current, minute: current.minute === 0 ? 59 : current.minute - 1 }))}>−</button>
+                      </div>
+                    </div>
+                    <div className="premium-time-meridiem" role="group" aria-label="AM or PM">
+                      {['AM','PM'].map(period => <button key={period} type="button" className={`no-press ${draftDateTime.meridiem === period ? 'is-active' : ''}`} aria-pressed={draftDateTime.meridiem === period} onClick={() => setDraftDateTime(current => ({ ...current, meridiem: period }))}>{period}</button>)}
+                    </div>
+                    <div className="premium-time-presets">
+                      <span>Quick minutes</span>
+                      <div>{[0,15,30,45].map(minute => <button key={minute} type="button" className={`no-press ${draftDateTime.minute === minute ? 'is-active' : ''}`} onClick={() => setDraftDateTime(current => ({ ...current, minute }))}>:{pad(minute)}</button>)}</div>
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="premium-date-footer">
                 {!required && <button type="button" className="premium-date-footer-button no-press" onClick={() => { emitChange(''); setOpen(false); }}>Clear</button>}
                 <span className="premium-date-footer-spacer" />
-                <button type="button" className="premium-date-footer-button no-press" onClick={() => { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); chooseDate(tomorrow); }}>Tomorrow</button>
-                <button type="button" className="premium-date-footer-button is-accent no-press" onClick={() => chooseDate(new Date())}>
-                  <span className="premium-date-today-dot" aria-hidden="true" />Today
-                </button>
+                {isDateTime ? (
+                  <>
+                    <button type="button" className="premium-date-footer-button no-press" onClick={applyNow}>Use now</button>
+                    <button type="button" className="premium-date-footer-button is-accent no-press" onClick={() => applyDateTime()}><span className="premium-date-today-dot" aria-hidden="true" />Apply date &amp; time</button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="premium-date-footer-button no-press" onClick={() => { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); chooseDate(tomorrow); }}>Tomorrow</button>
+                    <button type="button" className="premium-date-footer-button is-accent no-press" onClick={() => chooseDate(new Date())}><span className="premium-date-today-dot" aria-hidden="true" />Today</button>
+                  </>
+                )}
               </div>
             </div>,
             document.body
@@ -4742,7 +4842,7 @@ https://bit.ly/4vrcu64`;
     }
 
     function Input(props) {
-      if (props.type === 'date') return <PremiumDateInput {...props} />;
+      if (props.type === 'date' || props.type === 'datetime-local') return <PremiumDateInput {...props} />;
       const { className = '', ...rest } = props;
       return <input {...rest} className={`premium-input w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}`} />;
     }
