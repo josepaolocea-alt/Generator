@@ -363,6 +363,236 @@
       background: linear-gradient(180deg, rgba(239,68,68,0.11), rgba(239,68,68,0.045));
     }
 
+    /* Premium tooltip system: replaces browser-native title bubbles with a
+       compact, app-native glass surface shared by every titled control. */
+    .premium-tooltip {
+      position: fixed;
+      z-index: 200;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      max-width: min(290px, calc(100vw - 20px));
+      padding: 9px 11px 9px 10px;
+      border: 1px solid rgba(113,113,122,0.42);
+      border-radius: 10px;
+      background:
+        radial-gradient(circle at 12% -20%, rgba(59,130,246,0.18), transparent 48%),
+        linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.012)),
+        rgba(24,24,28,0.96);
+      color: #f4f4f5;
+      box-shadow: 0 16px 38px rgba(0,0,0,0.38), 0 4px 12px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.07);
+      backdrop-filter: blur(16px) saturate(125%);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.4;
+      letter-spacing: 0.005em;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(2px) scale(0.985);
+      transform-origin: center;
+      transition: opacity 120ms ease, transform 150ms cubic-bezier(0.22,1,0.36,1);
+    }
+    .premium-tooltip.is-visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    .premium-tooltip-accent {
+      width: 5px;
+      height: 5px;
+      flex: 0 0 auto;
+      margin-top: 5px;
+      border-radius: 999px;
+      background: #60a5fa;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.13), 0 0 10px rgba(96,165,250,0.42);
+    }
+    .premium-tooltip-arrow {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      margin-left: -4px;
+      background: #1d1d22;
+      transform: rotate(45deg);
+    }
+    .premium-tooltip-arrow.is-below {
+      bottom: -5px;
+      border-right: 1px solid rgba(113,113,122,0.42);
+      border-bottom: 1px solid rgba(113,113,122,0.42);
+    }
+    .premium-tooltip-arrow.is-above {
+      top: -5px;
+      border-left: 1px solid rgba(113,113,122,0.42);
+      border-top: 1px solid rgba(113,113,122,0.42);
+    }
+
+    /* Premium date picker --------------------------------------------------
+       Fully app-rendered calendar; no operating-system date-picker chrome. */
+    .premium-date-trigger {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .premium-date-trigger.is-placeholder { color: #61616a; }
+    .premium-date-trigger > svg {
+      color: #71717a;
+      transition: color 140ms ease, transform 160ms cubic-bezier(0.22,1,0.36,1);
+    }
+    .premium-date-trigger:hover > svg,
+    .premium-date-trigger[aria-expanded="true"] > svg { color: #60a5fa; }
+    .premium-date-trigger[aria-expanded="true"] > svg { transform: translateY(-1px); }
+    .premium-date-popover {
+      position: fixed;
+      z-index: 130;
+      overflow: hidden;
+      padding: 12px;
+      border: 1px solid #3a3a40;
+      border-radius: 15px;
+      background:
+        radial-gradient(circle at 15% -12%, rgba(59,130,246,0.15), transparent 44%),
+        linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.008) 120px),
+        rgba(25,25,29,0.985);
+      box-shadow: 0 28px 70px rgba(0,0,0,0.48), 0 8px 24px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.055);
+      backdrop-filter: blur(20px) saturate(125%);
+      animation: premiumDateIn 175ms cubic-bezier(0.22,1,0.36,1) both;
+    }
+    @keyframes premiumDateIn {
+      from { opacity: 0; transform: translateY(-5px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .premium-date-popover.origin-bottom { animation-name: premiumDateInAbove; }
+    @keyframes premiumDateInAbove {
+      from { opacity: 0; transform: translateY(5px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .premium-date-header {
+      display: grid;
+      grid-template-columns: 34px 1fr 34px;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .premium-date-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: 7px;
+      color: #f4f4f5;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+    }
+    .premium-date-heading span:last-child {
+      color: #71717a;
+      font-size: 11px;
+      font-weight: 550;
+      font-variant-numeric: tabular-nums;
+    }
+    .premium-date-nav {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 1px solid #34343a;
+      border-radius: 9px;
+      color: #a1a1aa;
+      background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.01));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 7px rgba(0,0,0,0.20);
+      transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease;
+    }
+    .premium-date-nav:hover {
+      color: #f4f4f5;
+      border-color: #52525b;
+      background-color: rgba(255,255,255,0.045);
+    }
+    .premium-date-nav > svg { width: 15px; height: 15px; }
+    .premium-date-weekdays,
+    .premium-date-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 3px;
+    }
+    .premium-date-weekdays { margin-bottom: 4px; }
+    .premium-date-weekdays > span {
+      padding: 3px 0 5px;
+      color: #61616a;
+      font-size: 9px;
+      font-weight: 650;
+      line-height: 1;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .premium-date-day {
+      position: relative;
+      display: grid;
+      aspect-ratio: 1;
+      min-width: 0;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      color: #d4d4d8;
+      background: transparent;
+      font-size: 11px;
+      font-weight: 520;
+      font-variant-numeric: tabular-nums;
+      transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+    }
+    .premium-date-day:hover:not(:disabled) {
+      color: #fff;
+      border-color: #45454d;
+      background: rgba(255,255,255,0.055);
+    }
+    .premium-date-day.is-outside { color: #4c4c54; }
+    .premium-date-day.is-today:not(.is-selected) {
+      color: #93c5fd;
+      border-color: rgba(59,130,246,0.35);
+      background: rgba(59,130,246,0.07);
+    }
+    .premium-date-day.is-selected {
+      color: #fff;
+      border-color: rgba(147,197,253,0.72);
+      background: linear-gradient(180deg, #4f9cff, #2879e8);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 5px 13px rgba(37,99,235,0.30);
+      font-weight: 700;
+    }
+    .premium-date-day:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.18);
+    }
+    .premium-date-day:disabled { cursor: not-allowed; opacity: 0.22; }
+    .premium-date-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      margin: 10px -2px -2px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(63,63,70,0.72);
+    }
+    .premium-date-footer-button {
+      min-height: 30px;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: #71717a;
+      font-size: 10px;
+      font-weight: 600;
+      transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+    }
+    .premium-date-footer-button:hover { color: #e4e4e7; background: rgba(255,255,255,0.045); }
+    .premium-date-footer-button.is-accent {
+      color: #bfdbfe;
+      border-color: rgba(59,130,246,0.30);
+      background: rgba(59,130,246,0.10);
+    }
+    .premium-date-footer-button.is-accent:hover {
+      color: #eff6ff;
+      border-color: rgba(96,165,250,0.48);
+      background: rgba(59,130,246,0.17);
+    }
+
     input[type="checkbox"]:not(.sr-only) {
       appearance: none;
       -webkit-appearance: none;
@@ -594,6 +824,45 @@
     html.light .premium-button[data-variant="primary"] { background: linear-gradient(180deg, #27272a, #18181b) !important; color: #fafafa !important; }
     html.light .premium-button[data-variant="ghost"] { background: linear-gradient(180deg, #ffffff, #f7f7f8) !important; }
     html.light .premium-button[data-variant="danger"] { background: linear-gradient(180deg, #fff, #fef2f2) !important; }
+    html.light .premium-tooltip {
+      color: #27272a;
+      border-color: rgba(161,161,170,0.55);
+      background:
+        radial-gradient(circle at 12% -20%, rgba(59,130,246,0.13), transparent 48%),
+        linear-gradient(180deg, rgba(255,255,255,0.98), rgba(250,250,250,0.94));
+      box-shadow: 0 16px 38px rgba(24,24,27,0.14), 0 4px 12px rgba(24,24,27,0.08), inset 0 1px 0 #fff;
+    }
+    html.light .premium-tooltip-arrow { background: #fafafa; }
+    html.light .premium-tooltip-arrow.is-below { border-color: rgba(161,161,170,0.55); }
+    html.light .premium-tooltip-arrow.is-above { border-color: rgba(161,161,170,0.55); }
+    html.light .premium-date-trigger.is-placeholder { color: #a1a1aa !important; }
+    html.light .premium-date-trigger > svg { color: #71717a; }
+    html.light .premium-date-popover {
+      border-color: #d4d4d8;
+      background:
+        radial-gradient(circle at 15% -12%, rgba(59,130,246,0.11), transparent 44%),
+        linear-gradient(180deg, rgba(255,255,255,0.99), rgba(250,250,250,0.97));
+      box-shadow: 0 28px 70px rgba(24,24,27,0.16), 0 8px 24px rgba(24,24,27,0.09), inset 0 1px 0 #fff;
+    }
+    html.light .premium-date-heading { color: #27272a; }
+    html.light .premium-date-heading span:last-child { color: #71717a; }
+    html.light .premium-date-nav {
+      color: #52525b;
+      border-color: #e4e4e7;
+      background: linear-gradient(180deg, #fff, #f4f4f5);
+      box-shadow: inset 0 1px 0 #fff, 0 2px 7px rgba(24,24,27,0.08);
+    }
+    html.light .premium-date-nav:hover { color: #18181b; border-color: #a1a1aa; }
+    html.light .premium-date-weekdays > span { color: #a1a1aa; }
+    html.light .premium-date-day { color: #3f3f46; }
+    html.light .premium-date-day:hover:not(:disabled) { color: #18181b; border-color: #d4d4d8; background: #f4f4f5; }
+    html.light .premium-date-day.is-outside { color: #c4c4cc; }
+    html.light .premium-date-day.is-today:not(.is-selected) { color: #2563eb; border-color: rgba(37,99,235,0.28); background: rgba(59,130,246,0.07); }
+    html.light .premium-date-day.is-selected { color: #fff; }
+    html.light .premium-date-footer { border-top-color: #e4e4e7; }
+    html.light .premium-date-footer-button { color: #71717a; }
+    html.light .premium-date-footer-button:hover { color: #27272a; background: #f4f4f5; }
+    html.light .premium-date-footer-button.is-accent { color: #1d4ed8; border-color: rgba(37,99,235,0.25); background: rgba(59,130,246,0.09); }
     html.light .premium-card {
       background: linear-gradient(145deg, #ffffff, #fcfcfd 62%) !important;
       border-color: #e4e4e7 !important;
@@ -4391,6 +4660,143 @@ function Btn({ children, onClick, variant = "primary", size = "md", disabled, cl
 function SectionLabel({ children, hint }) {
   return /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline justify-between mb-3 gap-4" }, /* @__PURE__ */ React.createElement("h3", { className: "text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-500" }, children), hint && /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, hint));
 }
+function PremiumTooltipLayer() {
+  const [tooltip, setTooltip] = useState(null);
+  const [position, setPosition] = useState(null);
+  const tooltipRef = useRef(null);
+  const showTimerRef = useRef(null);
+  const activeTargetRef = useRef(null);
+  const clearShowTimer = useCallback(() => {
+    if (showTimerRef.current) clearTimeout(showTimerRef.current);
+    showTimerRef.current = null;
+  }, []);
+  const hide = useCallback(() => {
+    clearShowTimer();
+    activeTargetRef.current = null;
+    setTooltip(null);
+    setPosition(null);
+  }, [clearShowTimer]);
+  const tooltipTarget = useCallback((node) => {
+    if (!(node instanceof Element)) return null;
+    return node.closest("[title], [data-premium-tooltip]");
+  }, []);
+  const tooltipText = useCallback((target) => {
+    const nativeTitle = target.getAttribute("title");
+    if (nativeTitle) {
+      target.dataset.premiumTooltip = nativeTitle;
+      target.removeAttribute("title");
+    }
+    return String(target.dataset.premiumTooltip || "").trim();
+  }, []);
+  const queueShow = useCallback((target, delay) => {
+    const text = tooltipText(target);
+    if (!text) return;
+    clearShowTimer();
+    activeTargetRef.current = target;
+    showTimerRef.current = setTimeout(() => {
+      if (!target.isConnected || activeTargetRef.current !== target) return;
+      setTooltip({ target, text });
+    }, delay);
+  }, [clearShowTimer, tooltipText]);
+  useEffect(() => {
+    const upgradeTitle = (element) => {
+      if (!(element instanceof Element)) return;
+      const title = element.getAttribute("title");
+      if (!title) return;
+      element.dataset.premiumTooltip = title;
+      element.removeAttribute("title");
+    };
+    const upgradeTree = (root) => {
+      if (!(root instanceof Element)) return;
+      upgradeTitle(root);
+      root.querySelectorAll("[title]").forEach(upgradeTitle);
+    };
+    upgradeTree(document.body);
+    const titleObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === "attributes") upgradeTitle(mutation.target);
+        mutation.addedNodes.forEach(upgradeTree);
+      }
+    });
+    titleObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["title"] });
+    const onPointerOver = (event) => {
+      const target = tooltipTarget(event.target);
+      if (!target || target === activeTargetRef.current) return;
+      queueShow(target, 380);
+    };
+    const onPointerOut = (event) => {
+      const active = activeTargetRef.current;
+      if (!active) return;
+      if (event.relatedTarget instanceof Node && active.contains(event.relatedTarget)) return;
+      if (active === tooltipTarget(event.target) || !active.contains(event.relatedTarget)) hide();
+    };
+    const onFocusIn = (event) => {
+      const target = tooltipTarget(event.target);
+      if (target) queueShow(target, 120);
+    };
+    const onFocusOut = (event) => {
+      if (activeTargetRef.current && !activeTargetRef.current.contains(event.relatedTarget)) hide();
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") hide();
+    };
+    document.addEventListener("pointerover", onPointerOver, true);
+    document.addEventListener("pointerout", onPointerOut, true);
+    document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("focusout", onFocusOut, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      titleObserver.disconnect();
+      clearShowTimer();
+      document.removeEventListener("pointerover", onPointerOver, true);
+      document.removeEventListener("pointerout", onPointerOut, true);
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("focusout", onFocusOut, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, [clearShowTimer, hide, queueShow, tooltipTarget]);
+  useLayoutEffect(() => {
+    if (!tooltip?.target || !tooltipRef.current) return;
+    const targetRect = tooltip.target.getBoundingClientRect();
+    const tipRect = tooltipRef.current.getBoundingClientRect();
+    const edge = 10;
+    const gap = 10;
+    const roomAbove = targetRect.top;
+    const placeBelow = roomAbove < tipRect.height + gap + edge;
+    const rawLeft = targetRect.left + targetRect.width / 2 - tipRect.width / 2;
+    const left = Math.min(window.innerWidth - tipRect.width - edge, Math.max(edge, rawLeft));
+    const top = placeBelow ? targetRect.bottom + gap : targetRect.top - tipRect.height - gap;
+    const arrowLeft = Math.min(tipRect.width - 14, Math.max(14, targetRect.left + targetRect.width / 2 - left));
+    setPosition({ left, top: Math.max(edge, top), placeBelow, arrowLeft });
+  }, [tooltip]);
+  if (!tooltip) return null;
+  return ReactDOM.createPortal(
+    /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        ref: tooltipRef,
+        role: "tooltip",
+        className: `premium-tooltip ${position ? "is-visible" : ""}`,
+        style: { left: position?.left ?? 0, top: position?.top ?? 0 }
+      },
+      /* @__PURE__ */ React.createElement("span", { className: "premium-tooltip-accent", "aria-hidden": "true" }),
+      /* @__PURE__ */ React.createElement("span", null, tooltip.text),
+      position && /* @__PURE__ */ React.createElement(
+        "span",
+        {
+          className: `premium-tooltip-arrow ${position.placeBelow ? "is-above" : "is-below"}`,
+          style: { left: position.arrowLeft },
+          "aria-hidden": "true"
+        }
+      )
+    ),
+    document.body
+  );
+}
 const SIDEBAR_SPLIT_STORAGE_KEY = "mrg_sidebar_splits_v1";
 function sidebarSplitStoredHeight(splitId, fallback) {
   try {
@@ -4634,7 +5040,170 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
     "Change Client ID"
   ));
 }
+const PREMIUM_DATE_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const PREMIUM_DATE_WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+function premiumDateFromIso(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+function premiumDateToIso(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function premiumDateLabel(value) {
+  const date = premiumDateFromIso(value);
+  if (!date) return "Select date";
+  return `${PREMIUM_DATE_MONTHS[date.getMonth()].slice(0, 3)} ${date.getDate()}, ${date.getFullYear()}`;
+}
+function PremiumDateInput({ value = "", onChange, className = "", disabled = false, min, max, name, id, required, title, ...rest }) {
+  const selected = premiumDateFromIso(value);
+  const today = /* @__PURE__ */ new Date();
+  const initial = selected || today;
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState(() => ({ year: initial.getFullYear(), month: initial.getMonth() }));
+  const [popupPos, setPopupPos] = useState(null);
+  const triggerRef = useRef(null);
+  const popupRef = useRef(null);
+  const dayRefs = useRef({});
+  const calendarIdRef = useRef(`premium-calendar-${Math.random().toString(36).slice(2)}`);
+  const positionPopup = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(314, window.innerWidth - 20);
+    const estimatedHeight = 390;
+    const above = window.innerHeight - rect.bottom < estimatedHeight + 12 && rect.top > estimatedHeight;
+    const left = Math.min(window.innerWidth - width - 10, Math.max(10, rect.left));
+    const top = above ? Math.max(10, rect.top - estimatedHeight - 8) : Math.min(window.innerHeight - estimatedHeight - 10, rect.bottom + 8);
+    setPopupPos({ left, top: Math.max(10, top), width, above });
+  }, []);
+  const openCalendar = useCallback(() => {
+    if (disabled) return;
+    const base = premiumDateFromIso(value) || /* @__PURE__ */ new Date();
+    setView({ year: base.getFullYear(), month: base.getMonth() });
+    setOpen(true);
+  }, [disabled, value]);
+  useLayoutEffect(() => {
+    if (open) positionPopup();
+  }, [open, positionPopup, view]);
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event) => {
+      if (triggerRef.current?.contains(event.target) || popupRef.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const closeOnViewportChange = () => setOpen(false);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    const focusIso = value || premiumDateToIso(/* @__PURE__ */ new Date());
+    requestAnimationFrame(() => dayRefs.current[focusIso]?.focus());
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [open, value]);
+  const emitChange = useCallback((nextValue) => {
+    onChange?.({ target: { value: nextValue, name }, currentTarget: { value: nextValue, name } });
+  }, [name, onChange]);
+  const chooseDate = useCallback((date) => {
+    const next = premiumDateToIso(date);
+    if (min && next < min || max && next > max) return;
+    emitChange(next);
+    setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }, [emitChange, max, min]);
+  const moveMonth = (offset) => setView((current) => {
+    const next = new Date(current.year, current.month + offset, 1);
+    return { year: next.getFullYear(), month: next.getMonth() };
+  });
+  const first = new Date(view.year, view.month, 1);
+  const gridStart = new Date(view.year, view.month, 1 - first.getDay());
+  const days = Array.from({ length: 42 }, (_, index) => new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index));
+  const todayIso = premiumDateToIso(today);
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      ...rest,
+      ref: triggerRef,
+      id,
+      type: "button",
+      disabled,
+      title,
+      "aria-haspopup": "dialog",
+      "aria-expanded": open,
+      "aria-controls": open ? calendarIdRef.current : void 0,
+      onClick: () => open ? setOpen(false) : openCalendar(),
+      onKeyDown: (event) => {
+        if (!open && (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          openCalendar();
+        }
+      },
+      className: `premium-input premium-date-trigger no-press w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 ${!value ? "is-placeholder" : ""} ${className}`
+    },
+    /* @__PURE__ */ React.createElement("span", { className: "truncate" }, premiumDateLabel(value)),
+    /* @__PURE__ */ React.createElement("svg", { className: "h-4 w-4 shrink-0", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("rect", { x: "3", y: "5", width: "18", height: "16", rx: "2" }), /* @__PURE__ */ React.createElement("path", { d: "M16 3v4M8 3v4M3 10h18" }))
+  ), name && /* @__PURE__ */ React.createElement("input", { type: "hidden", name, value: value || "", required }), open && popupPos && ReactDOM.createPortal(
+    /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        ref: popupRef,
+        id: calendarIdRef.current,
+        role: "dialog",
+        "aria-modal": "false",
+        "aria-label": "Choose date",
+        className: `premium-date-popover ${popupPos.above ? "origin-bottom" : "origin-top"}`,
+        style: { left: popupPos.left, top: popupPos.top, width: popupPos.width }
+      },
+      /* @__PURE__ */ React.createElement("div", { className: "premium-date-header" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-nav no-press", onClick: () => moveMonth(-1), "data-premium-tooltip": "Previous month", "aria-label": "Previous month" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "m15 18-6-6 6-6" }))), /* @__PURE__ */ React.createElement("div", { className: "premium-date-heading" }, /* @__PURE__ */ React.createElement("span", null, PREMIUM_DATE_MONTHS[view.month]), /* @__PURE__ */ React.createElement("span", null, view.year)), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-nav no-press", onClick: () => moveMonth(1), "data-premium-tooltip": "Next month", "aria-label": "Next month" }, /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "m9 18 6-6-6-6" })))),
+      /* @__PURE__ */ React.createElement("div", { className: "premium-date-weekdays", "aria-hidden": "true" }, PREMIUM_DATE_WEEKDAYS.map((day) => /* @__PURE__ */ React.createElement("span", { key: day }, day))),
+      /* @__PURE__ */ React.createElement("div", { className: "premium-date-grid", role: "grid" }, days.map((date) => {
+        const iso = premiumDateToIso(date);
+        const outside = date.getMonth() !== view.month;
+        const isSelected = iso === value;
+        const isToday = iso === todayIso;
+        const isDisabled = !!(min && iso < min || max && iso > max);
+        return /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            key: iso,
+            ref: (node) => {
+              if (node) dayRefs.current[iso] = node;
+              else delete dayRefs.current[iso];
+            },
+            type: "button",
+            role: "gridcell",
+            disabled: isDisabled,
+            "aria-selected": isSelected,
+            "aria-label": `${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`,
+            onClick: () => chooseDate(date),
+            className: `premium-date-day no-press ${outside ? "is-outside" : ""} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""}`
+          },
+          date.getDate()
+        );
+      })),
+      /* @__PURE__ */ React.createElement("div", { className: "premium-date-footer" }, !required && /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button no-press", onClick: () => {
+        emitChange("");
+        setOpen(false);
+      } }, "Clear"), /* @__PURE__ */ React.createElement("button", { type: "button", className: "premium-date-footer-button is-accent no-press", onClick: () => chooseDate(/* @__PURE__ */ new Date()) }, "Today"))
+    ),
+    document.body
+  ));
+}
 function Input(props) {
+  if (props.type === "date") return /* @__PURE__ */ React.createElement(PremiumDateInput, { ...props });
   const { className = "", ...rest } = props;
   return /* @__PURE__ */ React.createElement("input", { ...rest, className: `premium-input w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}` });
 }
@@ -13660,7 +14229,7 @@ window.addEventListener("unhandledrejection", (e) => {
     console.warn("Firebase init promise rejected:", e);
   }
   ReactDOM.createRoot(document.getElementById("root")).render(
-    /* @__PURE__ */ React.createElement(AppErrorBoundary, null, /* @__PURE__ */ React.createElement(App, null))
+    /* @__PURE__ */ React.createElement(AppErrorBoundary, null, /* @__PURE__ */ React.createElement(App, null), /* @__PURE__ */ React.createElement(PremiumTooltipLayer, null))
   );
 })();
 

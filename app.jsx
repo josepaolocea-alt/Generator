@@ -4022,6 +4022,154 @@ https://bit.ly/4vrcu64`;
       );
     }
 
+    /* Premium tooltip layer -------------------------------------------------
+       Existing controls already describe themselves with `title`. This layer
+       upgrades those hints into one consistent in-app surface and removes the
+       browser-native tooltip before it can appear. Event delegation keeps it
+       working for controls rendered later without wrapping every component. */
+    function PremiumTooltipLayer() {
+      const [tooltip, setTooltip] = useState(null);
+      const [position, setPosition] = useState(null);
+      const tooltipRef = useRef(null);
+      const showTimerRef = useRef(null);
+      const activeTargetRef = useRef(null);
+
+      const clearShowTimer = useCallback(() => {
+        if (showTimerRef.current) clearTimeout(showTimerRef.current);
+        showTimerRef.current = null;
+      }, []);
+
+      const hide = useCallback(() => {
+        clearShowTimer();
+        activeTargetRef.current = null;
+        setTooltip(null);
+        setPosition(null);
+      }, [clearShowTimer]);
+
+      const tooltipTarget = useCallback((node) => {
+        if (!(node instanceof Element)) return null;
+        return node.closest('[title], [data-premium-tooltip]');
+      }, []);
+
+      const tooltipText = useCallback((target) => {
+        const nativeTitle = target.getAttribute('title');
+        if (nativeTitle) {
+          target.dataset.premiumTooltip = nativeTitle;
+          target.removeAttribute('title');
+        }
+        return String(target.dataset.premiumTooltip || '').trim();
+      }, []);
+
+      const queueShow = useCallback((target, delay) => {
+        const text = tooltipText(target);
+        if (!text) return;
+        clearShowTimer();
+        activeTargetRef.current = target;
+        showTimerRef.current = setTimeout(() => {
+          if (!target.isConnected || activeTargetRef.current !== target) return;
+          setTooltip({ target, text });
+        }, delay);
+      }, [clearShowTimer, tooltipText]);
+
+      useEffect(() => {
+        const upgradeTitle = (element) => {
+          if (!(element instanceof Element)) return;
+          const title = element.getAttribute('title');
+          if (!title) return;
+          element.dataset.premiumTooltip = title;
+          element.removeAttribute('title');
+        };
+        const upgradeTree = (root) => {
+          if (!(root instanceof Element)) return;
+          upgradeTitle(root);
+          root.querySelectorAll('[title]').forEach(upgradeTitle);
+        };
+        upgradeTree(document.body);
+        const titleObserver = new MutationObserver((mutations) => {
+          for (const mutation of mutations) {
+            if (mutation.type === 'attributes') upgradeTitle(mutation.target);
+            mutation.addedNodes.forEach(upgradeTree);
+          }
+        });
+        titleObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['title'] });
+
+        const onPointerOver = (event) => {
+          const target = tooltipTarget(event.target);
+          if (!target || target === activeTargetRef.current) return;
+          queueShow(target, 380);
+        };
+        const onPointerOut = (event) => {
+          const active = activeTargetRef.current;
+          if (!active) return;
+          if (event.relatedTarget instanceof Node && active.contains(event.relatedTarget)) return;
+          if (active === tooltipTarget(event.target) || !active.contains(event.relatedTarget)) hide();
+        };
+        const onFocusIn = (event) => {
+          const target = tooltipTarget(event.target);
+          if (target) queueShow(target, 120);
+        };
+        const onFocusOut = (event) => {
+          if (activeTargetRef.current && !activeTargetRef.current.contains(event.relatedTarget)) hide();
+        };
+        const onKeyDown = (event) => { if (event.key === 'Escape') hide(); };
+
+        document.addEventListener('pointerover', onPointerOver, true);
+        document.addEventListener('pointerout', onPointerOut, true);
+        document.addEventListener('focusin', onFocusIn, true);
+        document.addEventListener('focusout', onFocusOut, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        window.addEventListener('scroll', hide, true);
+        window.addEventListener('resize', hide);
+        return () => {
+          titleObserver.disconnect();
+          clearShowTimer();
+          document.removeEventListener('pointerover', onPointerOver, true);
+          document.removeEventListener('pointerout', onPointerOut, true);
+          document.removeEventListener('focusin', onFocusIn, true);
+          document.removeEventListener('focusout', onFocusOut, true);
+          document.removeEventListener('keydown', onKeyDown, true);
+          window.removeEventListener('scroll', hide, true);
+          window.removeEventListener('resize', hide);
+        };
+      }, [clearShowTimer, hide, queueShow, tooltipTarget]);
+
+      useLayoutEffect(() => {
+        if (!tooltip?.target || !tooltipRef.current) return;
+        const targetRect = tooltip.target.getBoundingClientRect();
+        const tipRect = tooltipRef.current.getBoundingClientRect();
+        const edge = 10;
+        const gap = 10;
+        const roomAbove = targetRect.top;
+        const placeBelow = roomAbove < tipRect.height + gap + edge;
+        const rawLeft = targetRect.left + targetRect.width / 2 - tipRect.width / 2;
+        const left = Math.min(window.innerWidth - tipRect.width - edge, Math.max(edge, rawLeft));
+        const top = placeBelow
+          ? targetRect.bottom + gap
+          : targetRect.top - tipRect.height - gap;
+        const arrowLeft = Math.min(tipRect.width - 14, Math.max(14, targetRect.left + targetRect.width / 2 - left));
+        setPosition({ left, top: Math.max(edge, top), placeBelow, arrowLeft });
+      }, [tooltip]);
+
+      if (!tooltip) return null;
+      return ReactDOM.createPortal(
+        <div
+          ref={tooltipRef}
+          role="tooltip"
+          className={`premium-tooltip ${position ? 'is-visible' : ''}`}
+          style={{ left: position?.left ?? 0, top: position?.top ?? 0 }}>
+          <span className="premium-tooltip-accent" aria-hidden="true" />
+          <span>{tooltip.text}</span>
+          {position && (
+            <span
+              className={`premium-tooltip-arrow ${position.placeBelow ? 'is-above' : 'is-below'}`}
+              style={{ left: position.arrowLeft }}
+              aria-hidden="true" />
+          )}
+        </div>,
+        document.body
+      );
+    }
+
     const SIDEBAR_SPLIT_STORAGE_KEY = 'mrg_sidebar_splits_v1';
 
     function sidebarSplitStoredHeight(splitId, fallback) {
@@ -4379,7 +4527,199 @@ https://bit.ly/4vrcu64`;
       );
     }
 
+    const PREMIUM_DATE_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const PREMIUM_DATE_WEEKDAYS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+    function premiumDateFromIso(value) {
+      const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return null;
+      const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    function premiumDateToIso(date) {
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    }
+
+    function premiumDateLabel(value) {
+      const date = premiumDateFromIso(value);
+      if (!date) return 'Select date';
+      return `${PREMIUM_DATE_MONTHS[date.getMonth()].slice(0, 3)} ${date.getDate()}, ${date.getFullYear()}`;
+    }
+
+    function PremiumDateInput({ value = '', onChange, className = '', disabled = false, min, max, name, id, required, title, ...rest }) {
+      const selected = premiumDateFromIso(value);
+      const today = new Date();
+      const initial = selected || today;
+      const [open, setOpen] = useState(false);
+      const [view, setView] = useState(() => ({ year: initial.getFullYear(), month: initial.getMonth() }));
+      const [popupPos, setPopupPos] = useState(null);
+      const triggerRef = useRef(null);
+      const popupRef = useRef(null);
+      const dayRefs = useRef({});
+      const calendarIdRef = useRef(`premium-calendar-${Math.random().toString(36).slice(2)}`);
+
+      const positionPopup = useCallback(() => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+        const rect = trigger.getBoundingClientRect();
+        const width = Math.min(314, window.innerWidth - 20);
+        const estimatedHeight = 390;
+        const above = window.innerHeight - rect.bottom < estimatedHeight + 12 && rect.top > estimatedHeight;
+        const left = Math.min(window.innerWidth - width - 10, Math.max(10, rect.left));
+        const top = above
+          ? Math.max(10, rect.top - estimatedHeight - 8)
+          : Math.min(window.innerHeight - estimatedHeight - 10, rect.bottom + 8);
+        setPopupPos({ left, top: Math.max(10, top), width, above });
+      }, []);
+
+      const openCalendar = useCallback(() => {
+        if (disabled) return;
+        const base = premiumDateFromIso(value) || new Date();
+        setView({ year: base.getFullYear(), month: base.getMonth() });
+        setOpen(true);
+      }, [disabled, value]);
+
+      useLayoutEffect(() => {
+        if (open) positionPopup();
+      }, [open, positionPopup, view]);
+
+      useEffect(() => {
+        if (!open) return;
+        const onPointerDown = (event) => {
+          if (triggerRef.current?.contains(event.target) || popupRef.current?.contains(event.target)) return;
+          setOpen(false);
+        };
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            setOpen(false);
+            triggerRef.current?.focus();
+          }
+        };
+        const closeOnViewportChange = () => setOpen(false);
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        window.addEventListener('resize', closeOnViewportChange);
+        window.addEventListener('scroll', closeOnViewportChange, true);
+        const focusIso = value || premiumDateToIso(new Date());
+        requestAnimationFrame(() => dayRefs.current[focusIso]?.focus());
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true);
+          document.removeEventListener('keydown', onKeyDown, true);
+          window.removeEventListener('resize', closeOnViewportChange);
+          window.removeEventListener('scroll', closeOnViewportChange, true);
+        };
+      }, [open, value]);
+
+      const emitChange = useCallback((nextValue) => {
+        onChange?.({ target: { value: nextValue, name }, currentTarget: { value: nextValue, name } });
+      }, [name, onChange]);
+
+      const chooseDate = useCallback((date) => {
+        const next = premiumDateToIso(date);
+        if ((min && next < min) || (max && next > max)) return;
+        emitChange(next);
+        setOpen(false);
+        requestAnimationFrame(() => triggerRef.current?.focus());
+      }, [emitChange, max, min]);
+
+      const moveMonth = (offset) => setView(current => {
+        const next = new Date(current.year, current.month + offset, 1);
+        return { year: next.getFullYear(), month: next.getMonth() };
+      });
+
+      const first = new Date(view.year, view.month, 1);
+      const gridStart = new Date(view.year, view.month, 1 - first.getDay());
+      const days = Array.from({ length: 42 }, (_, index) => new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index));
+      const todayIso = premiumDateToIso(today);
+
+      return (
+        <>
+          <button
+            {...rest}
+            ref={triggerRef}
+            id={id}
+            type="button"
+            disabled={disabled}
+            title={title}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-controls={open ? calendarIdRef.current : undefined}
+            onClick={() => open ? setOpen(false) : openCalendar()}
+            onKeyDown={event => {
+              if (!open && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
+                event.preventDefault();
+                openCalendar();
+              }
+            }}
+            className={`premium-input premium-date-trigger no-press w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 ${!value ? 'is-placeholder' : ''} ${className}`}>
+            <span className="truncate">{premiumDateLabel(value)}</span>
+            <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>
+            </svg>
+          </button>
+          {name && <input type="hidden" name={name} value={value || ''} required={required} />}
+          {open && popupPos && ReactDOM.createPortal(
+            <div
+              ref={popupRef}
+              id={calendarIdRef.current}
+              role="dialog"
+              aria-modal="false"
+              aria-label="Choose date"
+              className={`premium-date-popover ${popupPos.above ? 'origin-bottom' : 'origin-top'}`}
+              style={{ left: popupPos.left, top: popupPos.top, width: popupPos.width }}>
+              <div className="premium-date-header">
+                <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(-1)} data-premium-tooltip="Previous month" aria-label="Previous month">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+                <div className="premium-date-heading">
+                  <span>{PREMIUM_DATE_MONTHS[view.month]}</span>
+                  <span>{view.year}</span>
+                </div>
+                <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(1)} data-premium-tooltip="Next month" aria-label="Next month">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                </button>
+              </div>
+              <div className="premium-date-weekdays" aria-hidden="true">
+                {PREMIUM_DATE_WEEKDAYS.map(day => <span key={day}>{day}</span>)}
+              </div>
+              <div className="premium-date-grid" role="grid">
+                {days.map(date => {
+                  const iso = premiumDateToIso(date);
+                  const outside = date.getMonth() !== view.month;
+                  const isSelected = iso === value;
+                  const isToday = iso === todayIso;
+                  const isDisabled = !!((min && iso < min) || (max && iso > max));
+                  return (
+                    <button
+                      key={iso}
+                      ref={node => { if (node) dayRefs.current[iso] = node; else delete dayRefs.current[iso]; }}
+                      type="button"
+                      role="gridcell"
+                      disabled={isDisabled}
+                      aria-selected={isSelected}
+                      aria-label={`${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`}
+                      onClick={() => chooseDate(date)}
+                      className={`premium-date-day no-press ${outside ? 'is-outside' : ''} ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''}`}>
+                      {date.getDate()}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="premium-date-footer">
+                {!required && <button type="button" className="premium-date-footer-button no-press" onClick={() => { emitChange(''); setOpen(false); }}>Clear</button>}
+                <button type="button" className="premium-date-footer-button is-accent no-press" onClick={() => chooseDate(new Date())}>Today</button>
+              </div>
+            </div>,
+            document.body
+          )}
+        </>
+      );
+    }
+
     function Input(props) {
+      if (props.type === 'date') return <PremiumDateInput {...props} />;
       const { className = '', ...rest } = props;
       return <input {...rest} className={`premium-input w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-colors ${className}`} />;
     }
@@ -16280,7 +16620,7 @@ match /shared/whitelistSmsTestNumbers {
         console.warn('Firebase init promise rejected:', e);
       }
       ReactDOM.createRoot(document.getElementById('root')).render(
-        <AppErrorBoundary><App /></AppErrorBoundary>
+        <AppErrorBoundary><App /><PremiumTooltipLayer /></AppErrorBoundary>
       );
     })();
   
