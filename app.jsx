@@ -4547,7 +4547,13 @@ https://bit.ly/4vrcu64`;
       return `${PREMIUM_DATE_MONTHS[date.getMonth()].slice(0, 3)} ${date.getDate()}, ${date.getFullYear()}`;
     }
 
-    function PremiumDateInput({ value = '', onChange, className = '', disabled = false, min, max, name, id, required, title, ...rest }) {
+    function premiumDateLongLabel(value) {
+      const date = premiumDateFromIso(value);
+      if (!date) return 'Choose a date';
+      return `${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][date.getDay()]}, ${PREMIUM_DATE_MONTHS[date.getMonth()]} ${date.getDate()}`;
+    }
+
+    function PremiumDateInput({ type: _nativeType, value = '', onChange, className = '', disabled = false, min, max, name, id, required, title, ...rest }) {
       const selected = premiumDateFromIso(value);
       const today = new Date();
       const initial = selected || today;
@@ -4564,7 +4570,7 @@ https://bit.ly/4vrcu64`;
         if (!trigger) return;
         const rect = trigger.getBoundingClientRect();
         const width = Math.min(314, window.innerWidth - 20);
-        const estimatedHeight = 390;
+        const estimatedHeight = 410;
         const above = window.innerHeight - rect.bottom < estimatedHeight + 12 && rect.top > estimatedHeight;
         const left = Math.min(window.innerWidth - width - 10, Math.max(10, rect.left));
         const top = above
@@ -4646,6 +4652,7 @@ https://bit.ly/4vrcu64`;
             aria-haspopup="dialog"
             aria-expanded={open}
             aria-controls={open ? calendarIdRef.current : undefined}
+            data-ui="premium-date-picker"
             onClick={() => open ? setOpen(false) : openCalendar()}
             onKeyDown={event => {
               if (!open && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
@@ -4667,8 +4674,20 @@ https://bit.ly/4vrcu64`;
               role="dialog"
               aria-modal="false"
               aria-label="Choose date"
+              data-ui="premium-date-popover"
               className={`premium-date-popover ${popupPos.above ? 'origin-bottom' : 'origin-top'}`}
               style={{ left: popupPos.left, top: popupPos.top, width: popupPos.width }}>
+              <div className="premium-date-hero">
+                <span className="premium-date-hero-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/><path d="m9 15 2 2 4-4"/></svg>
+                </span>
+                <span className="premium-date-hero-copy">
+                  <span className="premium-date-eyebrow">Date picker</span>
+                  <strong>{premiumDateLongLabel(value)}</strong>
+                  <span>{selected ? selected.getFullYear() : 'Select from the calendar'}</span>
+                </span>
+                <span className="premium-date-status" aria-hidden="true">Local</span>
+              </div>
               <div className="premium-date-header">
                 <button type="button" className="premium-date-nav no-press" onClick={() => moveMonth(-1)} data-premium-tooltip="Previous month" aria-label="Previous month">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
@@ -4709,7 +4728,11 @@ https://bit.ly/4vrcu64`;
               </div>
               <div className="premium-date-footer">
                 {!required && <button type="button" className="premium-date-footer-button no-press" onClick={() => { emitChange(''); setOpen(false); }}>Clear</button>}
-                <button type="button" className="premium-date-footer-button is-accent no-press" onClick={() => chooseDate(new Date())}>Today</button>
+                <span className="premium-date-footer-spacer" />
+                <button type="button" className="premium-date-footer-button no-press" onClick={() => { const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); chooseDate(tomorrow); }}>Tomorrow</button>
+                <button type="button" className="premium-date-footer-button is-accent no-press" onClick={() => chooseDate(new Date())}>
+                  <span className="premium-date-today-dot" aria-hidden="true" />Today
+                </button>
               </div>
             </div>,
             document.body
