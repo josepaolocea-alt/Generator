@@ -1492,8 +1492,16 @@
         radial-gradient(circle at 18% 102%, rgba(235, 142, 111, 0.24), transparent 34%),
         linear-gradient(155deg, rgba(61, 49, 83, 0.77), rgba(31, 33, 55, 0.68)) !important;
       box-shadow: var(--glass-shadow), var(--glass-inset) !important;
-      backdrop-filter: blur(34px) saturate(1.48);
-      -webkit-backdrop-filter: blur(34px) saturate(1.48);
+      /* Deliberately NO backdrop-filter here. Nothing scrolls behind the
+         sidebar — its backdrop is only the fixed body gradient — so the blur
+         was a no-op, but it made the sidebar a backdrop root. Chromium
+         re-derives that root whenever a layer is promoted elsewhere (e.g. the
+         translateY(-1px) lift on a module-switcher button in the header), and
+         it re-sampled the backdrop as near-black: a dark box flashed over the
+         whole sidebar while hovering RCA. The blur was invisible anyway (a
+         blurred smooth gradient is the same gradient); only the saturate()
+         had any effect, and losing it costs a barely perceptible amount of
+         colour behind a ~55%-alpha overlay. */
     }
     html.light body > #root > div > aside {
       color: #fff;
@@ -1583,7 +1591,10 @@
       border-radius: 14px !important;
       background: var(--glass-nav) !important;
       box-shadow: var(--glass-inset) !important;
-      backdrop-filter: blur(18px);
+      /* No backdrop-filter: these strips sit directly on the already-frosted
+         .app-topbar, so there was nothing left to blur — it only nested a
+         third backdrop root inside topbar-inside-main, right where the hover
+         repaint happens. See the sidebar note above. */
     }
     .app-segmented button,
     .app-tab-nav button,
