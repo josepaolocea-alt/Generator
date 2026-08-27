@@ -1685,14 +1685,21 @@
         var(--glass-card) !important;
       box-shadow: var(--glass-soft-shadow), var(--glass-inset) !important;
     }
+    /* Translucent panel fill — FLAT, IN-PAGE SURFACES ONLY.
+       `bg-[#232327]` must NOT be listed here. Per the §11d ramp it is the
+       "raised card / modal / popover" step, i.e. every floating surface in the
+       app: the module-switcher overflow menu, the confirm/auth dialogs and the
+       image-editor modal. These selectors carry #root, so they outranked each
+       component's own near-opaque fill (1,2,3 vs 0,2,1) and flattened all of
+       them to 34% alpha — 48% in light mode — and page text read straight
+       through an open menu. Floating surfaces now fall through to their own
+       rules, or to the plain `.bg-[#232327]` utility, which is solid. */
     body > #root > div .bg-neutral-950,
-    body > #root > div .bg-neutral-900,
-    body > #root > div .bg-\[\#232327\] {
+    body > #root > div .bg-neutral-900 {
       background-color: rgba(8, 11, 22, 0.34) !important;
     }
     html.light body > #root > div .bg-neutral-950,
-    html.light body > #root > div .bg-neutral-900,
-    html.light body > #root > div .bg-\[\#232327\] {
+    html.light body > #root > div .bg-neutral-900 {
       background-color: rgba(255,255,255,0.48) !important;
     }
 
