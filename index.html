@@ -1220,8 +1220,14 @@
     html.light .text-neutral-200 { color: #27272a !important; }
     html.light .text-neutral-300 { color: #3f3f46 !important; }
     html.light .text-neutral-400 { color: #52525b !important; }
-    html.light .text-neutral-500 { color: #71717a !important; }
-    html.light .text-neutral-600 { color: #a1a1aa !important; }
+    /* The muted tiers are mirrored from dark mode (600 = dimmest), but the
+       straight zinc mirror landed far under WCAG AA on the near-white glass
+       surfaces: -500 measured 4.44:1 and -600 only 2.43:1, which is why hint
+       text, row numbers and captions read as barely-there grey. Retuned so
+       both clear 4.5:1 while keeping -600 lighter than -500. Measured against
+       the actual painted card surface, rgb(247,249,254). */
+    html.light .text-neutral-500 { color: #54545f !important; } /* 7.1:1 */
+    html.light .text-neutral-600 { color: #6e6e79 !important; } /* 4.8:1 */
     html.light .text-neutral-700 { color: #d4d4d8 !important; }
     html.light .hover\:text-neutral-200:hover { color: #27272a !important; }
     html.light .hover\:text-neutral-100:hover { color: #18181b !important; }
@@ -1401,7 +1407,7 @@
       --glass-canvas: #dfe7f4;
       --glass-ink: #15233b;
       --glass-muted: #65738a;
-      --glass-faint: #8a96a8;
+      --glass-faint: #66707f;   /* was #8a96a8 — only 2.84:1 on the glass surfaces (footers, meta lines); now 4.8:1 */
       --glass-accent: #397fe6;
       --glass-accent-strong: #236bd5;
       --glass-main: rgba(249, 251, 255, 0.80);
@@ -1503,13 +1509,17 @@
          had any effect, and losing it costs a barely perceptible amount of
          colour behind a ~55%-alpha overlay. */
     }
+    /* The base layer is deliberately heavier than it looks like it needs to be.
+       The sidebar carries white text in BOTH themes, so a pastel panel here put
+       every label near 2-3:1. Deepening the base gradient (0.54/0.40 -> 0.86/0.74)
+       takes white to ~5.3:1 while the radial tints keep the panel colourful. */
     html.light body > #root > div > aside {
       color: #fff;
       background:
         radial-gradient(circle at 2% 2%, rgba(149, 93, 199, 0.50), transparent 34%),
         radial-gradient(circle at 105% 18%, rgba(70, 147, 200, 0.43), transparent 41%),
         radial-gradient(circle at 16% 103%, rgba(224, 132, 101, 0.42), transparent 37%),
-        linear-gradient(150deg, rgba(111, 91, 153, 0.54), rgba(107, 131, 177, 0.40)) !important;
+        linear-gradient(150deg, rgba(90, 72, 132, 0.90), rgba(82, 103, 148, 0.80)) !important;
       box-shadow: var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,0.42) !important;
     }
     body > #root > div > main {
@@ -1821,6 +1831,25 @@
     html.light .premium-chip {
       background: rgba(255,255,255,0.52) !important;
     }
+    /* Sidebar surfaces, light mode only.
+       The panel is dark and everything on it inherits white text, so a fill
+       here has to be DARKER than the panel. The global light-mode overrides do
+       the opposite — they make these surfaces white-translucent (52% for chips,
+       54% for buttons, 48% for the selected sheet row), which left white labels
+       sitting at 1.5-2:1. Same dark-translucent trick the sidebar inputs use.
+       Dark mode keeps the light fills: there the panel is already dark, so a
+       light fill is exactly what makes these read. Form controls are excluded —
+       a checkbox still needs a light box to show its checked state. */
+    html.light body > #root > div > aside .premium-chip,
+    html.light body > #root > div > aside .premium-button,
+    html.light body > #root > div > aside .bg-neutral-900:not(input):not(select):not(textarea) {
+      color: rgba(255,255,255,0.94) !important;
+      background: rgba(17, 14, 38, 0.32) !important;
+    }
+    html.light body > #root > div > aside .premium-button[data-variant="danger"] {
+      color: #ffccd2 !important;
+      background: rgba(74, 16, 28, 0.42) !important;
+    }
 
     /* Sidebar hierarchy */
     body > #root > div > aside h1 {
@@ -1839,11 +1868,17 @@
     }
     body > #root > div > aside .text-neutral-400,
     body > #root > div > aside .text-neutral-500,
-    body > #root > div > aside .text-neutral-600,
+    body > #root > div > aside .text-neutral-600 {
+      color: rgba(245,245,255,0.60) !important;
+    }
+    /* Light mode's sidebar panel is far paler than dark mode's, so the same
+       60% white measured only ~2:1 there — the muted labels, the sync status
+       and the account row all read as barely-there. Kept separate from the
+       dark rule above so dark mode retains its softer muted tier. */
     html.light body > #root > div > aside .text-neutral-400,
     html.light body > #root > div > aside .text-neutral-500,
     html.light body > #root > div > aside .text-neutral-600 {
-      color: rgba(245,245,255,0.60) !important;
+      color: rgba(255,255,255,0.86) !important;
     }
     body > #root > div > aside .premium-input,
     body > #root > div > aside .premium-textarea,
