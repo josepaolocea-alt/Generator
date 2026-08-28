@@ -3580,11 +3580,32 @@ function bmrBuildClientConditionFormula(rule, cellRef, clientName, rowNum) {
   return `AND(${bmrBuildConditionFormula(rule, cellRef)},EXACT($A${rowNum},"${safeName}"))`;
 }
 const BMR_COLOR_RULE_NAMES = 20;
+const BMR_TARGET_RULES_PER_FORMULA = 12;
 function bmrNameMatchFormula(names, cellRef) {
   const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
   const tests = (names || []).map((name) => `EXACT(${cleanText},"${String(name).replace(/"/g, '""')}")`);
   if (!tests.length) return "FALSE";
   return tests.length === 1 ? tests[0] : `OR(${tests.join(",")})`;
+}
+function bmrBuildClientRuleBatchFormula(entries, cellRef, rowNum) {
+  const formulae = (entries || []).map(({ rule, client }) => bmrBuildClientConditionFormula(rule, cellRef, client.name, rowNum));
+  if (!formulae.length) return "FALSE";
+  return formulae.length === 1 ? formulae[0] : `OR(${formulae.join(",")})`;
+}
+function bmrTargetRuleBatches(rules, visibleClientsById) {
+  const batches = [];
+  let current = null;
+  (rules || []).filter((rule) => rule.enabled).forEach((rule) => {
+    const client = visibleClientsById.get(rule.clientId);
+    if (!client?.name) return;
+    const styleKey = JSON.stringify(bmrStyleFromRule(rule));
+    if (!current || current.styleKey !== styleKey || current.entries.length >= BMR_TARGET_RULES_PER_FORMULA) {
+      current = { styleKey, entries: [] };
+      batches.push(current);
+    }
+    current.entries.push({ rule, client });
+  });
+  return batches.map((batch) => batch.entries);
 }
 function bmrArrayNumericExpr(rangeRef) {
   const cleanText = `TRIM(SUBSTITUTE(${rangeRef}&"",CHAR(160),""))`;
@@ -3616,9 +3637,21 @@ function bmrClientRulesArrayExpr(ruleEntries, rangeRef, aRangeRef) {
   const valid = (ruleEntries || []).filter((e) => e.client?.name);
   if (!valid.length) return null;
   const num = bmrArrayNumericExpr(rangeRef);
-  const inner = valid.map(({ rule, client }) => {
-    const safe = String(client.name).replace(/"/g, '""');
-    return `(${bmrArrayCompare(rule, num)})*EXACT(${aRangeRef},"${safe}")`;
+  const conditionGroups = /* @__PURE__ */ new Map();
+  valid.forEach(({ rule, client }) => {
+    const key = JSON.stringify({
+      kind: rule.kind,
+      value: Number(rule.value) || 0,
+      min: Number(rule.min) || 0,
+      max: Number(rule.max) || 0
+    });
+    if (!conditionGroups.has(key)) conditionGroups.set(key, { rule, names: /* @__PURE__ */ new Set() });
+    conditionGroups.get(key).names.add(String(client.name));
+  });
+  const inner = [...conditionGroups.values()].map(({ rule, names }) => {
+    const exacts = [...names].map((name) => `EXACT(${aRangeRef},"${name.replace(/"/g, '""')}")`);
+    const nameMatch = exacts.length === 1 ? exacts[0] : `--((${exacts.join("+")})>0)`;
+    return `(${bmrArrayCompare(rule, num)})*(${nameMatch})`;
   }).join("+");
   return `${bmrArrayHasValue(rangeRef)}*ISNUMBER(${num})*--((${inner})>0)`;
 }
@@ -3684,13 +3717,14 @@ function bmrTodayString() {
   const d = /* @__PURE__ */ new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount, blockCols = BMR_BLOCK_COLS) {
+function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount, blockCols = BMR_BLOCK_COLS, compactHiddenStyles = false) {
   if (bmr.bordersOnData === false) return;
   const borderColor = bmr.borderColor || "FF374151";
   const cellBorder = { style: bmr.borderStyle || "thin", color: { argb: borderColor } };
   const timeBorder = { style: bmr.timeSeparatorBorderStyle || "thick", color: { argb: borderColor } };
   for (let r = 2; r <= dataEndRow; r++) {
     for (let c = 1; c <= totalCols; c++) {
+      if (compactHiddenStyles && r > 2 && c >= 3 && BMR_FORCE_HIDDEN_OFFSETS.includes((c - 3) % blockCols)) continue;
       ws.getCell(r, c).border = {
         top: cellBorder,
         left: cellBorder,
@@ -3716,11 +3750,12 @@ function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount, blockCols = 
     }
   }
 }
-function applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slotCount) {
+function applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slotCount, compactHiddenStyles = false) {
   for (let k = 0; k < slotCount; k++) {
     const blockStart = 3 + k * BMR_BLOCK_COLS;
     for (let r = dataStartRow; r <= dataEndRow; r++) {
       BMR_DECIMAL_OFFSETS.forEach((offset) => {
+        if (compactHiddenStyles && BMR_FORCE_HIDDEN_OFFSETS.includes(offset)) return;
         ws.getCell(r, blockStart + offset).numFmt = "0.00";
       });
     }
@@ -3730,7 +3765,9 @@ function bmrCarrierNameWidth(clients) {
   const longest = (clients || []).reduce((max, client) => Math.max(max, String(client.name || "").length), 0);
   return Math.max(BMR_BLOCK_HEADERS[0].trim().length + 2, longest + 2);
 }
-function buildBmrSheet(ws, bmr, shift) {
+function buildBmrSheet(ws, bmr, shift, options = {}) {
+  const valuesOnly = !!options.valuesOnly;
+  const compactHiddenStyles = !!options.compactHiddenStyles;
   const slots = bmrSlotsForShift(shift);
   const visibleClients = bmrNamedClients((bmr.clients || []).filter((c) => !c.hidden));
   const accountManagersById = bmrAccountManagersById(bmr);
@@ -3742,12 +3779,14 @@ function buildBmrSheet(ws, bmr, shift) {
     const c = 3 + k * BMR_BLOCK_COLS;
     const cell = ws.getCell(1, c);
     cell.value = slots[k];
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-    ws.mergeCells(1, c, 1, c + BMR_BLOCK_COLS - 1);
+    if (!valuesOnly) {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      ws.mergeCells(1, c, 1, c + BMR_BLOCK_COLS - 1);
+    }
   }
-  ws.getRow(1).height = 22;
+  if (!valuesOnly) ws.getRow(1).height = 22;
   ws.getCell(2, 1).value = "CarrierName ";
   ws.getCell(2, 2).value = "Allow Bal";
   for (let k = 0; k < slots.length; k++) {
@@ -3756,12 +3795,14 @@ function buildBmrSheet(ws, bmr, shift) {
       ws.getCell(2, baseCol + i).value = BMR_BLOCK_HEADERS[i];
     }
   }
-  ws.getRow(2).eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
-    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  });
-  ws.getRow(2).height = 24;
+  if (!valuesOnly) {
+    ws.getRow(2).eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    });
+    ws.getRow(2).height = 24;
+  }
   for (let i = 0; i < dataRowCount; i++) {
     const cl = visibleClients[i];
     const r = dataStartRow + i;
@@ -3769,7 +3810,7 @@ function buildBmrSheet(ws, bmr, shift) {
       const clientColor = bmrClientColor(bmr, cl, accountManagersById);
       ws.getCell(r, 1).value = cl.name;
       ws.getCell(r, 2).value = cl.allowBalanceLabel || "";
-      if (clientColor) {
+      if (clientColor && !valuesOnly) {
         const fill = { type: "pattern", pattern: "solid", fgColor: { argb: argbHex(clientColor) } };
         ws.getCell(r, 1).fill = fill;
       }
@@ -3789,26 +3830,27 @@ function buildBmrSheet(ws, bmr, shift) {
       }
     }
   }
-  const carrierNameWidth = bmrCarrierNameWidth(visibleClients);
-  ws.getColumn(1).width = carrierNameWidth;
-  ws.getColumn(2).width = 22;
-  for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
-  for (let k = 0; k < slots.length; k++) ws.getColumn(3 + k * BMR_BLOCK_COLS).width = carrierNameWidth;
-  applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length);
-  applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
+  if (!valuesOnly) {
+    const carrierNameWidth = bmrCarrierNameWidth(visibleClients);
+    ws.getColumn(1).width = carrierNameWidth;
+    ws.getColumn(2).width = 22;
+    for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
+    for (let k = 0; k < slots.length; k++) ws.getColumn(3 + k * BMR_BLOCK_COLS).width = carrierNameWidth;
+    applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length, compactHiddenStyles);
+    applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length, BMR_BLOCK_COLS, compactHiddenStyles);
+  }
   let priorityCounter = 100;
   const visibleClientsById = new Map(visibleClients.map((c) => [c.id, c]));
   const bandRef = (letters) => letters.map((cl) => `${cl}${dataStartRow}:${cl}${dataEndRow}`).join(" ");
   const targetRef = bandRef(BMR_TARGET_COL_LETTERS);
   const targetAnchor = `${BMR_TARGET_COL_LETTERS[0]}${dataStartRow}`;
-  (bmr.targetRules || []).filter((r) => r.enabled).forEach((rule) => {
-    const client = visibleClientsById.get(rule.clientId);
-    if (!client?.name) return;
+  if (!valuesOnly) bmrTargetRuleBatches(bmr.targetRules, visibleClientsById).forEach((entries) => {
+    const rule = entries[0].rule;
     ws.addConditionalFormatting({
       ref: targetRef,
       rules: [{
         type: "expression",
-        formulae: [bmrBuildClientConditionFormula(rule, targetAnchor, client.name, dataStartRow)],
+        formulae: [bmrBuildClientRuleBatchFormula(entries, targetAnchor, dataStartRow)],
         style: bmrStyleFromRule(rule),
         priority: priorityCounter++
       }]
@@ -3816,7 +3858,7 @@ function buildBmrSheet(ws, bmr, shift) {
   });
   const usageRef = bandRef(BMR_USAGE_COL_LETTERS);
   const usageAnchor = `${BMR_USAGE_COL_LETTERS[0]}${dataStartRow}`;
-  (bmr.usageRules || []).filter((r) => r.enabled).forEach((rule) => {
+  if (!valuesOnly) (bmr.usageRules || []).filter((r) => r.enabled).forEach((rule) => {
     ws.addConditionalFormatting({
       ref: usageRef,
       rules: [{
@@ -3844,7 +3886,7 @@ function buildBmrSheet(ws, bmr, shift) {
     if (!colorGroups.has(argb)) colorGroups.set(argb, []);
     colorGroups.get(argb).push(name);
   });
-  colorGroups.forEach((names, argb) => {
+  if (!valuesOnly) colorGroups.forEach((names, argb) => {
     for (let start = 0; start < names.length; start += BMR_COLOR_RULE_NAMES) {
       ws.addConditionalFormatting({
         ref: carrierRef,
@@ -3860,7 +3902,9 @@ function buildBmrSheet(ws, bmr, shift) {
   const redCountRow = dataEndRow + 2;
   const enabledTargetRules = (bmr.targetRules || []).filter((r) => r.enabled).map((rule) => ({ rule, client: visibleClientsById.get(rule.clientId) })).filter((entry) => entry.client?.name);
   if (enabledTargetRules.length) {
-    applyBmrRedCountLabel(ws.getCell(redCountRow, 1), "Colored Amnt Receivable count");
+    const redCountLabel = ws.getCell(redCountRow, 1);
+    if (valuesOnly) redCountLabel.value = "Colored Amnt Receivable count";
+    else applyBmrRedCountLabel(redCountLabel, "Colored Amnt Receivable count");
     const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
     for (let k = 0; k < slots.length; k++) {
       const amntCol = colLetter(3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
@@ -3870,11 +3914,11 @@ function buildBmrSheet(ws, bmr, shift) {
       ]);
       const cell = ws.getCell(redCountRow, 3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
       cell.value = formula ? { formula } : 0;
-      applyBmrRedCountStyle(cell);
+      if (!valuesOnly) applyBmrRedCountStyle(cell);
     }
-    ws.getRow(redCountRow).height = 34;
+    if (!valuesOnly) ws.getRow(redCountRow).height = 34;
   }
-  (bmr.hiddenCols || []).forEach((c) => {
+  if (!valuesOnly) (bmr.hiddenCols || []).forEach((c) => {
     try {
       ws.getColumn(c).hidden = true;
     } catch (_) {
@@ -3882,14 +3926,14 @@ function buildBmrSheet(ws, bmr, shift) {
   });
   const forcedHidden = new Set(BMR_FORCE_HIDDEN_OFFSETS);
   (bmr.hiddenBlockCols || []).forEach((offset) => forcedHidden.add(Number(offset)));
-  forcedHidden.forEach((offset) => {
+  if (!valuesOnly) forcedHidden.forEach((offset) => {
     const colOffset = Number(offset);
     if (!Number.isInteger(colOffset) || colOffset < 0 || colOffset >= BMR_BLOCK_COLS) return;
     for (let k = 0; k < slots.length; k++) {
       ws.getColumn(3 + k * BMR_BLOCK_COLS + colOffset).hidden = true;
     }
   });
-  ws.views = [{ state: "frozen", xSplit: 2, ySplit: 2 }];
+  if (!valuesOnly) ws.views = [{ state: "frozen", xSplit: 2, ySplit: 2 }];
 }
 async function buildBmrBlob(state, options = {}) {
   const wb = new ExcelJS.Workbook();
@@ -3901,11 +3945,12 @@ async function buildBmrBlob(state, options = {}) {
   if (bmr.includeNight !== false) shifts.push("night");
   if (!shifts.length) shifts.push("day");
   const requestedTitles = new Set((options.onlyTabTitles || []).filter(Boolean));
+  const sheetOptions = { ...options, compactHiddenStyles: true };
   for (const shift of shifts) {
     const name = shift === "day" ? "7AM-7PM" : "7PM-7AM";
     if (requestedTitles.size && !requestedTitles.has(name)) continue;
     const ws = wb.addWorksheet(name);
-    buildBmrSheet(ws, bmr, shift);
+    buildBmrSheet(ws, bmr, shift, sheetOptions);
   }
   retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
   const filename = `BMR_VOIP_${bmrTodayString()}.xlsx`;

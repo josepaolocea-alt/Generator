@@ -1667,6 +1667,10 @@
     // client names. Small batches keep the formula far below Excel's length
     // limit while collapsing hundreds of single-client rules into a handful.
     const BMR_COLOR_RULE_NAMES = 20;
+    // Keep grouped formulas comfortably below Excel's formula-length ceiling.
+    // Grouping only adjacent rules with the same style preserves the original
+    // priority order when differently styled rules overlap.
+    const BMR_TARGET_RULES_PER_FORMULA = 12;
 
     // True when the carrier cell exactly matches one of the batch's client
     // names. Deliberately only OR + EXACT, so a batched rule behaves exactly
@@ -1676,6 +1680,29 @@
       const tests = (names || []).map(name => `EXACT(${cleanText},"${String(name).replace(/"/g, '""')}")`);
       if (!tests.length) return 'FALSE';
       return tests.length === 1 ? tests[0] : `OR(${tests.join(',')})`;
+    }
+
+    function bmrBuildClientRuleBatchFormula(entries, cellRef, rowNum) {
+      const formulae = (entries || []).map(({ rule, client }) =>
+        bmrBuildClientConditionFormula(rule, cellRef, client.name, rowNum));
+      if (!formulae.length) return 'FALSE';
+      return formulae.length === 1 ? formulae[0] : `OR(${formulae.join(',')})`;
+    }
+
+    function bmrTargetRuleBatches(rules, visibleClientsById) {
+      const batches = [];
+      let current = null;
+      (rules || []).filter(rule => rule.enabled).forEach((rule) => {
+        const client = visibleClientsById.get(rule.clientId);
+        if (!client?.name) return;
+        const styleKey = JSON.stringify(bmrStyleFromRule(rule));
+        if (!current || current.styleKey !== styleKey || current.entries.length >= BMR_TARGET_RULES_PER_FORMULA) {
+          current = { styleKey, entries: [] };
+          batches.push(current);
+        }
+        current.entries.push({ rule, client });
+      });
+      return batches.map(batch => batch.entries);
     }
 
     /* ------------------------------------------------------------
@@ -1714,9 +1741,26 @@
       const valid = (ruleEntries || []).filter(e => e.client?.name);
       if (!valid.length) return null;
       const num = bmrArrayNumericExpr(rangeRef);
-      const inner = valid.map(({ rule, client }) => {
-        const safe = String(client.name).replace(/"/g, '""');
-        return `(${bmrArrayCompare(rule, num)})*EXACT(${aRangeRef},"${safe}")`;
+      // Many BMR clients share the same threshold (41 currently use >= 0).
+      // Factor that numeric comparison once and OR their names as an array.
+      // This shrinks each of the 25 red-count formulas from thousands of
+      // repeated comparisons to a compact equivalent expression.
+      const conditionGroups = new Map();
+      valid.forEach(({ rule, client }) => {
+        const key = JSON.stringify({
+          kind: rule.kind,
+          value: Number(rule.value) || 0,
+          min: Number(rule.min) || 0,
+          max: Number(rule.max) || 0,
+        });
+        if (!conditionGroups.has(key)) conditionGroups.set(key, { rule, names: new Set() });
+        conditionGroups.get(key).names.add(String(client.name));
+      });
+      const inner = [...conditionGroups.values()].map(({ rule, names }) => {
+        const exacts = [...names].map(name =>
+          `EXACT(${aRangeRef},"${name.replace(/"/g, '""')}")`);
+        const nameMatch = exacts.length === 1 ? exacts[0] : `--((${exacts.join('+')})>0)`;
+        return `(${bmrArrayCompare(rule, num)})*(${nameMatch})`;
       }).join('+');
       return `${bmrArrayHasValue(rangeRef)}*ISNUMBER(${num})*--((${inner})>0)`;
     }
@@ -1785,7 +1829,7 @@
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
-    function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount, blockCols = BMR_BLOCK_COLS) {
+    function applyBmrBorders(ws, bmr, totalCols, dataEndRow, slotCount, blockCols = BMR_BLOCK_COLS, compactHiddenStyles = false) {
       if (bmr.bordersOnData === false) return;
 
       const borderColor = bmr.borderColor || 'FF374151';
@@ -1794,6 +1838,12 @@
 
       for (let r = 2; r <= dataEndRow; r++) {
         for (let c = 1; c <= totalCols; c++) {
+          // The eight internal fields in every BMR block are always hidden by
+          // the generated sheet, so their borders are never seen. Leaving those
+          // data cells unstyled cuts the workbook roughly in half — which is
+          // what Drive has to convert on an Exact sync. Keep row 2 styled so an
+          // intentionally unhidden header still reads correctly.
+          if (compactHiddenStyles && r > 2 && c >= 3 && BMR_FORCE_HIDDEN_OFFSETS.includes((c - 3) % blockCols)) continue;
           ws.getCell(r, c).border = {
             top: cellBorder,
             left: cellBorder,
@@ -1822,11 +1872,12 @@
       }
     }
 
-    function applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slotCount) {
+    function applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slotCount, compactHiddenStyles = false) {
       for (let k = 0; k < slotCount; k++) {
         const blockStart = 3 + k * BMR_BLOCK_COLS;
         for (let r = dataStartRow; r <= dataEndRow; r++) {
           BMR_DECIMAL_OFFSETS.forEach((offset) => {
+            if (compactHiddenStyles && BMR_FORCE_HIDDEN_OFFSETS.includes(offset)) return;
             ws.getCell(r, blockStart + offset).numFmt = '0.00';
           });
         }
@@ -1838,7 +1889,9 @@
       return Math.max(BMR_BLOCK_HEADERS[0].trim().length + 2, longest + 2);
     }
 
-    function buildBmrSheet(ws, bmr, shift) {
+    function buildBmrSheet(ws, bmr, shift, options = {}) {
+      const valuesOnly = !!options.valuesOnly;
+      const compactHiddenStyles = !!options.compactHiddenStyles;
       const slots = bmrSlotsForShift(shift);
       const visibleClients = bmrNamedClients((bmr.clients || []).filter(c => !c.hidden));
       const accountManagersById = bmrAccountManagersById(bmr);
@@ -1852,12 +1905,14 @@
         const c = 3 + k * BMR_BLOCK_COLS;
         const cell = ws.getCell(1, c);
         cell.value = slots[k];
-        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        ws.mergeCells(1, c, 1, c + BMR_BLOCK_COLS - 1);
+        if (!valuesOnly) {
+          cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          ws.mergeCells(1, c, 1, c + BMR_BLOCK_COLS - 1);
+        }
       }
-      ws.getRow(1).height = 22;
+      if (!valuesOnly) ws.getRow(1).height = 22;
 
       // Row 2: per-block headers
       ws.getCell(2, 1).value = 'CarrierName ';
@@ -1868,12 +1923,14 @@
           ws.getCell(2, baseCol + i).value = BMR_BLOCK_HEADERS[i];
         }
       }
-      ws.getRow(2).eachCell((cell) => {
-        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      });
-      ws.getRow(2).height = 24;
+      if (!valuesOnly) {
+        ws.getRow(2).eachCell((cell) => {
+          cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        });
+        ws.getRow(2).height = 24;
+      }
 
       // Client rows plus blank allowance rows with formulas for 30-min usage / total usage.
       for (let i = 0; i < dataRowCount; i++) {
@@ -1883,7 +1940,7 @@
           const clientColor = bmrClientColor(bmr, cl, accountManagersById);
           ws.getCell(r, 1).value = cl.name;
           ws.getCell(r, 2).value = cl.allowBalanceLabel || '';
-          if (clientColor) {
+          if (clientColor && !valuesOnly) {
             const fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbHex(clientColor) } };
             ws.getCell(r, 1).fill = fill;
           }
@@ -1905,14 +1962,16 @@
       }
 
       // Column widths
-      const carrierNameWidth = bmrCarrierNameWidth(visibleClients);
-      ws.getColumn(1).width = carrierNameWidth;
-      ws.getColumn(2).width = 22;
-      for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
-      for (let k = 0; k < slots.length; k++) ws.getColumn(3 + k * BMR_BLOCK_COLS).width = carrierNameWidth;
+      if (!valuesOnly) {
+        const carrierNameWidth = bmrCarrierNameWidth(visibleClients);
+        ws.getColumn(1).width = carrierNameWidth;
+        ws.getColumn(2).width = 22;
+        for (let c = 3; c <= totalCols; c++) ws.getColumn(c).width = 12;
+        for (let k = 0; k < slots.length; k++) ws.getColumn(3 + k * BMR_BLOCK_COLS).width = carrierNameWidth;
 
-      applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length);
-      applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
+        applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length, compactHiddenStyles);
+        applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length, BMR_BLOCK_COLS, compactHiddenStyles);
+      }
 
       // Conditional formatting — Amnt Receivable target rules for their selected
       // clients. All 25 time-slot columns ride in ONE rule instead of one rule
@@ -1928,14 +1987,13 @@
       const bandRef = (letters) => letters.map(cl => `${cl}${dataStartRow}:${cl}${dataEndRow}`).join(' ');
       const targetRef = bandRef(BMR_TARGET_COL_LETTERS);
       const targetAnchor = `${BMR_TARGET_COL_LETTERS[0]}${dataStartRow}`;
-      (bmr.targetRules || []).filter(r => r.enabled).forEach((rule) => {
-        const client = visibleClientsById.get(rule.clientId);
-        if (!client?.name) return;
+      if (!valuesOnly) bmrTargetRuleBatches(bmr.targetRules, visibleClientsById).forEach((entries) => {
+        const rule = entries[0].rule;
         ws.addConditionalFormatting({
           ref: targetRef,
           rules: [{
             type: 'expression',
-            formulae: [bmrBuildClientConditionFormula(rule, targetAnchor, client.name, dataStartRow)],
+            formulae: [bmrBuildClientRuleBatchFormula(entries, targetAnchor, dataStartRow)],
             style: bmrStyleFromRule(rule),
             priority: priorityCounter++,
           }],
@@ -1945,7 +2003,7 @@
       // 30-min usage rules — same one-rule-per-rule banding.
       const usageRef = bandRef(BMR_USAGE_COL_LETTERS);
       const usageAnchor = `${BMR_USAGE_COL_LETTERS[0]}${dataStartRow}`;
-      (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
+      if (!valuesOnly) (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
         ws.addConditionalFormatting({
           ref: usageRef,
           rules: [{
@@ -1979,7 +2037,7 @@
         if (!colorGroups.has(argb)) colorGroups.set(argb, []);
         colorGroups.get(argb).push(name);
       });
-      colorGroups.forEach((names, argb) => {
+      if (!valuesOnly) colorGroups.forEach((names, argb) => {
         for (let start = 0; start < names.length; start += BMR_COLOR_RULE_NAMES) {
           ws.addConditionalFormatting({
             ref: carrierRef,
@@ -2001,7 +2059,9 @@
         .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
         .filter(entry => entry.client?.name);
       if (enabledTargetRules.length) {
-        applyBmrRedCountLabel(ws.getCell(redCountRow, 1), 'Colored Amnt Receivable count');
+        const redCountLabel = ws.getCell(redCountRow, 1);
+        if (valuesOnly) redCountLabel.value = 'Colored Amnt Receivable count';
+        else applyBmrRedCountLabel(redCountLabel, 'Colored Amnt Receivable count');
         const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
         for (let k = 0; k < slots.length; k++) {
           const amntCol = colLetter(3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
@@ -2011,18 +2071,18 @@
           ]);
           const cell = ws.getCell(redCountRow, 3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
           cell.value = formula ? { formula } : 0;
-          applyBmrRedCountStyle(cell);
+          if (!valuesOnly) applyBmrRedCountStyle(cell);
         }
-        ws.getRow(redCountRow).height = 34;
+        if (!valuesOnly) ws.getRow(redCountRow).height = 34;
       }
 
       // Hidden columns
-      (bmr.hiddenCols || []).forEach((c) => {
+      if (!valuesOnly) (bmr.hiddenCols || []).forEach((c) => {
         try { ws.getColumn(c).hidden = true; } catch (_) {}
       });
       const forcedHidden = new Set(BMR_FORCE_HIDDEN_OFFSETS);
       (bmr.hiddenBlockCols || []).forEach((offset) => forcedHidden.add(Number(offset)));
-      forcedHidden.forEach((offset) => {
+      if (!valuesOnly) forcedHidden.forEach((offset) => {
         const colOffset = Number(offset);
         if (!Number.isInteger(colOffset) || colOffset < 0 || colOffset >= BMR_BLOCK_COLS) return;
         for (let k = 0; k < slots.length; k++) {
@@ -2031,7 +2091,7 @@
       });
 
       // Freeze: top 2 rows + first 2 cols
-      ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
+      if (!valuesOnly) ws.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
     }
 
     async function buildBmrBlob(state, options = {}) {
@@ -2044,11 +2104,17 @@
       if (bmr.includeNight !== false) shifts.push('night');
       if (!shifts.length) shifts.push('day');
       const requestedTitles = new Set((options.onlyTabTitles || []).filter(Boolean));
+      // The eight internal fields of every block are hidden by every build, so
+      // their borders and 0.00 format are never seen. Those cells still carry
+      // the pasted values and the columns are still emitted and hidden — only
+      // the styling is skipped, which roughly halves both the exceljs build and
+      // the uploaded workbook Drive has to convert during an Exact sync.
+      const sheetOptions = { ...options, compactHiddenStyles: true };
       for (const shift of shifts) {
         const name = shift === 'day' ? '7AM-7PM' : '7PM-7AM';
         if (requestedTitles.size && !requestedTitles.has(name)) continue;
         const ws = wb.addWorksheet(name);
-        buildBmrSheet(ws, bmr, shift);
+        buildBmrSheet(ws, bmr, shift, sheetOptions);
       }
       retainRequestedWorkbookSheets(wb, options.onlyTabTitles);
       const filename = `BMR_VOIP_${bmrTodayString()}.xlsx`;
