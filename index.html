@@ -5101,7 +5101,7 @@ function onEdit(e) {
     const token = await getToken();
     if (existingId) {
       try {
-        const r2 = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(existingId) + "?fields=id,trashed", {
+        const r2 = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(existingId) + "?fields=id,trashed&supportsAllDrives=true", {
           headers: { Authorization: "Bearer " + token }
         });
         if (r2.ok) {
@@ -5112,7 +5112,7 @@ function onEdit(e) {
       }
     }
     const metadata = { name, mimeType: "application/vnd.google-apps.folder", ...parentId ? { parents: [parentId] } : {} };
-    const r = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+    const r = await fetch("https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true", {
       method: "POST",
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify(metadata)
@@ -5126,7 +5126,7 @@ function onEdit(e) {
     const form = new FormData();
     form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
     form.append("file", blob, name);
-    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name", {
+    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true", {
       method: "POST",
       headers: { Authorization: "Bearer " + token },
       body: form
@@ -5134,7 +5134,88 @@ function onEdit(e) {
     if (!r.ok) throw await driveError(r);
     return await r.json();
   }
-  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+  async function folderMeta(id) {
+    const token = await getToken();
+    const r = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "?fields=id,name,trashed,mimeType&supportsAllDrives=true", {
+      headers: { Authorization: "Bearer " + token }
+    });
+    if (!r.ok) throw await driveError(r);
+    const meta = await r.json();
+    if (meta.trashed) throw new Error("That folder is in the trash.");
+    return meta;
+  }
+  let pickerApiKey = "";
+  const hasPickerKey = () => !!pickerApiKey;
+  function setPickerApiKey(key) {
+    const v = String(key || "").trim();
+    if (v === pickerApiKey) return false;
+    pickerApiKey = v;
+    return true;
+  }
+  let pickerLoading = null;
+  function loadPickerLib() {
+    if (window.google && window.google.picker) return Promise.resolve();
+    if (pickerLoading) return pickerLoading;
+    pickerLoading = new Promise((resolve, reject) => {
+      const loadModule = () => window.gapi.load("picker", {
+        callback: resolve,
+        onerror: () => reject(new Error("The Google Picker module failed to load."))
+      });
+      if (window.gapi && window.gapi.load) {
+        loadModule();
+        return;
+      }
+      const el = document.createElement("script");
+      el.src = "https://apis.google.com/js/api.js";
+      el.async = true;
+      el.defer = true;
+      el.onload = loadModule;
+      el.onerror = () => reject(new Error("Could not reach apis.google.com to load the folder picker."));
+      document.head.appendChild(el);
+    });
+    pickerLoading.catch(() => {
+      pickerLoading = null;
+    });
+    return pickerLoading;
+  }
+  async function pickFolder() {
+    if (!pickerApiKey) throw new Error("Add the Google Picker API key first.");
+    const token = await getToken({ interactive: true });
+    await loadPickerLib();
+    const picker = window.google && window.google.picker;
+    if (!picker) throw new Error("The Google Picker library is unavailable.");
+    const folderView = (ownedByMe, label) => {
+      let v = new picker.DocsView(picker.ViewId.FOLDERS);
+      if (typeof v.setIncludeFolders === "function") v = v.setIncludeFolders(true);
+      if (typeof v.setSelectFolderEnabled === "function") v = v.setSelectFolderEnabled(true);
+      else if (typeof v.setSelectFolders === "function") v = v.setSelectFolders(true);
+      if (typeof v.setMimeTypes === "function") v = v.setMimeTypes("application/vnd.google-apps.folder");
+      if (typeof v.setEnableDrives === "function") v = v.setEnableDrives(true);
+      if (ownedByMe === false && typeof v.setOwnedByMe === "function") v = v.setOwnedByMe(false);
+      if (typeof v.setLabel === "function") v = v.setLabel(label);
+      return v;
+    };
+    return await new Promise((resolve, reject) => {
+      try {
+        const appId = String(clientId || "").split("-")[0];
+        let builder = new picker.PickerBuilder().setOAuthToken(token).setDeveloperKey(pickerApiKey).setTitle("Choose the backup destination folder").addView(folderView(true, "My Drive")).addView(folderView(false, "Shared with me")).setCallback((data) => {
+          if (!data || !data.action) return;
+          if (data.action === picker.Action.PICKED) {
+            const doc = (data.docs || [])[0];
+            resolve(doc ? { id: doc.id, name: doc.name || "" } : null);
+          } else if (data.action === picker.Action.CANCEL) {
+            resolve(null);
+          }
+        });
+        if (appId) builder = builder.setAppId(appId);
+        if (picker.Feature && picker.Feature.SUPPORT_DRIVES) builder = builder.enableFeature(picker.Feature.SUPPORT_DRIVES);
+        builder.build().setVisible(true);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+  return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl, folderMeta, setPickerApiKey, hasPickerKey, pickFolder };
 })();
 const backupStore = /* @__PURE__ */ (() => {
   const DB_NAME = "mrg_backups", STORE = "snapshots", MAX = 15;
@@ -6161,6 +6242,8 @@ function BackupControls({ backup }) {
   const [open, setOpen] = useState(false);
   const [snaps, setSnaps] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [keyOpen, setKeyOpen] = useState(false);
+  const [keyDraft, setKeyDraft] = useState("");
   if (!backup) return null;
   const load = async () => {
     setLoading(true);
@@ -6180,7 +6263,47 @@ function BackupControls({ backup }) {
     await backup.onRestore(ts);
     load();
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "pt-2 mt-1 border-t border-neutral-900 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Weekly backup"), /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : "never")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Auto-saves data + Excel to Google Drive ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Generator Backups"), " every Friday (or Sat/Sun)."), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onBackupNow, disabled: backup.busy || !backup.connected, className: "flex-1" }, backup.busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Backing up…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Back up now")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: toggle }, open ? "Hide" : "Restore")), !backup.connected && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-amber-500/80" }, "Connect Google Drive above to enable Drive backups."), backup.folderUrl && /* @__PURE__ */ React.createElement("a", { href: backup.folderUrl, target: "_blank", rel: "noopener noreferrer", className: "block text-[10px] text-blue-400 hover:text-blue-300 transition-colors" }, "Open Drive backup folder ↗"), open && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1" }, loading && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "Loading…"), !loading && snaps && snaps.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "No local snapshots yet."), !loading && snaps && snaps.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.ts, className: "flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-neutral-300 truncate" }, new Date(s.ts).toLocaleString()), /* @__PURE__ */ React.createElement("div", { className: "text-neutral-600 truncate" }, s.reason, " · VoIP ", s.counts?.voip ?? "?", " · WHS ", s.counts?.whs ?? "?", " · Retail ", s.counts?.retail ?? "?")), /* @__PURE__ */ React.createElement("button", { onClick: () => restore(s.ts), className: "ml-auto text-blue-400 hover:text-blue-300 shrink-0" }, "Restore")))));
+  const destLabel = backup.destId ? backup.destName || "Chosen Drive folder" : "Generator Backups (your Drive)";
+  const saveKey = () => {
+    if (keyDraft.trim()) {
+      backup.onSetPickerKey(keyDraft);
+      setKeyOpen(false);
+      setKeyDraft("");
+    }
+  };
+  const chooseFolder = () => {
+    if (!backup.pickerKeySet) {
+      setKeyDraft("");
+      setKeyOpen(true);
+      return;
+    }
+    backup.onChooseFolder();
+  };
+  return /* @__PURE__ */ React.createElement("div", { className: "pt-2 mt-1 border-t border-neutral-900 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 text-[11px]" }, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Weekly backup"), /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-neutral-500" }, backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : "never")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Auto-saves the data file + the three Excel workbooks to Google Drive every Friday (or Sat/Sun)."), /* @__PURE__ */ React.createElement("div", { className: "rounded border border-neutral-900 bg-neutral-950/60 px-2 py-1.5 space-y-1.5" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-500 shrink-0" }, "Saves to"), /* @__PURE__ */ React.createElement("span", { className: "ml-auto text-[10px] text-neutral-300 truncate text-right", title: destLabel }, destLabel)), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: chooseFolder, disabled: backup.busy, className: "flex-1" }, backup.destId ? "Change folder" : "Choose folder"), backup.destId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onClearFolder, disabled: backup.busy }, "Reset")), keyOpen && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 pt-1 border-t border-neutral-900" }, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] text-neutral-500" }, "Google Picker API key"), /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      value: keyDraft,
+      onChange: (e) => setKeyDraft(e.target.value),
+      onKeyDown: (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          saveKey();
+        }
+      },
+      placeholder: "AIza…",
+      className: "text-[10px] py-1.5 font-mono"
+    }
+  ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: saveKey, disabled: !keyDraft.trim(), className: "flex-1" }, "Save key"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => setKeyOpen(false) }, "Cancel")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "One-time setup: in Google Cloud Console enable ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Google Picker API"), ", create an API key under Credentials, then paste it here. It only powers the folder browser — picking a folder is also what lets this app write into a folder shared from another Google account.")), !keyOpen && backup.pickerKeySet && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => {
+        setKeyDraft("");
+        setKeyOpen(true);
+      },
+      className: "text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors"
+    },
+    "Change Picker API key"
+  )), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onBackupNow, disabled: backup.busy || !backup.connected, className: "flex-1" }, backup.busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Backing up…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Back up now")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: toggle }, open ? "Hide" : "Restore")), !backup.connected && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-amber-500/80" }, "Connect Google Drive above to enable Drive backups."), backup.folderUrl && /* @__PURE__ */ React.createElement("a", { href: backup.folderUrl, target: "_blank", rel: "noopener noreferrer", className: "block text-[10px] text-blue-400 hover:text-blue-300 transition-colors" }, "Open backup folder ↗"), open && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1" }, loading && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "Loading…"), !loading && snaps && snaps.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "No local snapshots yet."), !loading && snaps && snaps.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.ts, className: "flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-neutral-300 truncate" }, new Date(s.ts).toLocaleString()), /* @__PURE__ */ React.createElement("div", { className: "text-neutral-600 truncate" }, s.reason, " · VoIP ", s.counts?.voip ?? "?", " · WHS ", s.counts?.whs ?? "?", " · Retail ", s.counts?.retail ?? "?")), /* @__PURE__ */ React.createElement("button", { onClick: () => restore(s.ts), className: "ml-auto text-blue-400 hover:text-blue-300 shrink-0" }, "Restore")))));
 }
 function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selectedTabTitle = "", selectedTabLabel = "", checkedTabTitles = [] }) {
   const [draftId, setDraftId] = useState("");
@@ -6236,7 +6359,7 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
   ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onSetTargetSheet(moduleId, targetDraft), disabled: !targetDraft.trim(), className: "flex-1" }, "Use this sheet"), targetSheetId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => {
     setTargetDraft("");
     onSetTargetSheet(moduleId, "");
-  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "sm", onClick: () => sync(moduleId, { interactive: true, createFresh: true }), disabled: busy, className: "w-full" }, busy ? "Creating…" : `Create my own Google Sheet${conn.email ? ` (${conn.email.split("@")[0]})` : ""}`), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Creates a brand-new spreadsheet in the connected account’s Drive. The shared JPGC file is not changed, and the new personal file becomes this module’s destination."), selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Apply app changes — Exact (${checkedTitles.length})`), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, fastValues: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Quick refresh — Values only (${checkedTitles.length})`)), url && /* @__PURE__ */ React.createElement("details", { className: "rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 text-[10px]", open: true }, /* @__PURE__ */ React.createElement("summary", { className: "cursor-pointer font-medium text-neutral-300 select-none" }, "Which sync should I use?"), /* @__PURE__ */ React.createElement("div", { className: "mt-2 space-y-2 leading-relaxed text-neutral-500" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-blue-300" }, "Apply app changes — Exact"), /* @__PURE__ */ React.createElement("div", null, "Choose this after adding, removing, or renaming clients; creating or editing rules; or changing columns, metrics, shifts, colors, widths, merged cells, layout, or other setup.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-neutral-300" }, "Quick refresh — Values only"), /* @__PURE__ */ React.createElement("div", null, "Choose this only when the sheet setup is unchanged and you only need to refresh existing values or formulas. It keeps the current Google Sheet formatting.")), /* @__PURE__ */ React.createElement("div", { className: "rounded border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-amber-300/80" }, "Added a client or changed a rule? Use ", /* @__PURE__ */ React.createElement("span", { className: "font-semibold" }, "Exact"), ". If unsure, use Exact."), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add selected/new tabs"), " is only for a tab that does not exist in the destination yet."))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600", title: exactTimingTitle || void 0 }, "Synced ", new Date(last.at).toLocaleTimeString(), last.mode ? ` · ${last.mode === "new" ? "Personal copy" : last.mode === "fast" ? "Quick" : "Exact"}` : "", last.durationMs ? ` · ${(last.durationMs / 1e3).toFixed(1)}s` : ""), moduleId === "sip_fcs" && last?.pasteSumInstalled && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-emerald-500" }, "Paste-to-sum enabled for SIP/FCS tabs"), moduleId === "sip_fcs" && last?.pasteSumError && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-amber-500 leading-relaxed" }, last.pasteSumError)), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
+  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "sm", onClick: () => sync(moduleId, { interactive: true, createFresh: true }), disabled: busy, className: "w-full" }, busy ? "Creating…" : `Create my own Google Sheet${conn.email ? ` (${conn.email.split("@")[0]})` : ""}`), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Creates a brand-new spreadsheet in the connected account’s Drive. The shared JPGC file is not changed, and the new personal file becomes this module’s destination."), selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Apply app changes — Exact (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("details", { className: "rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 text-[10px]", open: true }, /* @__PURE__ */ React.createElement("summary", { className: "cursor-pointer font-medium text-neutral-300 select-none" }, "Which sync should I use?"), /* @__PURE__ */ React.createElement("div", { className: "mt-2 space-y-2 leading-relaxed text-neutral-500" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-blue-300" }, "Apply app changes — Exact"), /* @__PURE__ */ React.createElement("div", null, "Choose this after adding, removing, or renaming clients; creating or editing rules; or changing columns, metrics, shifts, colors, widths, merged cells, layout, or other setup.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add selected/new tabs"), " is only for a tab that does not exist in the destination yet."))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600", title: exactTimingTitle || void 0 }, "Synced ", new Date(last.at).toLocaleTimeString(), last.mode ? ` · ${last.mode === "new" ? "Personal copy" : last.mode === "fast" ? "Quick" : "Exact"}` : "", last.durationMs ? ` · ${(last.durationMs / 1e3).toFixed(1)}s` : ""), moduleId === "sip_fcs" && last?.pasteSumInstalled && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-emerald-500" }, "Paste-to-sum enabled for SIP/FCS tabs"), moduleId === "sip_fcs" && last?.pasteSumError && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-amber-500 leading-relaxed" }, last.pasteSumError)), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -12286,6 +12409,12 @@ const DEFAULT_STATE = {
   googleSheets: {
     clientId: "",
     backupFolderId: "",
+    // Google Picker API key + the folder chosen with it. backupDestId may
+    // live in another Google account's Drive; picking it is what grants
+    // this app the drive.file access to write there.
+    pickerApiKey: "",
+    backupDestId: "",
+    backupDestName: "",
     sheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "", procedure: "" },
     targetSheetIds: { sip_fcs: "", bmr: "", bmr_sms: "", recorder: "", procedure: "" },
     // Spreadsheet ID -> Apps Script project ID. Only projects created by
@@ -12410,6 +12539,9 @@ function normalizeAppState(raw = {}, options = {}) {
   const googleSheets = {
     clientId: merged.googleSheets && typeof merged.googleSheets.clientId === "string" ? merged.googleSheets.clientId : DEFAULT_STATE.googleSheets.clientId || "",
     backupFolderId: merged.googleSheets && typeof merged.googleSheets.backupFolderId === "string" ? merged.googleSheets.backupFolderId : DEFAULT_STATE.googleSheets.backupFolderId || "",
+    pickerApiKey: merged.googleSheets && typeof merged.googleSheets.pickerApiKey === "string" ? merged.googleSheets.pickerApiKey : "",
+    backupDestId: merged.googleSheets && typeof merged.googleSheets.backupDestId === "string" ? merged.googleSheets.backupDestId : "",
+    backupDestName: merged.googleSheets && typeof merged.googleSheets.backupDestName === "string" ? merged.googleSheets.backupDestName : "",
     sheetIds: {
       ...DEFAULT_STATE.googleSheets.sheetIds,
       ...merged.googleSheets && merged.googleSheets.sheetIds || {}
@@ -14906,12 +15038,20 @@ function App() {
   useEffect(() => {
     googleSheetsSync.setClientId(state.googleSheets?.clientId || GOOGLE_OAUTH_CLIENT_ID);
   }, [state.googleSheets?.clientId]);
+  useEffect(() => {
+    googleSheetsSync.setPickerApiKey(state.googleSheets?.pickerApiKey || "");
+  }, [state.googleSheets?.pickerApiKey]);
   const setGoogleClientId = useCallback((id) => {
     const v = String(id || "").trim();
     googleSheetsSync.setClientId(v || GOOGLE_OAUTH_CLIENT_ID);
     googleSheetsSync.disconnect();
     setGoogleConn((c) => ({ ...c, connected: false, email: "", busyModule: null, error: null }));
     setState((s) => ({ ...s, googleSheets: { ...s.googleSheets || {}, clientId: v } }));
+  }, []);
+  const setGooglePickerKey = useCallback((key) => {
+    const v = String(key || "").trim();
+    googleSheetsSync.setPickerApiKey(v);
+    setState((s) => ({ ...s, googleSheets: { ...s.googleSheets || {}, pickerApiKey: v } }));
   }, []);
   const setGoogleTargetSheet = useCallback((moduleId, value) => {
     const raw = String(value || "").trim();
@@ -15205,10 +15345,27 @@ function App() {
     setGoogleConn((c) => ({ ...c, busyModule: "__backup__", error: null }));
     try {
       await googleSheetsSync.getToken({ interactive: manual });
-      const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || "";
-      const rootId = await googleSheetsSync.ensureFolder("Generator Backups", prevFolder);
-      if (rootId && rootId !== prevFolder) {
-        setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: rootId } }));
+      const destId = String(st.googleSheets?.backupDestId || "");
+      const destName = String(st.googleSheets?.backupDestName || "");
+      let rootId = "";
+      let usedDest = false;
+      let destWarn = "";
+      if (destId) {
+        try {
+          await googleSheetsSync.folderMeta(destId);
+          rootId = destId;
+          usedDest = true;
+        } catch (e) {
+          console.warn("Chosen backup folder unreachable", e);
+          destWarn = ` The chosen folder${destName ? ` "${destName}"` : ""} could not be opened — choose it again.`;
+        }
+      }
+      if (!rootId) {
+        const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || "";
+        rootId = await googleSheetsSync.ensureFolder("Generator Backups", prevFolder);
+        if (rootId && rootId !== prevFolder) {
+          setState((s) => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: rootId } }));
+        }
       }
       const stamp = backupStampString();
       const runFolderName = stamp.slice(0, 10) + " " + stamp.slice(11, 13) + "-" + stamp.slice(13, 15);
@@ -15229,7 +15386,8 @@ function App() {
       await saveSnapshot(st, manual ? "manual-backup" : "weekly-backup");
       setState((s) => ({ ...s, backup: { ...s.backup || {}, lastWeekKey: isoWeekKey(/* @__PURE__ */ new Date()), lastRunAt: Date.now() } }));
       setGoogleConn((c) => ({ ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null }));
-      if (manual) showToast(xlsxFails ? "err" : "ok", xlsxFails ? `Backup saved to Drive, but ${xlsxFails} workbook(s) failed — the JSON data backup is complete.` : "Backup saved to Google Drive → Generator Backups.");
+      const where = usedDest ? destName || "the chosen folder" : "Generator Backups";
+      if (manual) showToast(xlsxFails || destWarn ? "err" : "ok", (xlsxFails ? `Backup saved to ${where}, but ${xlsxFails} workbook(s) failed — the JSON data backup is complete.` : `Backup saved to Google Drive → ${where}.`) + destWarn);
       return folderId;
     } catch (e) {
       console.warn("Drive backup failed", e);
@@ -15240,6 +15398,25 @@ function App() {
     } finally {
       backupBusyRef.current = false;
     }
+  }, [showToast]);
+  const chooseBackupFolder = useCallback(async () => {
+    try {
+      const picked = await googleSheetsSync.pickFolder();
+      if (!picked) return;
+      setState((s) => ({
+        ...s,
+        googleSheets: { ...s.googleSheets || {}, backupDestId: picked.id, backupDestName: picked.name || "" }
+      }));
+      setGoogleConn((c) => ({ ...c, connected: true, email: googleSheetsSync.email() || c.email }));
+      showToast("ok", `Backups will be saved to ${picked.name || "the chosen folder"}.`);
+    } catch (e) {
+      console.warn("Folder picker failed", e);
+      showToast("err", "Folder picker failed: " + (e.message || e));
+    }
+  }, [showToast]);
+  const clearBackupFolder = useCallback(() => {
+    setState((s) => ({ ...s, googleSheets: { ...s.googleSheets || {}, backupDestId: "", backupDestName: "" } }));
+    showToast("ok", "Backups will go to Generator Backups in your own Drive.");
   }, [showToast]);
   const restoreSnapshot = useCallback(async (ts) => {
     try {
@@ -15408,7 +15585,13 @@ function App() {
       }),
       onRestore: restoreSnapshot,
       lastRunAt: state.backup?.lastRunAt || 0,
-      folderUrl: state.googleSheets?.backupFolderId ? googleSheetsSync.folderUrl(state.googleSheets.backupFolderId) : ""
+      destId: String(state.googleSheets?.backupDestId || ""),
+      destName: String(state.googleSheets?.backupDestName || ""),
+      pickerKeySet: !!String(state.googleSheets?.pickerApiKey || "").trim(),
+      onChooseFolder: chooseBackupFolder,
+      onClearFolder: clearBackupFolder,
+      onSetPickerKey: setGooglePickerKey,
+      folderUrl: state.googleSheets?.backupDestId || state.googleSheets?.backupFolderId ? googleSheetsSync.folderUrl(state.googleSheets.backupDestId || state.googleSheets.backupFolderId) : ""
     }
   };
   const TABS = [

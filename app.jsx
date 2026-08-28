@@ -3500,14 +3500,14 @@
         const token = await getToken();
         if (existingId) {
           try {
-            const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(existingId) + '?fields=id,trashed', {
+            const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(existingId) + '?fields=id,trashed&supportsAllDrives=true', {
               headers: { Authorization: 'Bearer ' + token },
             });
             if (r.ok) { const b = await r.json(); if (b && b.id && !b.trashed) return b.id; }
           } catch { /* fall through to create */ }
         }
         const metadata = { name, mimeType: 'application/vnd.google-apps.folder', ...(parentId ? { parents: [parentId] } : {}) };
-        const r = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+        const r = await fetch('https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true', {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
           body: JSON.stringify(metadata),
@@ -3523,7 +3523,7 @@
         const form = new FormData();
         form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
         form.append('file', blob, name);
-        const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+        const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true', {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + token },
           body: form,
@@ -3532,7 +3532,114 @@
         return await r.json();
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl };
+      // Read a folder's name. Doubles as the access probe: under drive.file a
+      // folder this app was never granted comes back 404, which is exactly how
+      // a revoked or deleted backup destination is detected.
+      async function folderMeta(id) {
+        const token = await getToken();
+        const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?fields=id,name,trashed,mimeType&supportsAllDrives=true', {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!r.ok) throw await driveError(r);
+        const meta = await r.json();
+        if (meta.trashed) throw new Error('That folder is in the trash.');
+        return meta;
+      }
+
+      /* --- Google Picker (backup folder chooser) ---------------------
+         drive.file only reaches files and folders this app created, so a
+         destination folder living in somebody else's Drive can never be
+         targeted by pasting its link — Drive answers 404. Google's Picker is
+         the sanctioned way around that: whatever the user picks is granted to
+         this app from then on, with no jump to a restricted Drive scope. It
+         needs the Picker API enabled plus a browser API key, which is stored
+         in state right next to the Client ID. */
+      let pickerApiKey = '';
+      const hasPickerKey = () => !!pickerApiKey;
+      function setPickerApiKey(key) {
+        const v = String(key || '').trim();
+        if (v === pickerApiKey) return false;
+        pickerApiKey = v;
+        return true;
+      }
+
+      // Load gapi + its picker module on first use only, so the extra script
+      // never slows a normal app start.
+      let pickerLoading = null;
+      function loadPickerLib() {
+        if (window.google && window.google.picker) return Promise.resolve();
+        if (pickerLoading) return pickerLoading;
+        pickerLoading = new Promise((resolve, reject) => {
+          const loadModule = () => window.gapi.load('picker', {
+            callback: resolve,
+            onerror: () => reject(new Error('The Google Picker module failed to load.')),
+          });
+          if (window.gapi && window.gapi.load) { loadModule(); return; }
+          const el = document.createElement('script');
+          el.src = 'https://apis.google.com/js/api.js';
+          el.async = true;
+          el.defer = true;
+          el.onload = loadModule;
+          el.onerror = () => reject(new Error('Could not reach apis.google.com to load the folder picker.'));
+          document.head.appendChild(el);
+        });
+        pickerLoading.catch(() => { pickerLoading = null; });
+        return pickerLoading;
+      }
+
+      // Open the folder chooser. Resolves with {id,name}, or null if cancelled.
+      async function pickFolder() {
+        if (!pickerApiKey) throw new Error('Add the Google Picker API key first.');
+        const token = await getToken({ interactive: true });
+        await loadPickerLib();
+        const picker = window.google && window.google.picker;
+        if (!picker) throw new Error('The Google Picker library is unavailable.');
+        // A folder-only view. Built defensively: the Picker builders are
+        // versioned by Google, so a method that disappears must not take the
+        // whole chooser down with it.
+        const folderView = (ownedByMe, label) => {
+          let v = new picker.DocsView(picker.ViewId.FOLDERS);
+          if (typeof v.setIncludeFolders === 'function') v = v.setIncludeFolders(true);
+          // The live Picker build exposes setSelectFolderEnabled; older/newer
+          // builds have used setSelectFolders. Without one of them folders can
+          // be browsed but never chosen, so try both.
+          if (typeof v.setSelectFolderEnabled === 'function') v = v.setSelectFolderEnabled(true);
+          else if (typeof v.setSelectFolders === 'function') v = v.setSelectFolders(true);
+          if (typeof v.setMimeTypes === 'function') v = v.setMimeTypes('application/vnd.google-apps.folder');
+          if (typeof v.setEnableDrives === 'function') v = v.setEnableDrives(true);
+          if (ownedByMe === false && typeof v.setOwnedByMe === 'function') v = v.setOwnedByMe(false);
+          if (typeof v.setLabel === 'function') v = v.setLabel(label);
+          return v;
+        };
+        return await new Promise((resolve, reject) => {
+          try {
+            // The numeric prefix of an OAuth client ID is the Cloud project
+            // number, which is exactly what Picker wants as its app ID — so
+            // there is no second value for the user to hunt down.
+            const appId = String(clientId || '').split('-')[0];
+            let builder = new picker.PickerBuilder()
+              .setOAuthToken(token)
+              .setDeveloperKey(pickerApiKey)
+              .setTitle('Choose the backup destination folder')
+              .addView(folderView(true, 'My Drive'))
+              .addView(folderView(false, 'Shared with me'))
+              .setCallback(data => {
+                if (!data || !data.action) return;
+                if (data.action === picker.Action.PICKED) {
+                  const doc = (data.docs || [])[0];
+                  resolve(doc ? { id: doc.id, name: doc.name || '' } : null);
+                } else if (data.action === picker.Action.CANCEL) {
+                  resolve(null);
+                }
+              });
+            if (appId) builder = builder.setAppId(appId);
+            if (picker.Feature && picker.Feature.SUPPORT_DRIVES) builder = builder.enableFeature(picker.Feature.SUPPORT_DRIVES);
+            builder.build().setVisible(true);
+          } catch (e) { reject(e); }
+        });
+      }
+
+      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl, folderMeta, setPickerApiKey, hasPickerKey, pickFolder };
     })();
 
     /* ============================================================
@@ -4685,6 +4792,8 @@ https://bit.ly/4vrcu64`;
       const [open, setOpen] = useState(false);
       const [snaps, setSnaps] = useState(null);
       const [loading, setLoading] = useState(false);
+      const [keyOpen, setKeyOpen] = useState(false);
+      const [keyDraft, setKeyDraft] = useState('');
       if (!backup) return null;
       const load = async () => {
         setLoading(true);
@@ -4693,6 +4802,14 @@ https://bit.ly/4vrcu64`;
       };
       const toggle = () => { const n = !open; setOpen(n); if (n) load(); };
       const restore = async (ts) => { await backup.onRestore(ts); load(); };
+      const destLabel = backup.destId ? (backup.destName || 'Chosen Drive folder') : 'Generator Backups (your Drive)';
+      const saveKey = () => { if (keyDraft.trim()) { backup.onSetPickerKey(keyDraft); setKeyOpen(false); setKeyDraft(''); } };
+      // No key yet means the picker cannot open at all, so the button asks for
+      // the key instead of failing with an error the user can do nothing about.
+      const chooseFolder = () => {
+        if (!backup.pickerKeySet) { setKeyDraft(''); setKeyOpen(true); return; }
+        backup.onChooseFolder();
+      };
       return (
         <div className="pt-2 mt-1 border-t border-neutral-900 space-y-1.5">
           <div className="flex items-center gap-2 text-[11px]">
@@ -4700,8 +4817,39 @@ https://bit.ly/4vrcu64`;
             <span className="ml-auto text-neutral-500">{backup.lastRunAt ? new Date(backup.lastRunAt).toLocaleDateString() : 'never'}</span>
           </div>
           <p className="text-[10px] text-neutral-600 leading-relaxed">
-            Auto-saves data + Excel to Google Drive <span className="text-neutral-400">Generator Backups</span> every Friday (or Sat/Sun).
+            Auto-saves the data file + the three Excel workbooks to Google Drive every Friday (or Sat/Sun).
           </p>
+          <div className="rounded border border-neutral-900 bg-neutral-950/60 px-2 py-1.5 space-y-1.5">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[10px] text-neutral-500 shrink-0">Saves to</span>
+              <span className="ml-auto text-[10px] text-neutral-300 truncate text-right" title={destLabel}>{destLabel}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Btn variant="ghost" size="sm" onClick={chooseFolder} disabled={backup.busy} className="flex-1">
+                {backup.destId ? 'Change folder' : 'Choose folder'}
+              </Btn>
+              {backup.destId && <Btn variant="ghost" size="sm" onClick={backup.onClearFolder} disabled={backup.busy}>Reset</Btn>}
+            </div>
+            {keyOpen && (
+              <div className="space-y-1 pt-1 border-t border-neutral-900">
+                <label className="block text-[10px] text-neutral-500">Google Picker API key</label>
+                <Input value={keyDraft} onChange={e => setKeyDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveKey(); } }}
+                  placeholder="AIza…" className="text-[10px] py-1.5 font-mono" />
+                <div className="flex items-center gap-1.5">
+                  <Btn variant="ghost" size="sm" onClick={saveKey} disabled={!keyDraft.trim()} className="flex-1">Save key</Btn>
+                  <Btn variant="ghost" size="sm" onClick={() => setKeyOpen(false)}>Cancel</Btn>
+                </div>
+                <p className="text-[10px] text-neutral-600 leading-relaxed">
+                  One-time setup: in Google Cloud Console enable <span className="text-neutral-400">Google Picker API</span>, create an API key under Credentials, then paste it here. It only powers the folder browser — picking a folder is also what lets this app write into a folder shared from another Google account.
+                </p>
+              </div>
+            )}
+            {!keyOpen && backup.pickerKeySet && (
+              <button onClick={() => { setKeyDraft(''); setKeyOpen(true); }}
+                className="text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors">Change Picker API key</button>
+            )}
+          </div>
           <div className="flex items-center gap-1.5">
             <Btn variant="ghost" size="sm" onClick={backup.onBackupNow} disabled={backup.busy || !backup.connected} className="flex-1">
               {backup.busy ? <><span className="loader"></span> Backing up…</> : <>Back up now</>}
@@ -4710,7 +4858,7 @@ https://bit.ly/4vrcu64`;
           </div>
           {!backup.connected && <p className="text-[10px] text-amber-500/80">Connect Google Drive above to enable Drive backups.</p>}
           {backup.folderUrl && (
-            <a href={backup.folderUrl} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-blue-400 hover:text-blue-300 transition-colors">Open Drive backup folder ↗</a>
+            <a href={backup.folderUrl} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-blue-400 hover:text-blue-300 transition-colors">Open backup folder ↗</a>
           )}
           {open && (
             <div className="space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1">
@@ -4828,14 +4976,9 @@ https://bit.ly/4vrcu64`;
                 {busy ? <><span className="loader"></span> Checking tabs…</> : <>{selectedUnavailable ? 'Activate selected tab first' : url ? (selectedTabTitle ? 'Add selected tab' : 'Add new tabs') : 'Create Google Sheet'}</>}
               </Btn>
               {url && checkedTitles.length > 0 && (
-                <>
-                  <Btn variant="accent" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true })} disabled={busy} className="w-full">
-                    {busy ? 'Syncing…' : `Apply app changes — Exact (${checkedTitles.length})`}
-                  </Btn>
-                  <Btn variant="ghost" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, fastValues: true })} disabled={busy} className="w-full">
-                    {busy ? 'Syncing…' : `Quick refresh — Values only (${checkedTitles.length})`}
-                  </Btn>
-                </>
+                <Btn variant="accent" size="sm" onClick={() => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true })} disabled={busy} className="w-full">
+                  {busy ? 'Syncing…' : `Apply app changes — Exact (${checkedTitles.length})`}
+                </Btn>
               )}
               {url && (
                 <details className="rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 text-[10px]" open>
@@ -4844,13 +4987,6 @@ https://bit.ly/4vrcu64`;
                     <div>
                       <span className="font-medium text-blue-300">Apply app changes — Exact</span>
                       <div>Choose this after adding, removing, or renaming clients; creating or editing rules; or changing columns, metrics, shifts, colors, widths, merged cells, layout, or other setup.</div>
-                    </div>
-                    <div>
-                      <span className="font-medium text-neutral-300">Quick refresh — Values only</span>
-                      <div>Choose this only when the sheet setup is unchanged and you only need to refresh existing values or formulas. It keeps the current Google Sheet formatting.</div>
-                    </div>
-                    <div className="rounded border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-amber-300/80">
-                      Added a client or changed a rule? Use <span className="font-semibold">Exact</span>. If unsure, use Exact.
                     </div>
                     <div><span className="text-neutral-400">Add selected/new tabs</span> is only for a tab that does not exist in the destination yet.</div>
                   </div>
@@ -12943,6 +13079,10 @@ https://bit.ly/4vrcu64`;
       // pasted destinations owned by another account. No tokens are persisted.
       googleSheets: {
         clientId: '', backupFolderId: '',
+        // Google Picker API key + the folder chosen with it. backupDestId may
+        // live in another Google account's Drive; picking it is what grants
+        // this app the drive.file access to write there.
+        pickerApiKey: '', backupDestId: '', backupDestName: '',
         sheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '', procedure: '' },
         targetSheetIds: { sip_fcs: '', bmr: '', bmr_sms: '', recorder: '', procedure: '' },
         // Spreadsheet ID -> Apps Script project ID. Only projects created by
@@ -13090,6 +13230,12 @@ https://bit.ly/4vrcu64`;
         backupFolderId: (merged.googleSheets && typeof merged.googleSheets.backupFolderId === 'string')
           ? merged.googleSheets.backupFolderId
           : (DEFAULT_STATE.googleSheets.backupFolderId || ''),
+        pickerApiKey: (merged.googleSheets && typeof merged.googleSheets.pickerApiKey === 'string')
+          ? merged.googleSheets.pickerApiKey : '',
+        backupDestId: (merged.googleSheets && typeof merged.googleSheets.backupDestId === 'string')
+          ? merged.googleSheets.backupDestId : '',
+        backupDestName: (merged.googleSheets && typeof merged.googleSheets.backupDestName === 'string')
+          ? merged.googleSheets.backupDestName : '',
         sheetIds: {
           ...DEFAULT_STATE.googleSheets.sheetIds,
           ...((merged.googleSheets && merged.googleSheets.sheetIds) || {}),
@@ -16080,6 +16226,11 @@ match /shared/whitelistSmsTestNumbers {
         googleSheetsSync.setClientId(state.googleSheets?.clientId || GOOGLE_OAUTH_CLIENT_ID);
       }, [state.googleSheets?.clientId]);
 
+      // Same for the Google Picker API key, which the folder chooser needs.
+      useEffect(() => {
+        googleSheetsSync.setPickerApiKey(state.googleSheets?.pickerApiKey || '');
+      }, [state.googleSheets?.pickerApiKey]);
+
       // Save a Client ID entered in the sidebar field. Resets any live
       // connection since a new ID means a different OAuth app.
       const setGoogleClientId = useCallback((id) => {
@@ -16088,6 +16239,14 @@ match /shared/whitelistSmsTestNumbers {
         googleSheetsSync.disconnect();
         setGoogleConn(c => ({ ...c, connected: false, email: '', busyModule: null, error: null }));
         setState(s => ({ ...s, googleSheets: { ...(s.googleSheets || {}), clientId: v } }));
+      }, []);
+
+      // Save the Picker API key entered in the Backups panel. Unlike the
+      // Client ID this does not identify the OAuth app, so no reconnect needed.
+      const setGooglePickerKey = useCallback((key) => {
+        const v = String(key || '').trim();
+        googleSheetsSync.setPickerApiKey(v);
+        setState(s => ({ ...s, googleSheets: { ...(s.googleSheets || {}), pickerApiKey: v } }));
       }, []);
 
       const setGoogleTargetSheet = useCallback((moduleId, value) => {
@@ -16451,10 +16610,32 @@ match /shared/whitelistSmsTestNumbers {
         setGoogleConn(c => ({ ...c, busyModule: '__backup__', error: null }));
         try {
           await googleSheetsSync.getToken({ interactive: manual });
-          const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || '';
-          const rootId = await googleSheetsSync.ensureFolder('Generator Backups', prevFolder);
-          if (rootId && rootId !== prevFolder) {
-            setState(s => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: rootId } }));
+          // Where this run's files land. A folder chosen with "Choose folder"
+          // wins — it may sit in another Google account's Drive, and the Picker
+          // grant is what makes it writable under drive.file. If it has become
+          // unreachable (unshared, trashed, access revoked) fall back to the
+          // app's own folder rather than skipping the backup altogether.
+          const destId = String(st.googleSheets?.backupDestId || '');
+          const destName = String(st.googleSheets?.backupDestName || '');
+          let rootId = '';
+          let usedDest = false;
+          let destWarn = '';
+          if (destId) {
+            try {
+              await googleSheetsSync.folderMeta(destId);
+              rootId = destId;
+              usedDest = true;
+            } catch (e) {
+              console.warn('Chosen backup folder unreachable', e);
+              destWarn = ` The chosen folder${destName ? ` "${destName}"` : ''} could not be opened — choose it again.`;
+            }
+          }
+          if (!rootId) {
+            const prevFolder = (stateRef.current || DEFAULT_STATE).googleSheets?.backupFolderId || '';
+            rootId = await googleSheetsSync.ensureFolder('Generator Backups', prevFolder);
+            if (rootId && rootId !== prevFolder) {
+              setState(s => ({ ...s, googleSheets: { ...s.googleSheets, backupFolderId: rootId } }));
+            }
           }
           // Each backup gets its own dated subfolder ("2026-07-24 18-20") so
           // repeat/weekly backups group together instead of piling identically
@@ -16477,9 +16658,10 @@ match /shared/whitelistSmsTestNumbers {
           await saveSnapshot(st, manual ? 'manual-backup' : 'weekly-backup');
           setState(s => ({ ...s, backup: { ...(s.backup || {}), lastWeekKey: isoWeekKey(new Date()), lastRunAt: Date.now() } }));
           setGoogleConn(c => ({ ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null }));
-          if (manual) showToast(xlsxFails ? 'err' : 'ok', xlsxFails
-            ? `Backup saved to Drive, but ${xlsxFails} workbook(s) failed — the JSON data backup is complete.`
-            : 'Backup saved to Google Drive → Generator Backups.');
+          const where = usedDest ? (destName || 'the chosen folder') : 'Generator Backups';
+          if (manual) showToast((xlsxFails || destWarn) ? 'err' : 'ok', (xlsxFails
+            ? `Backup saved to ${where}, but ${xlsxFails} workbook(s) failed — the JSON data backup is complete.`
+            : `Backup saved to Google Drive → ${where}.`) + destWarn);
           return folderId;
         } catch (e) {
           console.warn('Drive backup failed', e);
@@ -16490,6 +16672,31 @@ match /shared/whitelistSmsTestNumbers {
         } finally {
           backupBusyRef.current = false;
         }
+      }, [showToast]);
+
+      // Open Google's folder chooser and remember the pick as the backup
+      // destination. Picking is also the act that grants this app drive.file
+      // access to a folder it did not create — which is the only way to write
+      // into a folder owned by (and shared from) another Google account.
+      const chooseBackupFolder = useCallback(async () => {
+        try {
+          const picked = await googleSheetsSync.pickFolder();
+          if (!picked) return; // cancelled
+          setState(s => ({
+            ...s,
+            googleSheets: { ...(s.googleSheets || {}), backupDestId: picked.id, backupDestName: picked.name || '' },
+          }));
+          setGoogleConn(c => ({ ...c, connected: true, email: googleSheetsSync.email() || c.email }));
+          showToast('ok', `Backups will be saved to ${picked.name || 'the chosen folder'}.`);
+        } catch (e) {
+          console.warn('Folder picker failed', e);
+          showToast('err', 'Folder picker failed: ' + (e.message || e));
+        }
+      }, [showToast]);
+
+      const clearBackupFolder = useCallback(() => {
+        setState(s => ({ ...s, googleSheets: { ...(s.googleSheets || {}), backupDestId: '', backupDestName: '' } }));
+        showToast('ok', 'Backups will go to Generator Backups in your own Drive.');
       }, [showToast]);
 
       // Restore a local snapshot over the current state (a safety snapshot of the
@@ -16667,7 +16874,15 @@ match /shared/whitelistSmsTestNumbers {
           onBackupNow: () => runDriveBackup({ manual: true }).catch(() => {}),
           onRestore: restoreSnapshot,
           lastRunAt: state.backup?.lastRunAt || 0,
-          folderUrl: state.googleSheets?.backupFolderId ? googleSheetsSync.folderUrl(state.googleSheets.backupFolderId) : '',
+          destId: String(state.googleSheets?.backupDestId || ''),
+          destName: String(state.googleSheets?.backupDestName || ''),
+          pickerKeySet: !!String(state.googleSheets?.pickerApiKey || '').trim(),
+          onChooseFolder: chooseBackupFolder,
+          onClearFolder: clearBackupFolder,
+          onSetPickerKey: setGooglePickerKey,
+          folderUrl: (state.googleSheets?.backupDestId || state.googleSheets?.backupFolderId)
+            ? googleSheetsSync.folderUrl(state.googleSheets.backupDestId || state.googleSheets.backupFolderId)
+            : '',
         },
       };
 
