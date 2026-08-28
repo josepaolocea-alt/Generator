@@ -1240,7 +1240,15 @@
       ws.getColumn(2).width = 34;
       for (let i = 3; i <= totalCols; i++) ws.getColumn(i).width = 8;
 
-      ws.views = [{ state: 'frozen', xSplit: 2, ySplit: headerRowNum }];
+      // A configured note is merged across the full sheet width. Excel allows
+      // the first-two-column freeze line to pass through that merge, but Google
+      // Sheets rejects the converted layout. Keep the header rows frozen in
+      // that case; tabs without a full-width note still freeze DATE + metric.
+      ws.views = [{
+        state: 'frozen',
+        ...(s.note && s.note.trim() ? {} : { xSplit: 2 }),
+        ySplit: headerRowNum,
+      }];
 
       // Conditional formatting (Google-Sheets-compatible formula rules)
       const dataEndRow = cur - 1;
@@ -2589,11 +2597,17 @@
       // request. Keep this semantic instead of matching only "frozen column":
       // newer responses say "can't freeze columns which contain only part of
       // a merged cell", while older responses refer to a "frozen region".
-      function isFreezeMergeConflict(error) {
+      function freezeMergeConflictDimensions(error) {
         const message = String((error && error.message) || '');
-        return /\b(?:freeze|frozen)\b/i.test(message)
+        const isConflict = /\b(?:freeze|frozen)\b/i.test(message)
           && /\bmerge(?:d|s)?\b/i.test(message)
           && /\b(?:row|rows|column|columns|region|pane|panes)\b/i.test(message);
+        if (!isConflict) return null;
+        const rows = /\brows?\b/i.test(message);
+        const columns = /\bcolumns?\b/i.test(message);
+        // Older Google responses only say "frozen region". With no stated
+        // axis, clear both as the conservative compatibility fallback.
+        return rows || columns ? { rows, columns } : { rows: true, columns: true };
       }
 
       const a1SheetTitle = (title) => "'" + String(title || '').replace(/'/g, "''") + "'";
@@ -3098,14 +3112,15 @@
             // because a merged range crosses it, the rebuilt layout matters more
             // than the frozen pane: reapply without freezing and report which
             // tabs lost it rather than failing the whole sync.
-            if (!isFreezeMergeConflict(error)) throw error;
+            const conflict = freezeMergeConflictDimensions(error);
+            if (!conflict) throw error;
             frozenSkipped = frozenRestores
-              .filter(entry => (entry.properties.gridProperties.frozenRowCount || 0)
-                || (entry.properties.gridProperties.frozenColumnCount || 0))
+              .filter(entry => (conflict.rows && (entry.properties.gridProperties.frozenRowCount || 0))
+                || (conflict.columns && (entry.properties.gridProperties.frozenColumnCount || 0)))
               .map(entry => entry.title);
             frozenRestores.forEach((entry) => {
-              entry.properties.gridProperties.frozenRowCount = 0;
-              entry.properties.gridProperties.frozenColumnCount = 0;
+              if (conflict.rows) entry.properties.gridProperties.frozenRowCount = 0;
+              if (conflict.columns) entry.properties.gridProperties.frozenColumnCount = 0;
             });
             await timeStage('applyReplacementUnfrozen', () => batchUpdateSheets(fileId, requests, 'rebuilding the checked tabs without freezing'));
           }

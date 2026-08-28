@@ -3180,7 +3180,11 @@ function buildHourlySheet(ws, s, year, month, allRules) {
   ws.getColumn(1).width = 14;
   ws.getColumn(2).width = 34;
   for (let i = 3; i <= totalCols; i++) ws.getColumn(i).width = 8;
-  ws.views = [{ state: "frozen", xSplit: 2, ySplit: headerRowNum }];
+  ws.views = [{
+    state: "frozen",
+    ...s.note && s.note.trim() ? {} : { xSplit: 2 },
+    ySplit: headerRowNum
+  }];
   const dataEndRow = cur - 1;
   if (dataEndRow >= dataStartRow) {
     const firstCol = colLetter(3);
@@ -4368,9 +4372,13 @@ const googleSheetsSync = (() => {
     if (!r.ok) throw await driveError(r, operation);
     return await r.json();
   }
-  function isFreezeMergeConflict(error) {
+  function freezeMergeConflictDimensions(error) {
     const message = String(error && error.message || "");
-    return /\b(?:freeze|frozen)\b/i.test(message) && /\bmerge(?:d|s)?\b/i.test(message) && /\b(?:row|rows|column|columns|region|pane|panes)\b/i.test(message);
+    const isConflict = /\b(?:freeze|frozen)\b/i.test(message) && /\bmerge(?:d|s)?\b/i.test(message) && /\b(?:row|rows|column|columns|region|pane|panes)\b/i.test(message);
+    if (!isConflict) return null;
+    const rows = /\brows?\b/i.test(message);
+    const columns = /\bcolumns?\b/i.test(message);
+    return rows || columns ? { rows, columns } : { rows: true, columns: true };
   }
   const a1SheetTitle = (title) => "'" + String(title || "").replace(/'/g, "''") + "'";
   function packValueRanges(valueSheets, maxJsonChars = 14e5) {
@@ -4801,11 +4809,12 @@ const googleSheetsSync = (() => {
       try {
         await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests, "rebuilding the checked tabs"));
       } catch (error) {
-        if (!isFreezeMergeConflict(error)) throw error;
-        frozenSkipped = frozenRestores.filter((entry) => entry.properties.gridProperties.frozenRowCount || 0 || (entry.properties.gridProperties.frozenColumnCount || 0)).map((entry) => entry.title);
+        const conflict = freezeMergeConflictDimensions(error);
+        if (!conflict) throw error;
+        frozenSkipped = frozenRestores.filter((entry) => conflict.rows && (entry.properties.gridProperties.frozenRowCount || 0) || conflict.columns && (entry.properties.gridProperties.frozenColumnCount || 0)).map((entry) => entry.title);
         frozenRestores.forEach((entry) => {
-          entry.properties.gridProperties.frozenRowCount = 0;
-          entry.properties.gridProperties.frozenColumnCount = 0;
+          if (conflict.rows) entry.properties.gridProperties.frozenRowCount = 0;
+          if (conflict.columns) entry.properties.gridProperties.frozenColumnCount = 0;
         });
         await timeStage("applyReplacementUnfrozen", () => batchUpdateSheets(fileId, requests, "rebuilding the checked tabs without freezing"));
       }
