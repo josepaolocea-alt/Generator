@@ -2630,19 +2630,39 @@
 
       // Create a new Google Sheet from xlsx bytes. Drive converts the upload
       // because the metadata mimeType is the Google Sheets type. Returns id.
+      // This upload was the last call on the Exact-sync critical path with no
+      // retry, so a single transient Google 500 threw away a sync that had
+      // already spent minutes of work. It cannot use fetchWithGoogleRetry: that
+      // helper reuses one options object, and a multipart FormData body is a
+      // stream that fetch consumes, so every attempt needs a fresh one.
+      //
+      // Known trade-off: Drive has no idempotency key for uploads, so a 500
+      // that actually created the file leaves an orphan when the retry
+      // succeeds. That orphan is the disposable "… — update staging" file, and
+      // it is far cheaper than losing the whole sync. Deliberately NOT swept up
+      // by name — the drive.file scope still sees app-created spreadsheets from
+      // earlier sessions, and trashing a same-named destination would destroy
+      // real user data to tidy a temp file.
       async function createSheet(name, blob, operation = 'creating the Google Sheet') {
         const token = await getToken();
         const metadata = { name, mimeType: 'application/vnd.google-apps.spreadsheet' };
-        const form = new FormData();
-        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-        form.append('file', blob, name + '.xlsx');
-        const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer ' + token },
-          body: form,
-        });
-        if (!r.ok) throw await driveError(r, operation);
-        return (await r.json()).id;
+        const attempts = 4;
+        let response;
+        for (let attempt = 0; attempt < attempts; attempt++) {
+          const form = new FormData();
+          form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+          form.append('file', blob, name + '.xlsx');
+          response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token },
+            body: form,
+          });
+          if (response.ok) return (await response.json()).id;
+          if (!RETRYABLE_STATUSES.includes(response.status) || attempt === attempts - 1) break;
+          const delay = Math.min(4000, 350 * (2 ** attempt)) + Math.floor(Math.random() * 250);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        throw await driveError(response, operation);
       }
 
       // Read only the tab identities needed by append-only sync. Existing tab
@@ -16632,7 +16652,14 @@ match /shared/whitelistSmsTestNumbers {
       const googleSyncProps = {
         conn: googleConn, configured: googleConfigured, clientId: googleClientId,
         onSetClientId: setGoogleClientId, onSetTargetSheet: setGoogleTargetSheet,
-        connect: connectGoogle, disconnect: disconnectGoogle, sync: syncModuleToSheets,
+        connect: connectGoogle, disconnect: disconnectGoogle,
+        // The sync panel's buttons call this fire-and-forget, and
+        // syncModuleToSheets rethrows after it has already shown the toast and
+        // filled in the panel's error. That rethrow reached nobody and surfaced
+        // as a bare "Uncaught (in promise)" in the console — a second, scarier
+        // looking failure for what was one already-reported error. Swallow it
+        // here; syncModuleToSheets still throws for programmatic callers.
+        sync: (moduleId, options) => syncModuleToSheets(moduleId, options).catch(() => {}),
         sheetUrl: googleSheetsSync.sheetUrl,
         backup: {
           connected: googleConn.connected,
