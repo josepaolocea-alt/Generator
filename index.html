@@ -4211,8 +4211,18 @@ const googleSheetsSync = (() => {
     });
   }
   const SCOPE_HELP = "Google access wasn't fully granted. Click Connect again and approve Drive, Google Sheets, and Apps Script permissions.";
+  let tokenRefresh = null;
   async function getToken({ interactive = false } = {}) {
     if (accessToken && Date.now() < tokenExpiry && hasRequiredScopes()) return accessToken;
+    if (tokenRefresh && !interactive) return tokenRefresh;
+    tokenRefresh = resolveToken(interactive);
+    try {
+      return await tokenRefresh;
+    } finally {
+      tokenRefresh = null;
+    }
+  }
+  async function resolveToken(interactive) {
     try {
       return await requestToken(interactive);
     } catch (e) {
@@ -4271,15 +4281,21 @@ const googleSheetsSync = (() => {
   const isConnected = () => !!accessToken && Date.now() < tokenExpiry && hasRequiredScopes();
   const email = () => grantedEmail;
   const sheetUrl = (fileId) => "https://docs.google.com/spreadsheets/d/" + encodeURIComponent(fileId) + "/edit";
-  async function driveError(r) {
+  async function driveError(r, operation = "") {
     let detail = "";
+    let reason = "";
     try {
       const body = await r.json();
       detail = body?.error?.message || "";
+      reason = body?.error?.status || body?.error?.errors?.[0]?.reason || "";
     } catch {
     }
-    const err = new Error("Google API error " + r.status + (detail ? ": " + detail : ""));
+    const err = new Error(
+      "Google API error " + r.status + (operation ? " while " + operation : "") + (detail ? ": " + detail : "")
+    );
     err.status = r.status;
+    err.operation = operation;
+    err.reason = reason;
     return err;
   }
   const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
@@ -4293,7 +4309,7 @@ const googleSheetsSync = (() => {
     }
     return response;
   }
-  async function createSheet(name, blob) {
+  async function createSheet(name, blob, operation = "creating the Google Sheet") {
     const token = await getToken();
     const metadata = { name, mimeType: "application/vnd.google-apps.spreadsheet" };
     const form = new FormData();
@@ -4304,20 +4320,20 @@ const googleSheetsSync = (() => {
       headers: { Authorization: "Bearer " + token },
       body: form
     });
-    if (!r.ok) throw await driveError(r);
+    if (!r.ok) throw await driveError(r, operation);
     return (await r.json()).id;
   }
-  async function getSheetTabs(fileId) {
+  async function getSheetTabs(fileId, operation = "reading the destination tab list") {
     const token = await getToken();
     const r = await fetch(
       "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?fields=sheets.properties(sheetId,title,index,gridProperties(rowCount,columnCount))",
       { headers: { Authorization: "Bearer " + token } }
     );
-    if (!r.ok) throw await driveError(r);
+    if (!r.ok) throw await driveError(r, operation);
     const body = await r.json();
     return (body.sheets || []).map((s) => s.properties).filter((p) => p && Number.isInteger(p.sheetId) && p.title);
   }
-  async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true } = {}) {
+  async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true, operation = "reading tab metadata" } = {}) {
     const token = await getToken();
     const parts = [
       "properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))"
@@ -4330,11 +4346,11 @@ const googleSheetsSync = (() => {
       "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?fields=" + encodeURIComponent(fields) + rangeQuery,
       { headers: { Authorization: "Bearer " + token } }
     );
-    if (!r.ok) throw await driveError(r);
+    if (!r.ok) throw await driveError(r, operation);
     const body = await r.json();
     return (body.sheets || []).filter((sheet) => Number.isInteger(sheet?.properties?.sheetId));
   }
-  async function batchUpdateSheets(fileId, requests) {
+  async function batchUpdateSheets(fileId, requests, operation = "applying the sheet update") {
     if (!requests.length) return null;
     const token = await getToken();
     const r = await fetch(
@@ -4345,7 +4361,7 @@ const googleSheetsSync = (() => {
         body: JSON.stringify({ requests })
       }
     );
-    if (!r.ok) throw await driveError(r);
+    if (!r.ok) throw await driveError(r, operation);
     return await r.json();
   }
   const a1SheetTitle = (title) => "'" + String(title || "").replace(/'/g, "''") + "'";
@@ -4403,7 +4419,7 @@ const googleSheetsSync = (() => {
         return a1SheetTitle(sheet.title) + "!A1:" + colLetter(grid.columnCount) + grid.rowCount;
       }) })
     });
-    if (!clearResp.ok) throw await driveError(clearResp);
+    if (!clearResp.ok) throw await driveError(clearResp, "clearing the existing values");
     const packs = packValueRanges(updateable);
     for (const data of packs) {
       const writeResp = await fetchWithGoogleRetry(base + "/values:batchUpdate", {
@@ -4411,7 +4427,7 @@ const googleSheetsSync = (() => {
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ valueInputOption: "USER_ENTERED", includeValuesInResponse: false, data })
       });
-      if (!writeResp.ok) throw await driveError(writeResp);
+      if (!writeResp.ok) throw await driveError(writeResp, "writing the refreshed values");
     }
     return { updated: updateable.map((sheet) => sheet.title), missing, requiresExact };
   }
@@ -4442,7 +4458,7 @@ const googleSheetsSync = (() => {
       4,
       [429, 503]
     );
-    if (!copyResp.ok) throw await driveError(copyResp);
+    if (!copyResp.ok) throw await driveError(copyResp, "copying a generated tab into the destination");
     return await copyResp.json();
   }
   async function deleteFile(fileId) {
@@ -4452,7 +4468,7 @@ const googleSheetsSync = (() => {
       method: "DELETE",
       headers: { Authorization: "Bearer " + token }
     });
-    if (!r.ok && r.status !== 404) throw await driveError(r);
+    if (!r.ok && r.status !== 404) throw await driveError(r, "deleting the temporary staging file");
   }
   async function appendMissingTabs(fileId, blob, dims, tempName) {
     const wanted = (dims || []).filter((d) => d && d.title);
@@ -4589,13 +4605,13 @@ const googleSheetsSync = (() => {
     const staged = [];
     const stagingConversion = timeStage(
       "stagingConversion",
-      () => createSheet((tempName || "Generator") + " — update staging", blob)
+      () => createSheet((tempName || "Generator") + " — update staging", blob, "creating the temporary staging spreadsheet")
     ).then((id) => {
       tempId = id;
       return id;
     });
     const opened = await Promise.allSettled([
-      timeStage("destinationTabs", () => getSheetTabs(fileId)),
+      timeStage("destinationTabs", () => getSheetTabs(fileId, "reading the destination tab list")),
       stagingConversion
     ]);
     try {
@@ -4615,7 +4631,7 @@ const googleSheetsSync = (() => {
       });
       const parallel = await Promise.allSettled([
         timeStage("tabCopies", async () => {
-          const sourceTabs = await getSheetTabs(tempId);
+          const sourceTabs = await getSheetTabs(tempId, "reading the staging tab list");
           const sourceByTitle = new Map(sourceTabs.map((p) => [p.title, p]));
           replaceable.forEach((item) => {
             if (!sourceByTitle.has(item.dim.title)) {
@@ -4630,17 +4646,41 @@ const googleSheetsSync = (() => {
         }),
         timeStage("sourceMetadata", () => getSheetReplacementMetadata(tempId, sourceRanges, {
           dimensionMetadata: true,
-          conditionalFormats: false
+          conditionalFormats: false,
+          operation: "reading the generated layout metadata"
         })),
         timeStage("destinationMetadata", () => getSheetReplacementMetadata(fileId, destinationRanges, {
           dimensionMetadata: false,
-          conditionalFormats: true
+          conditionalFormats: true,
+          operation: "reading the destination layout metadata"
         }))
       ]);
-      const parallelFailure = parallel.find((result) => result.status === "rejected");
-      if (parallelFailure) throw parallelFailure.reason;
-      const sourceByTitleMeta = new Map(parallel[1].value.map((sheet) => [sheet.properties.title, sheet]));
-      const destinationById = new Map(parallel[2].value.map((sheet) => [sheet.properties.sheetId, sheet]));
+      if (parallel[0].status === "rejected") throw parallel[0].reason;
+      const sourceByDimTitle = /* @__PURE__ */ new Map();
+      let destinationById;
+      if (parallel[1].status === "fulfilled" && parallel[2].status === "fulfilled") {
+        const sourceByTitleMeta = new Map(parallel[1].value.map((sheet) => [sheet.properties.title, sheet]));
+        staged.forEach((item) => sourceByDimTitle.set(item.dim.title, sourceByTitleMeta.get(item.dim.title)));
+        destinationById = new Map(parallel[2].value.map((sheet) => [sheet.properties.sheetId, sheet]));
+      } else {
+        const scopedFailure = parallel[1].status === "rejected" ? parallel[1].reason : parallel[2].reason;
+        console.warn("Scoped metadata read failed; retrying with the combined destination read", scopedFailure);
+        const combinedRanges = staged.flatMap((item) => {
+          const rows = Math.max(1, item.dim.rows || 1);
+          const cols = Math.max(1, item.dim.cols || 1);
+          const existingGrid = item.existing.gridProperties || {};
+          return [
+            a1SheetTitle(item.existing.title) + "!A1:" + colLetter(Math.max(cols, existingGrid.columnCount || 1)) + Math.max(rows, existingGrid.rowCount || 1),
+            a1SheetTitle(item.copied.title) + "!A1:" + colLetter(cols) + rows
+          ];
+        });
+        const combined = await timeStage("combinedMetadata", () => getSheetReplacementMetadata(fileId, combinedRanges, {
+          operation: "reading the replacement metadata"
+        }));
+        const combinedById = new Map(combined.map((sheet) => [sheet.properties.sheetId, sheet]));
+        staged.forEach((item) => sourceByDimTitle.set(item.dim.title, combinedById.get(item.copied.sheetId)));
+        destinationById = combinedById;
+      }
       cleanupPromise = timeStage("cleanup", () => deleteFile(tempId)).catch((e) => {
         console.warn("Could not delete temporary Google Sheet", e);
       });
@@ -4649,7 +4689,7 @@ const googleSheetsSync = (() => {
       staged.forEach((item) => {
         const destinationId = item.existing.sheetId;
         const sourceId = item.copied.sheetId;
-        const sourceSheet = sourceByTitleMeta.get(item.dim.title);
+        const sourceSheet = sourceByDimTitle.get(item.dim.title);
         const destinationSheet = destinationById.get(destinationId);
         if (!sourceSheet || !destinationSheet) {
           throw new Error('Could not read the generated or existing tab metadata for "' + item.dim.title + '".');
@@ -4749,7 +4789,7 @@ const googleSheetsSync = (() => {
         requests.push({ deleteSheet: { sheetId: sourceId } });
       });
       try {
-        await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests));
+        await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests, "rebuilding the checked tabs"));
       } catch (error) {
         if (!/frozen (region|row|column)/i.test(String(error && error.message || ""))) throw error;
         frozenSkipped = frozenRestores.filter((entry) => entry.properties.gridProperties.frozenRowCount || 0 || (entry.properties.gridProperties.frozenColumnCount || 0)).map((entry) => entry.title);
@@ -4757,7 +4797,7 @@ const googleSheetsSync = (() => {
           entry.properties.gridProperties.frozenRowCount = 0;
           entry.properties.gridProperties.frozenColumnCount = 0;
         });
-        await timeStage("applyReplacementUnfrozen", () => batchUpdateSheets(fileId, requests));
+        await timeStage("applyReplacementUnfrozen", () => batchUpdateSheets(fileId, requests, "rebuilding the checked tabs without freezing"));
       }
       return {
         updated: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => dim.title),
@@ -14813,10 +14853,11 @@ function App() {
       setTimeout(() => setToast(null), syncHint ? 1e4 : 5e3);
       return fileId;
     } catch (e) {
-      console.warn("Google Sheets sync failed", e);
-      setGoogleConn((c) => ({ ...c, busyModule: null, error: e.message || String(e) }));
-      setToast({ type: "err", msg: "Google Sheets sync failed: " + (e.message || e) });
-      setTimeout(() => setToast(null), 6e3);
+      console.warn("Google Sheets sync failed", { message: e?.message, status: e?.status, operation: e?.operation, reason: e?.reason, error: e });
+      const permissionHint = e?.status === 403 ? ` — the connected Google account (${googleSheetsSync.email() || "unknown"}) needs Editor access to this spreadsheet, and the Google Sheets API must be enabled in its Cloud project. Signing in to the app with a different account does not change this.` : "";
+      setGoogleConn((c) => ({ ...c, busyModule: null, error: (e.message || String(e)) + permissionHint }));
+      setToast({ type: "err", msg: "Google Sheets sync failed: " + (e.message || e) + permissionHint });
+      setTimeout(() => setToast(null), e?.status === 403 ? 12e3 : 6e3);
       throw e;
     }
   }, []);
