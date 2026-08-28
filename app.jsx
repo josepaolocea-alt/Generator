@@ -10148,6 +10148,118 @@ https://bit.ly/4vrcu64`;
       return { ...proc, steps };
     }
 
+    /* ------------------------------------------------------------
+       Image budget — every image in this app is stored as a base64
+       data URL inside `state`, which is mirrored to the SINGLE
+       Firestore document users/{uid}/state/main. Firestore rejects any
+       document over 1,048,576 bytes with `invalid-argument`, and the
+       whole app drops to LOCAL ONLY when that happens. Base64 also
+       inflates the bytes by ~33% on top of the file size. So every
+       image must be shrunk on the way in — see shrinkImageDataUrl.
+       Do not store an untouched upload in state.
+       ------------------------------------------------------------ */
+    const FIRESTORE_DOC_LIMIT = 1048576;
+    // Each entry caps ONE stored image. `ladder` is tried in order and the
+    // first rung that lands under maxBytes wins, so the cap is guaranteed
+    // rather than hoped for.
+    //
+    // Measured on a 1920x1080 dense-text UI capture (the worst realistic case):
+    // re-encoding as PNG after a downscale makes it BIGGER, not smaller
+    // (277 KB source -> 440 KB at 1600px, 785 KB at 1400px), because
+    // anti-aliasing turns two-tone text into thousands of grey shades. JPEG is
+    // the only format that scales down predictably here, and the long edge —
+    // not the quality knob — is what actually moves the bytes. Do not "fix"
+    // this by preferring PNG for screenshots.
+    const IMAGE_BUDGETS = {
+      // Sized against a real 8-screenshot procedure that came to 975 KB with
+      // ~205 KB of other state: capping each screenshot at 140 KB brings that
+      // set to ~600 KB and the whole document to ~79% of the limit.
+      screenshot: {
+        maxBytes: 140 * 1024,
+        ladder: [
+          [1600, 0.85], [1280, 0.85], [1280, 0.75], [1100, 0.75],
+          [1024, 0.75], [1024, 0.65], [900, 0.7], [900, 0.6], [760, 0.6], [640, 0.6],
+        ],
+      },
+      logo:      { maxBytes: 70 * 1024, ladder: [[900, 0.9], [700, 0.85], [520, 0.8], [400, 0.75]] },
+      signature: { maxBytes: 48 * 1024, ladder: [[600, 0.9], [480, 0.85], [360, 0.8], [280, 0.75]] },
+    };
+
+    // What the image COSTS IN THE DOCUMENT, not how many pixels it decodes to.
+    // Firestore counts the stored string, and a data URL is pure ASCII, so its
+    // length is its UTF-8 byte count. Measuring the decoded image instead
+    // understates the real cost by ~25% (base64 is 4 chars per 3 bytes), which
+    // would make every budget below quietly a third looser than it reads.
+    function storedBytes(value) {
+      return String(value || '').length;
+    }
+
+    function decodeImageDataUrl(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Could not decode that image.'));
+        img.src = dataUrl;
+      });
+    }
+
+    // Render `image` at a long edge of `edge` and encode it as `type`.
+    function encodeImageAt(image, edge, type, quality) {
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      const scale = Math.min(1, edge / Math.max(width, height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      ctx.imageSmoothingQuality = 'high';
+      // JPEG has no alpha: composite on white so transparent padding does not
+      // come out black.
+      if (type === 'image/jpeg') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      try { return canvas.toDataURL(type, quality); }
+      catch { return ''; }
+    }
+
+    // Shrink one stored image until it fits its budget. PNG is tried once at
+    // the top rung so flat art (logos, signatures) keeps its transparency and
+    // crisp edges; anything that does not fit that way falls down the JPEG
+    // ladder. The original is kept whenever re-encoding would not help.
+    async function shrinkImageDataUrl(dataUrl, budgetKey = 'screenshot') {
+      const source = String(dataUrl || '');
+      if (!/^data:image\//i.test(source)) return source;
+      const budget = IMAGE_BUDGETS[budgetKey] || IMAGE_BUDGETS.screenshot;
+      const sourceBytes = storedBytes(source);
+      if (sourceBytes <= budget.maxBytes) return source;
+
+      let image;
+      try { image = await decodeImageDataUrl(source); }
+      catch { return source; }
+      if (!(image.naturalWidth || image.width) || !(image.naturalHeight || image.height)) return source;
+
+      const [topEdge] = budget.ladder[0];
+      let best = source;
+      let bestBytes = sourceBytes;
+      const consider = (candidate) => {
+        if (!candidate) return false;
+        const bytes = storedBytes(candidate);
+        if (bytes < bestBytes) { best = candidate; bestBytes = bytes; }
+        return bytes <= budget.maxBytes;
+      };
+
+      if (consider(encodeImageAt(image, topEdge, 'image/png'))) return best;
+      for (const [edge, quality] of budget.ladder) {
+        if (consider(encodeImageAt(image, edge, 'image/jpeg', quality))) return best;
+      }
+      // Nothing hit the budget — hand back the smallest attempt rather than
+      // failing, and let the sidebar's footprint meter show the shortfall.
+      return best;
+    }
+
     async function procedureReadImageFile(file) {
       if (!file || !String(file.type || '').startsWith('image/')) throw new Error('Choose an image file.');
       if (file.size > 12 * 1024 * 1024) throw new Error('Screenshot is too large. Choose an image under 12 MB.');
@@ -10157,16 +10269,46 @@ https://bit.ly/4vrcu64`;
         reader.onerror = () => reject(new Error('Could not read that image.'));
         reader.readAsDataURL(file);
       });
-      const image = await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error('Could not decode that image.'));
-        img.src = dataUrl;
-      });
+      const image = await decodeImageDataUrl(dataUrl);
       if (!image.naturalWidth || !image.naturalHeight) throw new Error('That image has no readable dimensions.');
-      // Preserve the exact source pixels and format. Editing is the only time
-      // a new image is produced, and edited screenshots are exported as PNG.
-      return dataUrl;
+      // The raw upload is never stored: state/main is one Firestore document
+      // with a 1 MB ceiling, and two full-resolution screenshots exceed it.
+      return await shrinkImageDataUrl(dataUrl, 'screenshot');
+    }
+
+    // Re-shrink every image already sitting in state. Used by the one-time
+    // "Compact images" action after uploads that predate shrinkImageDataUrl
+    // pushed the document over the Firestore limit.
+    async function compactStateImages(state) {
+      let savedBytes = 0;
+      let changed = 0;
+      const shrink = async (value, budgetKey) => {
+        if (!value) return value;
+        const next = await shrinkImageDataUrl(value, budgetKey);
+        const delta = storedBytes(value) - storedBytes(next);
+        if (delta > 0) { savedBytes += delta; changed++; }
+        return next;
+      };
+
+      const procedure = procedureNormalizeState(state.procedure);
+      const steps = [];
+      for (const step of procedure.steps) {
+        steps.push(step.image ? { ...step, image: await shrink(step.image, 'screenshot') } : step);
+      }
+      const signatories = [];
+      for (const signatory of (state.rcaSignatories || [])) {
+        signatories.push(signatory.signature
+          ? { ...signatory, signature: await shrink(signatory.signature, 'signature') }
+          : signatory);
+      }
+      const company = { ...(state.rcaCompany || {}) };
+      if (company.logo) company.logo = await shrink(company.logo, 'logo');
+
+      return {
+        changed,
+        savedBytes,
+        next: { ...state, procedure: { ...procedure, steps }, rcaSignatories: signatories, rcaCompany: company },
+      };
     }
 
     const PROCEDURE_DOCX_STATE_MARKER = 'MRG_PROCEDURE_STATE_V1:';
@@ -10561,6 +10703,55 @@ https://bit.ly/4vrcu64`;
       const theme = state.theme || 'dark';
       const importRef = useRef(null);
       const update = (patch) => setState(s => ({ ...s, procedure: { ...procedureNormalizeState(s.procedure), ...patch } }));
+
+      // Firestore rejects users/{uid}/state/main over 1 MB, so the sidebar
+      // shows the live footprint and offers a one-time re-shrink of images
+      // that were stored before shrinkImageDataUrl existed.
+      const [compacting, setCompacting] = useState(false);
+      const [compactNote, setCompactNote] = useState('');
+      // Measuring means stringifying the whole state, and the save effect
+      // already does that on every change — so this is debounced rather than
+      // run per keystroke while someone types a step description.
+      const [stateBytes, setStateBytes] = useState(0);
+      useEffect(() => {
+        const timer = setTimeout(() => {
+          try { setStateBytes(new TextEncoder().encode(JSON.stringify(state)).length); }
+          catch { setStateBytes(0); }
+        }, 600);
+        return () => clearTimeout(timer);
+      }, [state]);
+      const imageBytes = useMemo(() => {
+        const steps = (procedureNormalizeState(state.procedure).steps || []);
+        return steps.reduce((total, step) => total + storedBytes(step.image), 0)
+          + (state.rcaSignatories || []).reduce((total, s) => total + storedBytes(s.signature), 0)
+          + storedBytes(state.rcaCompany?.logo);
+      }, [state.procedure, state.rcaSignatories, state.rcaCompany]);
+      const overBudget = stateBytes > FIRESTORE_DOC_LIMIT * 0.8;
+      const kb = (bytes) => `${Math.round(bytes / 1024).toLocaleString()} KB`;
+
+      const onCompactImages = async () => {
+        setCompacting(true);
+        setCompactNote('');
+        try {
+          const result = await compactStateImages(state);
+          if (!result.changed) {
+            setCompactNote('Already compact — nothing to shrink.');
+          } else {
+            setState(s => ({
+              ...s,
+              procedure: result.next.procedure,
+              rcaSignatories: result.next.rcaSignatories,
+              rcaCompany: result.next.rcaCompany,
+            }));
+            setCompactNote(`Shrank ${result.changed} image${result.changed === 1 ? '' : 's'}, freed ${kb(result.savedBytes)}.`);
+          }
+        } catch (e) {
+          console.warn('Compacting images failed', e);
+          setCompactNote('Could not compact: ' + (e?.message || 'unknown error'));
+        } finally {
+          setCompacting(false);
+        }
+      };
       return (
         <aside className="w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
@@ -10603,6 +10794,27 @@ https://bit.ly/4vrcu64`;
               <p className="mt-1 text-[10px] leading-relaxed text-neutral-500">
                 Create an editable Microsoft Word file from the current procedure. No Google Sheet is created.
               </p>
+            </div>
+            <div>
+              <SectionLabel hint="Cloud sync fails above 1 MB">Sync footprint</SectionLabel>
+              <div className={`rounded-md border px-3 py-2.5 ${overBudget ? 'border-amber-500/40 bg-amber-500/5' : 'border-neutral-900 bg-neutral-950'}`}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className={`text-xs font-medium ${overBudget ? 'text-amber-200' : 'text-neutral-200'}`}>{kb(stateBytes)}</span>
+                  <span className="text-[10px] text-neutral-600">of {kb(FIRESTORE_DOC_LIMIT)} limit</span>
+                </div>
+                <div className="mt-1.5 h-1 rounded-full bg-neutral-900 overflow-hidden">
+                  <div className={`h-full rounded-full ${overBudget ? 'bg-amber-400' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min(100, Math.round((stateBytes / FIRESTORE_DOC_LIMIT) * 100))}%` }} />
+                </div>
+                <div className="mt-2 text-[10px] text-neutral-600">{kb(imageBytes)} of that is images</div>
+                <Btn variant="ghost" size="sm" onClick={onCompactImages} disabled={compacting || busy} className="w-full mt-2">
+                  {compacting ? <><span className="loader"></span> Compacting</> : <>Compact images</>}
+                </Btn>
+                {compactNote && <p className="mt-1.5 text-[10px] leading-relaxed text-neutral-400">{compactNote}</p>}
+                <p className="mt-1.5 text-[10px] leading-relaxed text-neutral-600">
+                  Re-encodes screenshots, signatures and the RCA logo at display size. New uploads are shrunk automatically.
+                </p>
+              </div>
             </div>
           </div>
           <div className="p-5 border-t border-neutral-900 space-y-2">
@@ -10965,7 +11177,12 @@ https://bit.ly/4vrcu64`;
             <Btn variant="ghost" size="md" onClick={() => addEntry('info')} className="w-full"><IconPlus /> Add additional information</Btn>
           </div>
           {editingStep && <ProcedureImageEditor image={editingStep.image} onCancel={() => setEditingStepId(null)}
-            onSave={editedImage => { updateStep(editingStep.id, { image: editedImage }); setEditingStepId(null); }} />}
+            onSave={async editedImage => {
+              // The editor exports full-size PNG, which is the largest thing
+              // that can land in state. Shrink it like an upload.
+              updateStep(editingStep.id, { image: await shrinkImageDataUrl(editedImage, 'screenshot') });
+              setEditingStepId(null);
+            }} />}
         </div>
       );
     }
@@ -11875,7 +12092,11 @@ https://bit.ly/4vrcu64`;
         e.target.value = '';
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = () => updateSignatory(id, { signature: String(reader.result || '') });
+        // Shrunk before it reaches state: signatures ride in the same
+        // Firestore document as everything else (1 MB ceiling).
+        reader.onload = async () => updateSignatory(id, {
+          signature: await shrinkImageDataUrl(String(reader.result || ''), 'signature'),
+        });
         reader.readAsDataURL(file);
       };
       const moveSig = (idx, delta) => {
@@ -12204,7 +12425,9 @@ https://bit.ly/4vrcu64`;
         e.target.value = '';
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = () => update({ logo: String(reader.result || '') });
+        reader.onload = async () => update({
+          logo: await shrinkImageDataUrl(String(reader.result || ''), 'logo'),
+        });
         reader.readAsDataURL(file);
       };
       const activeLogo = rca.logo || RCA_LETTERHEAD.logo;
@@ -15731,7 +15954,18 @@ match /shared/whitelistSmsTestNumbers {
             setSync(s => ({ ...s, status: 'synced', message: null }));
           } catch (e) {
             console.warn('Firestore save failed', e);
-            setSync(s => ({ ...s, status: 'offline', message: syncErrorMessage(e, 'Cloud sync save failed') }));
+            // The 1 MB document ceiling is the one save failure with a fix the
+            // user can apply themselves, so name it instead of leaving Google's
+            // raw "exceeds the maximum allowed size" text to be decoded.
+            const overSize = /exceeds the maximum allowed size|invalid-argument/i.test(String(e?.message || e))
+              && new TextEncoder().encode(snapshotJson).length > FIRESTORE_DOC_LIMIT * 0.9;
+            setSync(s => ({
+              ...s,
+              status: 'offline',
+              message: overSize
+                ? 'Cloud sync save failed — your saved data is over the 1 MB limit, almost always because of stored images. Open the Procedure module and use "Compact images", then Retry.'
+                : syncErrorMessage(e, 'Cloud sync save failed'),
+            }));
           }
         }, 400);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };

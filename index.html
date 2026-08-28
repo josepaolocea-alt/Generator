@@ -10143,6 +10143,92 @@ function procedureMoveStep(proc, index, delta) {
   steps.splice(nextIndex, 0, step);
   return { ...proc, steps };
 }
+const FIRESTORE_DOC_LIMIT = 1048576;
+const IMAGE_BUDGETS = {
+  // Sized against a real 8-screenshot procedure that came to 975 KB with
+  // ~205 KB of other state: capping each screenshot at 140 KB brings that
+  // set to ~600 KB and the whole document to ~79% of the limit.
+  screenshot: {
+    maxBytes: 140 * 1024,
+    ladder: [
+      [1600, 0.85],
+      [1280, 0.85],
+      [1280, 0.75],
+      [1100, 0.75],
+      [1024, 0.75],
+      [1024, 0.65],
+      [900, 0.7],
+      [900, 0.6],
+      [760, 0.6],
+      [640, 0.6]
+    ]
+  },
+  logo: { maxBytes: 70 * 1024, ladder: [[900, 0.9], [700, 0.85], [520, 0.8], [400, 0.75]] },
+  signature: { maxBytes: 48 * 1024, ladder: [[600, 0.9], [480, 0.85], [360, 0.8], [280, 0.75]] }
+};
+function storedBytes(value) {
+  return String(value || "").length;
+}
+function decodeImageDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not decode that image."));
+    img.src = dataUrl;
+  });
+}
+function encodeImageAt(image, edge, type, quality) {
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const scale = Math.min(1, edge / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.imageSmoothingQuality = "high";
+  if (type === "image/jpeg") {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  try {
+    return canvas.toDataURL(type, quality);
+  } catch {
+    return "";
+  }
+}
+async function shrinkImageDataUrl(dataUrl, budgetKey = "screenshot") {
+  const source = String(dataUrl || "");
+  if (!/^data:image\//i.test(source)) return source;
+  const budget = IMAGE_BUDGETS[budgetKey] || IMAGE_BUDGETS.screenshot;
+  const sourceBytes = storedBytes(source);
+  if (sourceBytes <= budget.maxBytes) return source;
+  let image;
+  try {
+    image = await decodeImageDataUrl(source);
+  } catch {
+    return source;
+  }
+  if (!(image.naturalWidth || image.width) || !(image.naturalHeight || image.height)) return source;
+  const [topEdge] = budget.ladder[0];
+  let best = source;
+  let bestBytes = sourceBytes;
+  const consider = (candidate) => {
+    if (!candidate) return false;
+    const bytes = storedBytes(candidate);
+    if (bytes < bestBytes) {
+      best = candidate;
+      bestBytes = bytes;
+    }
+    return bytes <= budget.maxBytes;
+  };
+  if (consider(encodeImageAt(image, topEdge, "image/png"))) return best;
+  for (const [edge, quality] of budget.ladder) {
+    if (consider(encodeImageAt(image, edge, "image/jpeg", quality))) return best;
+  }
+  return best;
+}
 async function procedureReadImageFile(file) {
   if (!file || !String(file.type || "").startsWith("image/")) throw new Error("Choose an image file.");
   if (file.size > 12 * 1024 * 1024) throw new Error("Screenshot is too large. Choose an image under 12 MB.");
@@ -10152,14 +10238,39 @@ async function procedureReadImageFile(file) {
     reader.onerror = () => reject(new Error("Could not read that image."));
     reader.readAsDataURL(file);
   });
-  const image = await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("Could not decode that image."));
-    img.src = dataUrl;
-  });
+  const image = await decodeImageDataUrl(dataUrl);
   if (!image.naturalWidth || !image.naturalHeight) throw new Error("That image has no readable dimensions.");
-  return dataUrl;
+  return await shrinkImageDataUrl(dataUrl, "screenshot");
+}
+async function compactStateImages(state) {
+  let savedBytes = 0;
+  let changed = 0;
+  const shrink = async (value, budgetKey) => {
+    if (!value) return value;
+    const next = await shrinkImageDataUrl(value, budgetKey);
+    const delta = storedBytes(value) - storedBytes(next);
+    if (delta > 0) {
+      savedBytes += delta;
+      changed++;
+    }
+    return next;
+  };
+  const procedure = procedureNormalizeState(state.procedure);
+  const steps = [];
+  for (const step of procedure.steps) {
+    steps.push(step.image ? { ...step, image: await shrink(step.image, "screenshot") } : step);
+  }
+  const signatories = [];
+  for (const signatory of state.rcaSignatories || []) {
+    signatories.push(signatory.signature ? { ...signatory, signature: await shrink(signatory.signature, "signature") } : signatory);
+  }
+  const company = { ...state.rcaCompany || {} };
+  if (company.logo) company.logo = await shrink(company.logo, "logo");
+  return {
+    changed,
+    savedBytes,
+    next: { ...state, procedure: { ...procedure, steps }, rcaSignatories: signatories, rcaCompany: company }
+  };
 }
 const PROCEDURE_DOCX_STATE_MARKER = "MRG_PROCEDURE_STATE_V1:";
 function procedureUtf8ToBase64(value) {
@@ -10566,6 +10677,48 @@ function ProcedureSidebar({ state, setState, sync, onRetrySync, busy, onExport, 
   const theme = state.theme || "dark";
   const importRef = useRef(null);
   const update = (patch) => setState((s) => ({ ...s, procedure: { ...procedureNormalizeState(s.procedure), ...patch } }));
+  const [compacting, setCompacting] = useState(false);
+  const [compactNote, setCompactNote] = useState("");
+  const [stateBytes, setStateBytes] = useState(0);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        setStateBytes(new TextEncoder().encode(JSON.stringify(state)).length);
+      } catch {
+        setStateBytes(0);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [state]);
+  const imageBytes = useMemo(() => {
+    const steps = procedureNormalizeState(state.procedure).steps || [];
+    return steps.reduce((total, step) => total + storedBytes(step.image), 0) + (state.rcaSignatories || []).reduce((total, s) => total + storedBytes(s.signature), 0) + storedBytes(state.rcaCompany?.logo);
+  }, [state.procedure, state.rcaSignatories, state.rcaCompany]);
+  const overBudget = stateBytes > FIRESTORE_DOC_LIMIT * 0.8;
+  const kb = (bytes) => `${Math.round(bytes / 1024).toLocaleString()} KB`;
+  const onCompactImages = async () => {
+    setCompacting(true);
+    setCompactNote("");
+    try {
+      const result = await compactStateImages(state);
+      if (!result.changed) {
+        setCompactNote("Already compact — nothing to shrink.");
+      } else {
+        setState((s) => ({
+          ...s,
+          procedure: result.next.procedure,
+          rcaSignatories: result.next.rcaSignatories,
+          rcaCompany: result.next.rcaCompany
+        }));
+        setCompactNote(`Shrank ${result.changed} image${result.changed === 1 ? "" : "s"}, freed ${kb(result.savedBytes)}.`);
+      }
+    } catch (e) {
+      console.warn("Compacting images failed", e);
+      setCompactNote("Could not compact: " + (e?.message || "unknown error"));
+    } finally {
+      setCompacting(false);
+    }
+  };
   return /* @__PURE__ */ React.createElement("aside", { className: "w-[320px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SyncBadge, { sync, onRetry: onRetrySync }), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -10588,7 +10741,13 @@ function ProcedureSidebar({ state, setState, sync, onRetrySync, busy, onExport, 
         if (file) await onImport(file);
       }
     }
-  ), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => importRef.current?.click(), disabled: busy, className: "w-full mt-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Import Word"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "App-generated Word files reopen exactly. Other .docx files are mapped into this Procedure layout for review.")), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-[11px] font-medium text-blue-200" }, "Word document (.docx)"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-[10px] leading-relaxed text-neutral-500" }, "Create an editable Microsoft Word file from the current procedure. No Google Sheet is created."))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Creating Word file") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Create my Word file (.docx)")), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onClear, disabled: busy, className: "w-full" }, /* @__PURE__ */ React.createElement(IconX, null), " Clear Procedure")));
+  ), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => importRef.current?.click(), disabled: busy, className: "w-full mt-2" }, /* @__PURE__ */ React.createElement(IconUpload, null), " Import Word"), /* @__PURE__ */ React.createElement("p", { className: "mt-2 text-[10px] leading-relaxed text-neutral-600" }, "App-generated Word files reopen exactly. Other .docx files are mapped into this Procedure layout for review.")), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2.5" }, /* @__PURE__ */ React.createElement("div", { className: "text-[11px] font-medium text-blue-200" }, "Word document (.docx)"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-[10px] leading-relaxed text-neutral-500" }, "Create an editable Microsoft Word file from the current procedure. No Google Sheet is created.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Cloud sync fails above 1 MB" }, "Sync footprint"), /* @__PURE__ */ React.createElement("div", { className: `rounded-md border px-3 py-2.5 ${overBudget ? "border-amber-500/40 bg-amber-500/5" : "border-neutral-900 bg-neutral-950"}` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline justify-between gap-2" }, /* @__PURE__ */ React.createElement("span", { className: `text-xs font-medium ${overBudget ? "text-amber-200" : "text-neutral-200"}` }, kb(stateBytes)), /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, "of ", kb(FIRESTORE_DOC_LIMIT), " limit")), /* @__PURE__ */ React.createElement("div", { className: "mt-1.5 h-1 rounded-full bg-neutral-900 overflow-hidden" }, /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      className: `h-full rounded-full ${overBudget ? "bg-amber-400" : "bg-emerald-500"}`,
+      style: { width: `${Math.min(100, Math.round(stateBytes / FIRESTORE_DOC_LIMIT * 100))}%` }
+    }
+  )), /* @__PURE__ */ React.createElement("div", { className: "mt-2 text-[10px] text-neutral-600" }, kb(imageBytes), " of that is images"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: onCompactImages, disabled: compacting || busy, className: "w-full mt-2" }, compacting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Compacting") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Compact images")), compactNote && /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-neutral-400" }, compactNote), /* @__PURE__ */ React.createElement("p", { className: "mt-1.5 text-[10px] leading-relaxed text-neutral-600" }, "Re-encodes screenshots, signatures and the RCA logo at display size. New uploads are shrunk automatically.")))), /* @__PURE__ */ React.createElement("div", { className: "p-5 border-t border-neutral-900 space-y-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "lg", onClick: onExport, disabled: busy, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Creating Word file") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(IconDownload, null), " Create my Word file (.docx)")), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onClear, disabled: busy, className: "w-full" }, /* @__PURE__ */ React.createElement(IconX, null), " Clear Procedure")));
 }
 function procedureEditorRect(action) {
   return {
@@ -10900,8 +11059,8 @@ function ProcedureEditor({ proc, onChange, onImageError }) {
     {
       image: editingStep.image,
       onCancel: () => setEditingStepId(null),
-      onSave: (editedImage) => {
-        updateStep(editingStep.id, { image: editedImage });
+      onSave: async (editedImage) => {
+        updateStep(editingStep.id, { image: await shrinkImageDataUrl(editedImage, "screenshot") });
         setEditingStepId(null);
       }
     }
@@ -11620,7 +11779,9 @@ function RcaSignatoriesPanel({ state, setState, sync }) {
     e.target.value = "";
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => updateSignatory(id, { signature: String(reader.result || "") });
+    reader.onload = async () => updateSignatory(id, {
+      signature: await shrinkImageDataUrl(String(reader.result || ""), "signature")
+    });
     reader.readAsDataURL(file);
   };
   const moveSig = (idx, delta) => {
@@ -11820,7 +11981,9 @@ function RcaForm({ state, setState, sync }) {
     e.target.value = "";
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => update({ logo: String(reader.result || "") });
+    reader.onload = async () => update({
+      logo: await shrinkImageDataUrl(String(reader.result || ""), "logo")
+    });
     reader.readAsDataURL(file);
   };
   const activeLogo = rca.logo || RCA_LETTERHEAD.logo;
@@ -14657,7 +14820,12 @@ function App() {
         setSync((s) => ({ ...s, status: "synced", message: null }));
       } catch (e) {
         console.warn("Firestore save failed", e);
-        setSync((s) => ({ ...s, status: "offline", message: syncErrorMessage(e, "Cloud sync save failed") }));
+        const overSize = /exceeds the maximum allowed size|invalid-argument/i.test(String(e?.message || e)) && new TextEncoder().encode(snapshotJson).length > FIRESTORE_DOC_LIMIT * 0.9;
+        setSync((s) => ({
+          ...s,
+          status: "offline",
+          message: overSize ? 'Cloud sync save failed — your saved data is over the 1 MB limit, almost always because of stored images. Open the Procedure module and use "Compact images", then Retry.' : syncErrorMessage(e, "Cloud sync save failed")
+        }));
       }
     }, 400);
     return () => {
