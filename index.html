@@ -1695,6 +1695,18 @@
         var(--glass-card) !important;
       box-shadow: var(--glass-soft-shadow), var(--glass-inset) !important;
     }
+
+    /* Sidebar disclosure panels already sit on the sidebar's glass surface.
+       Giving them another blurred backdrop and a wide outer shadow creates a
+       separate compositor layer; Chromium can briefly repaint that shadow as
+       a dark strip when controls in the main workspace are hovered. Keep the
+       subtle glass edge, but avoid the redundant nested blur and cast shadow. */
+    body > #root > div > aside details {
+      box-shadow: var(--glass-inset) !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+
     /* Translucent panel fill — FLAT, IN-PAGE SURFACES ONLY.
        `bg-[#232327]` must NOT be listed here. Per the §11d ramp it is the
        "raised card / modal / popover" step, i.e. every floating surface in the
