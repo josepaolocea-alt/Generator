@@ -1663,6 +1663,21 @@
       return `AND(${bmrBuildConditionFormula(rule, cellRef)},EXACT($A${rowNum},"${safeName}"))`;
     }
 
+    // Colour rules are batched by fill, so one rule covers up to this many
+    // client names. Small batches keep the formula far below Excel's length
+    // limit while collapsing hundreds of single-client rules into a handful.
+    const BMR_COLOR_RULE_NAMES = 20;
+
+    // True when the carrier cell exactly matches one of the batch's client
+    // names. Deliberately only OR + EXACT, so a batched rule behaves exactly
+    // like the single-name rule it replaces in Excel and in Google Sheets.
+    function bmrNameMatchFormula(names, cellRef) {
+      const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
+      const tests = (names || []).map(name => `EXACT(${cleanText},"${String(name).replace(/"/g, '""')}")`);
+      if (!tests.length) return 'FALSE';
+      return tests.length === 1 ? tests[0] : `OR(${tests.join(',')})`;
+    }
+
     /* ------------------------------------------------------------
        Red-cell counters — one big number per time slot showing how
        many Amnt Receivable / BALANCE cells that slot's rules highlight.
@@ -1899,60 +1914,83 @@
       applyBmrNumberFormats(ws, dataStartRow, dataEndRow, slots.length);
       applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
 
-      // Conditional formatting — Amnt Receivable target rules for their selected clients
+      // Conditional formatting — Amnt Receivable target rules for their selected
+      // clients. All 25 time-slot columns ride in ONE rule instead of one rule
+      // per slot: the ref lists every slot's column band, and Excel/Sheets shift
+      // the formula's relative references one 12-column block per band, so each
+      // band is evaluated exactly as its own per-column rule was. Rule count is
+      // what makes an Exact Google Sheets rebuild slow — every rule already in
+      // the destination costs its own deleteConditionalFormatRule request, and
+      // every generated rule is converted, pasted and recalculated — so do not
+      // go back to emitting one rule per column here.
       let priorityCounter = 100;
       const visibleClientsById = new Map(visibleClients.map(c => [c.id, c]));
+      const bandRef = (letters) => letters.map(cl => `${cl}${dataStartRow}:${cl}${dataEndRow}`).join(' ');
+      const targetRef = bandRef(BMR_TARGET_COL_LETTERS);
+      const targetAnchor = `${BMR_TARGET_COL_LETTERS[0]}${dataStartRow}`;
       (bmr.targetRules || []).filter(r => r.enabled).forEach((rule) => {
         const client = visibleClientsById.get(rule.clientId);
         if (!client?.name) return;
-        BMR_TARGET_COL_LETTERS.forEach((cl) => {
-          const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
-          ws.addConditionalFormatting({
-            ref,
-            rules: [{
-              type: 'expression',
-              formulae: [bmrBuildClientConditionFormula(rule, `${cl}${dataStartRow}`, client.name, dataStartRow)],
-              style: bmrStyleFromRule(rule),
-              priority: priorityCounter++,
-            }],
-          });
-        });
-      });
-
-      // 30-min usage rules
-      (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
-        BMR_USAGE_COL_LETTERS.forEach((cl) => {
-          const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
-          ws.addConditionalFormatting({
-            ref,
-            rules: [{
-              type: 'expression',
-              formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
-              style: bmrStyleFromRule(rule),
-              priority: priorityCounter++,
-            }],
-          });
-        });
-      });
-
-      // Client text-match colouring on carrier cells so the color follows pasted names.
-      visibleClients.forEach((cl) => {
-        const clientColor = bmrClientColor(bmr, cl, accountManagersById);
-        if (!clientColor) return;
-        const safe = (cl.name || '').replace(/"/g, '""');
-        const carrierCols = ['A'];
-        if (bmr.colorBlockCarrierNames !== false) {
-          for (let k = 0; k < slots.length; k++) carrierCols.push(colLetter(3 + k * BMR_BLOCK_COLS));
-        }
         ws.addConditionalFormatting({
-          ref: carrierCols.map((carrierCol) => `${carrierCol}${dataStartRow}:${carrierCol}${dataEndRow}`).join(' '),
+          ref: targetRef,
           rules: [{
             type: 'expression',
-            formulae: [`EXACT(TRIM(SUBSTITUTE(A${dataStartRow}&"",CHAR(160),"")),"${safe}")`],
-            style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: argbHex(clientColor) } } },
+            formulae: [bmrBuildClientConditionFormula(rule, targetAnchor, client.name, dataStartRow)],
+            style: bmrStyleFromRule(rule),
             priority: priorityCounter++,
           }],
         });
+      });
+
+      // 30-min usage rules — same one-rule-per-rule banding.
+      const usageRef = bandRef(BMR_USAGE_COL_LETTERS);
+      const usageAnchor = `${BMR_USAGE_COL_LETTERS[0]}${dataStartRow}`;
+      (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
+        ws.addConditionalFormatting({
+          ref: usageRef,
+          rules: [{
+            type: 'expression',
+            formulae: [bmrBuildConditionFormula(rule, usageAnchor)],
+            style: bmrStyleFromRule(rule),
+            priority: priorityCounter++,
+          }],
+        });
+      });
+
+      // Client text-match colouring on carrier cells so the color follows pasted
+      // names. Clients that share a colour share a rule, in batches, because one
+      // rule per client is hundreds of rules on a full client list. A name is
+      // listed once: the first matching rule wins, so the later duplicates of a
+      // repeated name never painted anything to begin with.
+      const carrierCols = ['A'];
+      if (bmr.colorBlockCarrierNames !== false) {
+        for (let k = 0; k < slots.length; k++) carrierCols.push(colLetter(3 + k * BMR_BLOCK_COLS));
+      }
+      const carrierRef = bandRef(carrierCols);
+      const colorGroups = new Map();
+      const coloredNames = new Set();
+      visibleClients.forEach((cl) => {
+        const clientColor = bmrClientColor(bmr, cl, accountManagersById);
+        if (!clientColor) return;
+        const name = String(cl.name || '');
+        if (!name || coloredNames.has(name)) return;
+        coloredNames.add(name);
+        const argb = argbHex(clientColor);
+        if (!colorGroups.has(argb)) colorGroups.set(argb, []);
+        colorGroups.get(argb).push(name);
+      });
+      colorGroups.forEach((names, argb) => {
+        for (let start = 0; start < names.length; start += BMR_COLOR_RULE_NAMES) {
+          ws.addConditionalFormatting({
+            ref: carrierRef,
+            rules: [{
+              type: 'expression',
+              formulae: [bmrNameMatchFormula(names.slice(start, start + BMR_COLOR_RULE_NAMES), `A${dataStartRow}`)],
+              style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb } } },
+              priority: priorityCounter++,
+            }],
+          });
+        }
       });
 
       // Totals row: per-slot count of Amnt Receivable cells the target rules
@@ -2984,6 +3022,7 @@
 
           const requests = [];
           const frozenRestores = [];
+          const clearedConditionalFormats = [];
           staged.forEach((item) => {
             const destinationId = item.existing.sheetId;
             const sourceId = item.copied.sheetId;
@@ -3052,7 +3091,9 @@
             // Repeating index 0 is intentional: each deletion shifts the next
             // rule into index 0 before the following request is applied.
             requests.push({ unmergeCells: { range: workingRange } });
-            for (let i = 0; i < (destinationSheet.conditionalFormats || []).length; i++) {
+            const existingRuleCount = (destinationSheet.conditionalFormats || []).length;
+            clearedConditionalFormats.push({ tab: item.dim.title, rules: existingRuleCount });
+            for (let i = 0; i < existingRuleCount; i++) {
               requests.push({ deleteConditionalFormatRule: { sheetId: destinationId, index: 0 } });
             }
 
@@ -3103,6 +3144,14 @@
               },
             });
             requests.push({ deleteSheet: { sheetId: sourceId } });
+          });
+          // Conditional-format rules can only be deleted one request at a time,
+          // so a tab carrying thousands of them dominates this batch on its own.
+          // Log the counts: they are the first thing to check when an Exact sync
+          // of a rule-heavy module feels slow.
+          console.info('Google Sheets Exact sync batch', {
+            requests: requests.length,
+            clearedConditionalFormats,
           });
           try {
             await timeStage('applyReplacement', () => batchUpdateSheets(fileId, requests, 'rebuilding the checked tabs'));

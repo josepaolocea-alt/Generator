@@ -3567,6 +3567,13 @@ function bmrBuildClientConditionFormula(rule, cellRef, clientName, rowNum) {
   if (!safeName) return "FALSE";
   return `AND(${bmrBuildConditionFormula(rule, cellRef)},EXACT($A${rowNum},"${safeName}"))`;
 }
+const BMR_COLOR_RULE_NAMES = 20;
+function bmrNameMatchFormula(names, cellRef) {
+  const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
+  const tests = (names || []).map((name) => `EXACT(${cleanText},"${String(name).replace(/"/g, '""')}")`);
+  if (!tests.length) return "FALSE";
+  return tests.length === 1 ? tests[0] : `OR(${tests.join(",")})`;
+}
 function bmrArrayNumericExpr(rangeRef) {
   const cleanText = `TRIM(SUBSTITUTE(${rangeRef}&"",CHAR(160),""))`;
   return `IFERROR(VALUE(SUBSTITUTE(${cleanText},",","")),${rangeRef})`;
@@ -3779,53 +3786,64 @@ function buildBmrSheet(ws, bmr, shift) {
   applyBmrBorders(ws, bmr, totalCols, dataEndRow, slots.length);
   let priorityCounter = 100;
   const visibleClientsById = new Map(visibleClients.map((c) => [c.id, c]));
+  const bandRef = (letters) => letters.map((cl) => `${cl}${dataStartRow}:${cl}${dataEndRow}`).join(" ");
+  const targetRef = bandRef(BMR_TARGET_COL_LETTERS);
+  const targetAnchor = `${BMR_TARGET_COL_LETTERS[0]}${dataStartRow}`;
   (bmr.targetRules || []).filter((r) => r.enabled).forEach((rule) => {
     const client = visibleClientsById.get(rule.clientId);
     if (!client?.name) return;
-    BMR_TARGET_COL_LETTERS.forEach((cl) => {
-      const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
-      ws.addConditionalFormatting({
-        ref,
-        rules: [{
-          type: "expression",
-          formulae: [bmrBuildClientConditionFormula(rule, `${cl}${dataStartRow}`, client.name, dataStartRow)],
-          style: bmrStyleFromRule(rule),
-          priority: priorityCounter++
-        }]
-      });
-    });
-  });
-  (bmr.usageRules || []).filter((r) => r.enabled).forEach((rule) => {
-    BMR_USAGE_COL_LETTERS.forEach((cl) => {
-      const ref = `${cl}${dataStartRow}:${cl}${dataEndRow}`;
-      ws.addConditionalFormatting({
-        ref,
-        rules: [{
-          type: "expression",
-          formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
-          style: bmrStyleFromRule(rule),
-          priority: priorityCounter++
-        }]
-      });
-    });
-  });
-  visibleClients.forEach((cl) => {
-    const clientColor = bmrClientColor(bmr, cl, accountManagersById);
-    if (!clientColor) return;
-    const safe = (cl.name || "").replace(/"/g, '""');
-    const carrierCols = ["A"];
-    if (bmr.colorBlockCarrierNames !== false) {
-      for (let k = 0; k < slots.length; k++) carrierCols.push(colLetter(3 + k * BMR_BLOCK_COLS));
-    }
     ws.addConditionalFormatting({
-      ref: carrierCols.map((carrierCol) => `${carrierCol}${dataStartRow}:${carrierCol}${dataEndRow}`).join(" "),
+      ref: targetRef,
       rules: [{
         type: "expression",
-        formulae: [`EXACT(TRIM(SUBSTITUTE(A${dataStartRow}&"",CHAR(160),"")),"${safe}")`],
-        style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: argbHex(clientColor) } } },
+        formulae: [bmrBuildClientConditionFormula(rule, targetAnchor, client.name, dataStartRow)],
+        style: bmrStyleFromRule(rule),
         priority: priorityCounter++
       }]
     });
+  });
+  const usageRef = bandRef(BMR_USAGE_COL_LETTERS);
+  const usageAnchor = `${BMR_USAGE_COL_LETTERS[0]}${dataStartRow}`;
+  (bmr.usageRules || []).filter((r) => r.enabled).forEach((rule) => {
+    ws.addConditionalFormatting({
+      ref: usageRef,
+      rules: [{
+        type: "expression",
+        formulae: [bmrBuildConditionFormula(rule, usageAnchor)],
+        style: bmrStyleFromRule(rule),
+        priority: priorityCounter++
+      }]
+    });
+  });
+  const carrierCols = ["A"];
+  if (bmr.colorBlockCarrierNames !== false) {
+    for (let k = 0; k < slots.length; k++) carrierCols.push(colLetter(3 + k * BMR_BLOCK_COLS));
+  }
+  const carrierRef = bandRef(carrierCols);
+  const colorGroups = /* @__PURE__ */ new Map();
+  const coloredNames = /* @__PURE__ */ new Set();
+  visibleClients.forEach((cl) => {
+    const clientColor = bmrClientColor(bmr, cl, accountManagersById);
+    if (!clientColor) return;
+    const name = String(cl.name || "");
+    if (!name || coloredNames.has(name)) return;
+    coloredNames.add(name);
+    const argb = argbHex(clientColor);
+    if (!colorGroups.has(argb)) colorGroups.set(argb, []);
+    colorGroups.get(argb).push(name);
+  });
+  colorGroups.forEach((names, argb) => {
+    for (let start = 0; start < names.length; start += BMR_COLOR_RULE_NAMES) {
+      ws.addConditionalFormatting({
+        ref: carrierRef,
+        rules: [{
+          type: "expression",
+          formulae: [bmrNameMatchFormula(names.slice(start, start + BMR_COLOR_RULE_NAMES), `A${dataStartRow}`)],
+          style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb } } },
+          priority: priorityCounter++
+        }]
+      });
+    }
   });
   const redCountRow = dataEndRow + 2;
   const enabledTargetRules = (bmr.targetRules || []).filter((r) => r.enabled).map((rule) => ({ rule, client: visibleClientsById.get(rule.clientId) })).filter((entry) => entry.client?.name);
@@ -4704,6 +4722,7 @@ const googleSheetsSync = (() => {
       });
       const requests = [];
       const frozenRestores = [];
+      const clearedConditionalFormats = [];
       staged.forEach((item) => {
         const destinationId = item.existing.sheetId;
         const sourceId = item.copied.sheetId;
@@ -4756,7 +4775,9 @@ const googleSheetsSync = (() => {
           });
         }
         requests.push({ unmergeCells: { range: workingRange } });
-        for (let i = 0; i < (destinationSheet.conditionalFormats || []).length; i++) {
+        const existingRuleCount = (destinationSheet.conditionalFormats || []).length;
+        clearedConditionalFormats.push({ tab: item.dim.title, rules: existingRuleCount });
+        for (let i = 0; i < existingRuleCount; i++) {
           requests.push({ deleteConditionalFormatRule: { sheetId: destinationId, index: 0 } });
         }
         requests.push({
@@ -4805,6 +4826,10 @@ const googleSheetsSync = (() => {
           }
         });
         requests.push({ deleteSheet: { sheetId: sourceId } });
+      });
+      console.info("Google Sheets Exact sync batch", {
+        requests: requests.length,
+        clearedConditionalFormats
       });
       try {
         await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests, "rebuilding the checked tabs"));
