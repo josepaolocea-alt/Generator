@@ -2537,7 +2537,7 @@
       // Metadata needed by an in-place Exact update. Keeping this separate
       // from getSheetTabs avoids pulling grid metadata during the much more
       // common lightweight tab-existence checks.
-      async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true, operation = 'reading tab metadata' } = {}) {
+      async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true, merges = true, operation = 'reading tab metadata' } = {}) {
         const token = await getToken();
         const parts = [
           'properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))',
@@ -2546,6 +2546,7 @@
         // and existing conditional-format rules only from the destination.
         // Asking each side for just its half keeps a tab with thousands of rows
         // from returning per-row metadata twice.
+        if (merges) parts.push('merges');
         if (conditionalFormats) parts.push('conditionalFormats(ranges)');
         if (dimensionMetadata) parts.push('data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))');
         const fields = 'sheets(' + parts.join(',') + ')';
@@ -2579,6 +2580,17 @@
         );
         if (!r.ok) throw await driveError(r, operation);
         return await r.json();
+      }
+
+      // Sheets has used several wordings for the same invalid freeze/merge
+      // request. Keep this semantic instead of matching only "frozen column":
+      // newer responses say "can't freeze columns which contain only part of
+      // a merged cell", while older responses refer to a "frozen region".
+      function isFreezeMergeConflict(error) {
+        const message = String((error && error.message) || '');
+        return /\b(?:freeze|frozen)\b/i.test(message)
+          && /\bmerge(?:d|s)?\b/i.test(message)
+          && /\b(?:row|rows|column|columns|region|pane|panes)\b/i.test(message);
       }
 
       const a1SheetTitle = (title) => "'" + String(title || '').replace(/'/g, "''") + "'";
@@ -2910,10 +2922,10 @@
               });
             }),
             timeStage('sourceMetadata', () => getSheetReplacementMetadata(tempId, sourceRanges, {
-              dimensionMetadata: true, conditionalFormats: false, operation: 'reading the generated layout metadata',
+              dimensionMetadata: true, conditionalFormats: false, merges: true, operation: 'reading the generated layout metadata',
             })),
             timeStage('destinationMetadata', () => getSheetReplacementMetadata(fileId, destinationRanges, {
-              dimensionMetadata: false, conditionalFormats: true, operation: 'reading the destination layout metadata',
+              dimensionMetadata: false, conditionalFormats: true, merges: false, operation: 'reading the destination layout metadata',
             })),
           ]);
           // A failed copy is fatal. A failed metadata read is not: fall back to
@@ -3083,7 +3095,7 @@
             // because a merged range crosses it, the rebuilt layout matters more
             // than the frozen pane: reapply without freezing and report which
             // tabs lost it rather than failing the whole sync.
-            if (!/frozen (region|row|column)/i.test(String((error && error.message) || ''))) throw error;
+            if (!isFreezeMergeConflict(error)) throw error;
             frozenSkipped = frozenRestores
               .filter(entry => (entry.properties.gridProperties.frozenRowCount || 0)
                 || (entry.properties.gridProperties.frozenColumnCount || 0))

@@ -4333,11 +4333,12 @@ const googleSheetsSync = (() => {
     const body = await r.json();
     return (body.sheets || []).map((s) => s.properties).filter((p) => p && Number.isInteger(p.sheetId) && p.title);
   }
-  async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true, operation = "reading tab metadata" } = {}) {
+  async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true, merges = true, operation = "reading tab metadata" } = {}) {
     const token = await getToken();
     const parts = [
       "properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))"
     ];
+    if (merges) parts.push("merges");
     if (conditionalFormats) parts.push("conditionalFormats(ranges)");
     if (dimensionMetadata) parts.push("data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))");
     const fields = "sheets(" + parts.join(",") + ")";
@@ -4363,6 +4364,10 @@ const googleSheetsSync = (() => {
     );
     if (!r.ok) throw await driveError(r, operation);
     return await r.json();
+  }
+  function isFreezeMergeConflict(error) {
+    const message = String(error && error.message || "");
+    return /\b(?:freeze|frozen)\b/i.test(message) && /\bmerge(?:d|s)?\b/i.test(message) && /\b(?:row|rows|column|columns|region|pane|panes)\b/i.test(message);
   }
   const a1SheetTitle = (title) => "'" + String(title || "").replace(/'/g, "''") + "'";
   function packValueRanges(valueSheets, maxJsonChars = 14e5) {
@@ -4647,11 +4652,13 @@ const googleSheetsSync = (() => {
         timeStage("sourceMetadata", () => getSheetReplacementMetadata(tempId, sourceRanges, {
           dimensionMetadata: true,
           conditionalFormats: false,
+          merges: true,
           operation: "reading the generated layout metadata"
         })),
         timeStage("destinationMetadata", () => getSheetReplacementMetadata(fileId, destinationRanges, {
           dimensionMetadata: false,
           conditionalFormats: true,
+          merges: false,
           operation: "reading the destination layout metadata"
         }))
       ]);
@@ -4791,7 +4798,7 @@ const googleSheetsSync = (() => {
       try {
         await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests, "rebuilding the checked tabs"));
       } catch (error) {
-        if (!/frozen (region|row|column)/i.test(String(error && error.message || ""))) throw error;
+        if (!isFreezeMergeConflict(error)) throw error;
         frozenSkipped = frozenRestores.filter((entry) => entry.properties.gridProperties.frozenRowCount || 0 || (entry.properties.gridProperties.frozenColumnCount || 0)).map((entry) => entry.title);
         frozenRestores.forEach((entry) => {
           entry.properties.gridProperties.frozenRowCount = 0;
