@@ -2467,11 +2467,12 @@
         return err;
       }
 
-      async function fetchWithGoogleRetry(url, options, attempts = 4) {
+      const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
+      async function fetchWithGoogleRetry(url, options, attempts = 4, statuses = RETRYABLE_STATUSES) {
         let response;
         for (let attempt = 0; attempt < attempts; attempt++) {
           response = await fetch(url, options);
-          if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === attempts - 1) return response;
+          if (response.ok || !statuses.includes(response.status) || attempt === attempts - 1) return response;
           const delay = Math.min(4000, 350 * (2 ** attempt)) + Math.floor(Math.random() * 250);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -2511,13 +2512,18 @@
       // Metadata needed by an in-place Exact update. Keeping this separate
       // from getSheetTabs avoids pulling grid metadata during the much more
       // common lightweight tab-existence checks.
-      async function getSheetReplacementMetadata(fileId, ranges = []) {
+      async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true } = {}) {
         const token = await getToken();
-        const fields = 'sheets(' + [
+        const parts = [
           'properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))',
-          'conditionalFormats(ranges)',
-          'data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))',
-        ].join(',') + ')';
+        ];
+        // Row/column sizing is only ever read from the generated staging tabs,
+        // and existing conditional-format rules only from the destination.
+        // Asking each side for just its half keeps a tab with thousands of rows
+        // from returning per-row metadata twice.
+        if (conditionalFormats) parts.push('conditionalFormats(ranges)');
+        if (dimensionMetadata) parts.push('data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))');
+        const fields = 'sheets(' + parts.join(',') + ')';
         // Exact replacement only needs metadata for the selected destination
         // tabs and their copied staging tabs. Without ranges, Sheets expands
         // this field mask across every tab in the shared workbook, which gets
@@ -2647,13 +2653,18 @@
 
       async function copySheetTabRaw(sourceFileId, sourceSheetId, destinationFileId) {
         const token = await getToken();
-        const copyResp = await fetch(
+        // Only rate-limit/unavailable responses are retried. A 500 leaves it
+        // ambiguous whether the tab was copied, and a blind retry there would
+        // leave an orphan "Copy of ..." tab behind in the destination.
+        const copyResp = await fetchWithGoogleRetry(
           'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(sourceFileId) + '/sheets/' + encodeURIComponent(sourceSheetId) + ':copyTo',
           {
             method: 'POST',
             headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
             body: JSON.stringify({ destinationSpreadsheetId: destinationFileId }),
           },
+          4,
+          [429, 503],
         );
         if (!copyResp.ok) throw await driveError(copyResp);
         return await copyResp.json();
@@ -2694,7 +2705,7 @@
             const source = sourceByTitle.get(want.title);
             if (!source) throw new Error('Generated tab "' + want.title + '" was not found in the converted workbook.');
           });
-          await mapWithConcurrency(missing, 4, async (want) => {
+          await mapWithConcurrency(missing, 8, async (want) => {
             const source = sourceByTitle.get(want.title);
             const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
             staged.push({ dim: want, copied });
@@ -2814,49 +2825,89 @@
           try { return await work(); }
           finally { timings[name] = Math.round(performance.now() - startedAt); }
         };
-        const destinationTabs = await timeStage('destinationTabs', () => getSheetTabs(fileId));
-        const destinationByTitle = new Map(destinationTabs.map(p => [p.title, p]));
-        const replaceable = wanted
-          .map(dim => ({ dim, existing: destinationByTitle.get(dim.title) }))
-          .filter(item => item.existing);
-        const missing = wanted.filter(dim => !destinationByTitle.has(dim.title)).map(dim => dim.title);
-        if (!replaceable.length) return { updated: [], missing, timings };
 
         let tempId = '';
+        let cleanupPromise = null;
+        let missing = [];
+        let frozenSkipped = [];
         const staged = [];
-        try {
-          tempId = await timeStage('stagingConversion', () => createSheet((tempName || 'Generator') + ' — update staging', blob));
-          const sourceTabs = await timeStage('stagingTabs', () => getSheetTabs(tempId));
-          const sourceByTitle = new Map(sourceTabs.map(p => [p.title, p]));
-          replaceable.forEach((item) => {
-            const source = sourceByTitle.get(item.dim.title);
-            if (!source) throw new Error('Generated tab "' + item.dim.title + '" was not found in the converted workbook.');
-          });
-          await timeStage('tabCopies', () => mapWithConcurrency(replaceable, 4, async (item) => {
-            const source = sourceByTitle.get(item.dim.title);
-            const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
-            staged.push({ ...item, copied });
-          }));
 
-          const metadataRanges = staged.flatMap((item) => {
-            const rows = Math.max(1, item.dim.rows || 1);
-            const cols = Math.max(1, item.dim.cols || 1);
-            const existingGrid = item.existing.gridProperties || {};
-            const destinationRows = Math.max(rows, existingGrid.rowCount || 1);
-            const destinationCols = Math.max(cols, existingGrid.columnCount || 1);
-            return [
-              a1SheetTitle(item.existing.title) + '!A1:' + colLetter(destinationCols) + destinationRows,
-              a1SheetTitle(item.copied.title) + '!A1:' + colLetter(cols) + rows,
-            ];
+        // The Drive upload + xlsx conversion is the slowest single call in an
+        // Exact sync and does not depend on the destination lookup, so both
+        // round trips are started together instead of running back to back.
+        const stagingConversion = timeStage(
+          'stagingConversion',
+          () => createSheet((tempName || 'Generator') + ' — update staging', blob),
+        ).then((id) => { tempId = id; return id; });
+        const opened = await Promise.allSettled([
+          timeStage('destinationTabs', () => getSheetTabs(fileId)),
+          stagingConversion,
+        ]);
+
+        try {
+          const openFailure = opened.find(result => result.status === 'rejected');
+          if (openFailure) throw openFailure.reason;
+          const destinationTabs = opened[0].value;
+          const destinationByTitle = new Map(destinationTabs.map(p => [p.title, p]));
+          const replaceable = wanted
+            .map(dim => ({ dim, existing: destinationByTitle.get(dim.title) }))
+            .filter(item => item.existing);
+          missing = wanted.filter(dim => !destinationByTitle.has(dim.title)).map(dim => dim.title);
+          if (!replaceable.length) return { updated: [], missing, timings };
+
+          const sourceRanges = replaceable.map(item =>
+            a1SheetTitle(item.dim.title) + '!A1:' +
+            colLetter(Math.max(1, item.dim.cols || 1)) + Math.max(1, item.dim.rows || 1));
+          const destinationRanges = replaceable.map((item) => {
+            const grid = item.existing.gridProperties || {};
+            const rows = Math.max(Math.max(1, item.dim.rows || 1), grid.rowCount || 1);
+            const cols = Math.max(Math.max(1, item.dim.cols || 1), grid.columnCount || 1);
+            return a1SheetTitle(item.existing.title) + '!A1:' + colLetter(cols) + rows;
           });
-          const metadata = await timeStage('replacementMetadata', () => getSheetReplacementMetadata(fileId, metadataRanges));
-          const metadataById = new Map(metadata.map(sheet => [sheet.properties.sheetId, sheet]));
+
+          // Row/column sizing, freeze and tab colour are identical in the
+          // staging workbook and in its copies, so they are read straight from
+          // the staging file. That lets the two metadata reads run alongside
+          // the copyTo calls instead of waiting for all of them to finish.
+          const parallel = await Promise.allSettled([
+            timeStage('tabCopies', async () => {
+              const sourceTabs = await getSheetTabs(tempId);
+              const sourceByTitle = new Map(sourceTabs.map(p => [p.title, p]));
+              replaceable.forEach((item) => {
+                if (!sourceByTitle.has(item.dim.title)) {
+                  throw new Error('Generated tab "' + item.dim.title + '" was not found in the converted workbook.');
+                }
+              });
+              return mapWithConcurrency(replaceable, 8, async (item) => {
+                const source = sourceByTitle.get(item.dim.title);
+                const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
+                staged.push({ ...item, copied });
+              });
+            }),
+            timeStage('sourceMetadata', () => getSheetReplacementMetadata(tempId, sourceRanges, {
+              dimensionMetadata: true, conditionalFormats: false,
+            })),
+            timeStage('destinationMetadata', () => getSheetReplacementMetadata(fileId, destinationRanges, {
+              dimensionMetadata: false, conditionalFormats: true,
+            })),
+          ]);
+          const parallelFailure = parallel.find(result => result.status === 'rejected');
+          if (parallelFailure) throw parallelFailure.reason;
+          const sourceByTitleMeta = new Map(parallel[1].value.map(sheet => [sheet.properties.title, sheet]));
+          const destinationById = new Map(parallel[2].value.map(sheet => [sheet.properties.sheetId, sheet]));
+
+          // Nothing reads the staging workbook after this point, so its deletion
+          // overlaps the final batch instead of adding a round trip at the end.
+          cleanupPromise = timeStage('cleanup', () => deleteFile(tempId))
+            .catch((e) => { console.warn('Could not delete temporary Google Sheet', e); });
+
           const requests = [];
+          const frozenRestores = [];
           staged.forEach((item) => {
             const destinationId = item.existing.sheetId;
             const sourceId = item.copied.sheetId;
-            const sourceSheet = metadataById.get(sourceId);
-            const destinationSheet = metadataById.get(destinationId);
+            const sourceSheet = sourceByTitleMeta.get(item.dim.title);
+            const destinationSheet = destinationById.get(destinationId);
             if (!sourceSheet || !destinationSheet) {
               throw new Error('Could not read the generated or existing tab metadata for "' + item.dim.title + '".');
             }
@@ -2899,6 +2950,22 @@
               startColumnIndex: 0,
               endColumnIndex: cols,
             };
+
+            // Sheets rejects the paste outright ("You can't paste merges that
+            // cross the boundary of a frozen region") when a merge in the NEW
+            // layout straddles the freeze line the tab still carries from its
+            // PREVIOUS layout - e.g. a merged note row added above a header
+            // that used to be row 1, or a full-width title over frozen columns.
+            // Clear the stale freeze before pasting; the generated freeze is
+            // reinstated by the final properties update below.
+            if ((destinationGrid.frozenRowCount || 0) || (destinationGrid.frozenColumnCount || 0)) {
+              requests.push({
+                updateSheetProperties: {
+                  properties: { sheetId: destinationId, gridProperties: { frozenRowCount: 0, frozenColumnCount: 0 } },
+                  fields: 'gridProperties.frozenRowCount,gridProperties.frozenColumnCount',
+                },
+              });
+            }
 
             // Remove sheet-level setup that a paste does not implicitly clear.
             // Repeating index 0 is intentional: each deletion shifts the next
@@ -2947,6 +3014,7 @@
               },
             };
             if (sourceSheet.properties.tabColorStyle) finalProperties.tabColorStyle = sourceSheet.properties.tabColorStyle;
+            frozenRestores.push({ title: item.dim.title, properties: finalProperties });
             requests.push({
               updateSheetProperties: {
                 properties: finalProperties,
@@ -2955,7 +3023,25 @@
             });
             requests.push({ deleteSheet: { sheetId: sourceId } });
           });
-          await timeStage('applyReplacement', () => batchUpdateSheets(fileId, requests));
+          try {
+            await timeStage('applyReplacement', () => batchUpdateSheets(fileId, requests));
+          } catch (error) {
+            // batchUpdate is atomic, so a rejected batch changed nothing and can
+            // be retried as-is. If Sheets still refuses the generated freeze
+            // because a merged range crosses it, the rebuilt layout matters more
+            // than the frozen pane: reapply without freezing and report which
+            // tabs lost it rather than failing the whole sync.
+            if (!/frozen (region|row|column)/i.test(String((error && error.message) || ''))) throw error;
+            frozenSkipped = frozenRestores
+              .filter(entry => (entry.properties.gridProperties.frozenRowCount || 0)
+                || (entry.properties.gridProperties.frozenColumnCount || 0))
+              .map(entry => entry.title);
+            frozenRestores.forEach((entry) => {
+              entry.properties.gridProperties.frozenRowCount = 0;
+              entry.properties.gridProperties.frozenColumnCount = 0;
+            });
+            await timeStage('applyReplacementUnfrozen', () => batchUpdateSheets(fileId, requests));
+          }
           return {
             updated: wanted.filter(dim => staged.some(item => item.dim.title === dim.title)).map(dim => dim.title),
             updatedDims: wanted
@@ -2965,6 +3051,7 @@
                 return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
               }),
             missing,
+            frozenSkipped,
             timings,
           };
         } catch (e) {
@@ -2987,6 +3074,7 @@
                     return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
                   }),
                 missing,
+                frozenSkipped,
                 timings,
               };
               const stagingIds = staged
@@ -2999,7 +3087,9 @@
           }
           throw e;
         } finally {
-          if (tempId) {
+          if (cleanupPromise) {
+            try { await cleanupPromise; } catch { /* already logged above */ }
+          } else if (tempId) {
             try { await timeStage('cleanup', () => deleteFile(tempId)); }
             catch (e) { console.warn('Could not delete temporary Google Sheet', e); }
           }
@@ -15614,6 +15704,7 @@ match /shared/whitelistSmsTestNumbers {
           let updatedTabs = [];
           let missingUpdateTabs = [];
           let requiresExactTabs = [];
+          let frozenSkippedTabs = [];
           let syncedDims = [];
           let exactTimings = null;
           if (createFresh) {
@@ -15657,6 +15748,7 @@ match /shared/whitelistSmsTestNumbers {
             updatedTabs = result.updated;
             syncedDims = result.updatedDims || [];
             missingUpdateTabs = result.missing;
+            frozenSkippedTabs = result.frozenSkipped || [];
             exactTimings = { build: buildDurationMs, ...(result.timings || {}) };
             if (!updatedTabs.length) {
               throw new Error('None of the checked sheets exist in the destination yet. Add each new tab with Add selected tab first.');
@@ -15770,7 +15862,7 @@ match /shared/whitelistSmsTestNumbers {
           }
           setGoogleConn(c => ({
             ...c, connected: true, email: googleSheetsSync.email() || c.email, busyModule: null,
-            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, mode: createFresh ? 'new' : fastValues ? 'fast' : 'exact', durationMs, exactTimings, pasteSumInstalled, pasteSumError: pasteSumHint } },
+            lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, frozenSkippedTabs, mode: createFresh ? 'new' : fastValues ? 'fast' : 'exact', durationMs, exactTimings, pasteSumInstalled, pasteSumError: pasteSumHint } },
           }));
           const successMsg = createFresh
             ? `Created a new personal Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? '' : 's'}; the shared JPGC file was unchanged`
@@ -15788,7 +15880,10 @@ match /shared/whitelistSmsTestNumbers {
           const exactHint = requiresExactTabs.length
             ? `${requiresExactTabs.length} sheet${requiresExactTabs.length === 1 ? '' : 's'} need Exact rebuild because their generated layout dimensions changed.`
             : '';
-          const syncHint = [trimHint, pasteSumHint, exactHint].filter(Boolean).join(' ');
+          const frozenHint = frozenSkippedTabs.length
+            ? `${frozenSkippedTabs.length} sheet${frozenSkippedTabs.length === 1 ? '' : 's'} were rebuilt but could not keep frozen rows/columns — a merged cell crosses the freeze line. Freeze them by hand in Google Sheets if you need it.`
+            : '';
+          const syncHint = [trimHint, pasteSumHint, exactHint, frozenHint].filter(Boolean).join(' ');
           const pasteSumSuffix = pasteSumInstalled ? ' · paste-to-sum enabled' : '';
           const durationSuffix = ` · ${(durationMs / 1000).toFixed(1)}s`;
           setToast({ type: syncHint ? 'err' : 'ok', msg: (syncHint || (successMsg + pasteSumSuffix)) + durationSuffix });

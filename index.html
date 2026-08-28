@@ -4282,11 +4282,12 @@ const googleSheetsSync = (() => {
     err.status = r.status;
     return err;
   }
-  async function fetchWithGoogleRetry(url, options, attempts = 4) {
+  const RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
+  async function fetchWithGoogleRetry(url, options, attempts = 4, statuses = RETRYABLE_STATUSES) {
     let response;
     for (let attempt = 0; attempt < attempts; attempt++) {
       response = await fetch(url, options);
-      if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === attempts - 1) return response;
+      if (response.ok || !statuses.includes(response.status) || attempt === attempts - 1) return response;
       const delay = Math.min(4e3, 350 * 2 ** attempt) + Math.floor(Math.random() * 250);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
@@ -4316,13 +4317,14 @@ const googleSheetsSync = (() => {
     const body = await r.json();
     return (body.sheets || []).map((s) => s.properties).filter((p) => p && Number.isInteger(p.sheetId) && p.title);
   }
-  async function getSheetReplacementMetadata(fileId, ranges = []) {
+  async function getSheetReplacementMetadata(fileId, ranges = [], { dimensionMetadata = true, conditionalFormats = true } = {}) {
     const token = await getToken();
-    const fields = "sheets(" + [
-      "properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))",
-      "conditionalFormats(ranges)",
-      "data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))"
-    ].join(",") + ")";
+    const parts = [
+      "properties(sheetId,title,index,rightToLeft,tabColorStyle,gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount,hideGridlines))"
+    ];
+    if (conditionalFormats) parts.push("conditionalFormats(ranges)");
+    if (dimensionMetadata) parts.push("data(rowMetadata(pixelSize,hiddenByUser),columnMetadata(pixelSize,hiddenByUser))");
+    const fields = "sheets(" + parts.join(",") + ")";
     const rangeQuery = [...new Set((ranges || []).filter(Boolean))].map((range) => "&ranges=" + encodeURIComponent(range)).join("");
     const r = await fetch(
       "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(fileId) + "?fields=" + encodeURIComponent(fields) + rangeQuery,
@@ -4430,13 +4432,15 @@ const googleSheetsSync = (() => {
   }
   async function copySheetTabRaw(sourceFileId, sourceSheetId, destinationFileId) {
     const token = await getToken();
-    const copyResp = await fetch(
+    const copyResp = await fetchWithGoogleRetry(
       "https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(sourceFileId) + "/sheets/" + encodeURIComponent(sourceSheetId) + ":copyTo",
       {
         method: "POST",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ destinationSpreadsheetId: destinationFileId })
-      }
+      },
+      4,
+      [429, 503]
     );
     if (!copyResp.ok) throw await driveError(copyResp);
     return await copyResp.json();
@@ -4467,7 +4471,7 @@ const googleSheetsSync = (() => {
         const source = sourceByTitle.get(want.title);
         if (!source) throw new Error('Generated tab "' + want.title + '" was not found in the converted workbook.');
       });
-      await mapWithConcurrency(missing, 4, async (want) => {
+      await mapWithConcurrency(missing, 8, async (want) => {
         const source = sourceByTitle.get(want.title);
         const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
         staged.push({ dim: want, copied });
@@ -4578,45 +4582,75 @@ const googleSheetsSync = (() => {
         timings[name] = Math.round(performance.now() - startedAt);
       }
     };
-    const destinationTabs = await timeStage("destinationTabs", () => getSheetTabs(fileId));
-    const destinationByTitle = new Map(destinationTabs.map((p) => [p.title, p]));
-    const replaceable = wanted.map((dim) => ({ dim, existing: destinationByTitle.get(dim.title) })).filter((item) => item.existing);
-    const missing = wanted.filter((dim) => !destinationByTitle.has(dim.title)).map((dim) => dim.title);
-    if (!replaceable.length) return { updated: [], missing, timings };
     let tempId = "";
+    let cleanupPromise = null;
+    let missing = [];
+    let frozenSkipped = [];
     const staged = [];
+    const stagingConversion = timeStage(
+      "stagingConversion",
+      () => createSheet((tempName || "Generator") + " — update staging", blob)
+    ).then((id) => {
+      tempId = id;
+      return id;
+    });
+    const opened = await Promise.allSettled([
+      timeStage("destinationTabs", () => getSheetTabs(fileId)),
+      stagingConversion
+    ]);
     try {
-      tempId = await timeStage("stagingConversion", () => createSheet((tempName || "Generator") + " — update staging", blob));
-      const sourceTabs = await timeStage("stagingTabs", () => getSheetTabs(tempId));
-      const sourceByTitle = new Map(sourceTabs.map((p) => [p.title, p]));
-      replaceable.forEach((item) => {
-        const source = sourceByTitle.get(item.dim.title);
-        if (!source) throw new Error('Generated tab "' + item.dim.title + '" was not found in the converted workbook.');
+      const openFailure = opened.find((result) => result.status === "rejected");
+      if (openFailure) throw openFailure.reason;
+      const destinationTabs = opened[0].value;
+      const destinationByTitle = new Map(destinationTabs.map((p) => [p.title, p]));
+      const replaceable = wanted.map((dim) => ({ dim, existing: destinationByTitle.get(dim.title) })).filter((item) => item.existing);
+      missing = wanted.filter((dim) => !destinationByTitle.has(dim.title)).map((dim) => dim.title);
+      if (!replaceable.length) return { updated: [], missing, timings };
+      const sourceRanges = replaceable.map((item) => a1SheetTitle(item.dim.title) + "!A1:" + colLetter(Math.max(1, item.dim.cols || 1)) + Math.max(1, item.dim.rows || 1));
+      const destinationRanges = replaceable.map((item) => {
+        const grid = item.existing.gridProperties || {};
+        const rows = Math.max(Math.max(1, item.dim.rows || 1), grid.rowCount || 1);
+        const cols = Math.max(Math.max(1, item.dim.cols || 1), grid.columnCount || 1);
+        return a1SheetTitle(item.existing.title) + "!A1:" + colLetter(cols) + rows;
       });
-      await timeStage("tabCopies", () => mapWithConcurrency(replaceable, 4, async (item) => {
-        const source = sourceByTitle.get(item.dim.title);
-        const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
-        staged.push({ ...item, copied });
-      }));
-      const metadataRanges = staged.flatMap((item) => {
-        const rows = Math.max(1, item.dim.rows || 1);
-        const cols = Math.max(1, item.dim.cols || 1);
-        const existingGrid = item.existing.gridProperties || {};
-        const destinationRows = Math.max(rows, existingGrid.rowCount || 1);
-        const destinationCols = Math.max(cols, existingGrid.columnCount || 1);
-        return [
-          a1SheetTitle(item.existing.title) + "!A1:" + colLetter(destinationCols) + destinationRows,
-          a1SheetTitle(item.copied.title) + "!A1:" + colLetter(cols) + rows
-        ];
+      const parallel = await Promise.allSettled([
+        timeStage("tabCopies", async () => {
+          const sourceTabs = await getSheetTabs(tempId);
+          const sourceByTitle = new Map(sourceTabs.map((p) => [p.title, p]));
+          replaceable.forEach((item) => {
+            if (!sourceByTitle.has(item.dim.title)) {
+              throw new Error('Generated tab "' + item.dim.title + '" was not found in the converted workbook.');
+            }
+          });
+          return mapWithConcurrency(replaceable, 8, async (item) => {
+            const source = sourceByTitle.get(item.dim.title);
+            const copied = await copySheetTabRaw(tempId, source.sheetId, fileId);
+            staged.push({ ...item, copied });
+          });
+        }),
+        timeStage("sourceMetadata", () => getSheetReplacementMetadata(tempId, sourceRanges, {
+          dimensionMetadata: true,
+          conditionalFormats: false
+        })),
+        timeStage("destinationMetadata", () => getSheetReplacementMetadata(fileId, destinationRanges, {
+          dimensionMetadata: false,
+          conditionalFormats: true
+        }))
+      ]);
+      const parallelFailure = parallel.find((result) => result.status === "rejected");
+      if (parallelFailure) throw parallelFailure.reason;
+      const sourceByTitleMeta = new Map(parallel[1].value.map((sheet) => [sheet.properties.title, sheet]));
+      const destinationById = new Map(parallel[2].value.map((sheet) => [sheet.properties.sheetId, sheet]));
+      cleanupPromise = timeStage("cleanup", () => deleteFile(tempId)).catch((e) => {
+        console.warn("Could not delete temporary Google Sheet", e);
       });
-      const metadata = await timeStage("replacementMetadata", () => getSheetReplacementMetadata(fileId, metadataRanges));
-      const metadataById = new Map(metadata.map((sheet) => [sheet.properties.sheetId, sheet]));
       const requests = [];
+      const frozenRestores = [];
       staged.forEach((item) => {
         const destinationId = item.existing.sheetId;
         const sourceId = item.copied.sheetId;
-        const sourceSheet = metadataById.get(sourceId);
-        const destinationSheet = metadataById.get(destinationId);
+        const sourceSheet = sourceByTitleMeta.get(item.dim.title);
+        const destinationSheet = destinationById.get(destinationId);
         if (!sourceSheet || !destinationSheet) {
           throw new Error('Could not read the generated or existing tab metadata for "' + item.dim.title + '".');
         }
@@ -4655,6 +4689,14 @@ const googleSheetsSync = (() => {
           startColumnIndex: 0,
           endColumnIndex: cols
         };
+        if (destinationGrid.frozenRowCount || 0 || (destinationGrid.frozenColumnCount || 0)) {
+          requests.push({
+            updateSheetProperties: {
+              properties: { sheetId: destinationId, gridProperties: { frozenRowCount: 0, frozenColumnCount: 0 } },
+              fields: "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"
+            }
+          });
+        }
         requests.push({ unmergeCells: { range: workingRange } });
         for (let i = 0; i < (destinationSheet.conditionalFormats || []).length; i++) {
           requests.push({ deleteConditionalFormatRule: { sheetId: destinationId, index: 0 } });
@@ -4697,6 +4739,7 @@ const googleSheetsSync = (() => {
           }
         };
         if (sourceSheet.properties.tabColorStyle) finalProperties.tabColorStyle = sourceSheet.properties.tabColorStyle;
+        frozenRestores.push({ title: item.dim.title, properties: finalProperties });
         requests.push({
           updateSheetProperties: {
             properties: finalProperties,
@@ -4705,7 +4748,17 @@ const googleSheetsSync = (() => {
         });
         requests.push({ deleteSheet: { sheetId: sourceId } });
       });
-      await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests));
+      try {
+        await timeStage("applyReplacement", () => batchUpdateSheets(fileId, requests));
+      } catch (error) {
+        if (!/frozen (region|row|column)/i.test(String(error && error.message || ""))) throw error;
+        frozenSkipped = frozenRestores.filter((entry) => entry.properties.gridProperties.frozenRowCount || 0 || (entry.properties.gridProperties.frozenColumnCount || 0)).map((entry) => entry.title);
+        frozenRestores.forEach((entry) => {
+          entry.properties.gridProperties.frozenRowCount = 0;
+          entry.properties.gridProperties.frozenColumnCount = 0;
+        });
+        await timeStage("applyReplacementUnfrozen", () => batchUpdateSheets(fileId, requests));
+      }
       return {
         updated: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => dim.title),
         updatedDims: wanted.filter((dim) => staged.some((item) => item.dim.title === dim.title)).map((dim) => {
@@ -4713,6 +4766,7 @@ const googleSheetsSync = (() => {
           return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
         }),
         missing,
+        frozenSkipped,
         timings
       };
     } catch (e) {
@@ -4729,6 +4783,7 @@ const googleSheetsSync = (() => {
               return { ...dim, sheetId: existing.sheetId, gridProperties: { rowCount: dim.rows, columnCount: dim.cols } };
             }),
             missing,
+            frozenSkipped,
             timings
           };
           const stagingIds = staged.filter((item) => currentTabs.some((p) => p.sheetId === item.copied.sheetId)).map((item) => item.copied.sheetId);
@@ -4740,7 +4795,12 @@ const googleSheetsSync = (() => {
       }
       throw e;
     } finally {
-      if (tempId) {
+      if (cleanupPromise) {
+        try {
+          await cleanupPromise;
+        } catch {
+        }
+      } else if (tempId) {
         try {
           await timeStage("cleanup", () => deleteFile(tempId));
         } catch (e) {
@@ -14599,6 +14659,7 @@ function App() {
       let updatedTabs = [];
       let missingUpdateTabs = [];
       let requiresExactTabs = [];
+      let frozenSkippedTabs = [];
       let syncedDims = [];
       let exactTimings = null;
       if (createFresh) {
@@ -14639,6 +14700,7 @@ function App() {
         updatedTabs = result.updated;
         syncedDims = result.updatedDims || [];
         missingUpdateTabs = result.missing;
+        frozenSkippedTabs = result.frozenSkipped || [];
         exactTimings = { build: buildDurationMs, ...result.timings || {} };
         if (!updatedTabs.length) {
           throw new Error("None of the checked sheets exist in the destination yet. Add each new tab with Add selected tab first.");
@@ -14739,11 +14801,12 @@ function App() {
         connected: true,
         email: googleSheetsSync.email() || c.email,
         busyModule: null,
-        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, mode: createFresh ? "new" : fastValues ? "fast" : "exact", durationMs, exactTimings, pasteSumInstalled, pasteSumError: pasteSumHint } }
+        lastSync: { ...c.lastSync, [moduleId]: { at: Date.now(), ok: true, fileId, addedTabs, updatedTabs, missingUpdateTabs, requiresExactTabs, frozenSkippedTabs, mode: createFresh ? "new" : fastValues ? "fast" : "exact", durationMs, exactTimings, pasteSumInstalled, pasteSumError: pasteSumHint } }
       }));
       const successMsg = createFresh ? `Created a new personal Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}; the shared JPGC file was unchanged` : fastValues && updatedTabs.length ? `Fast-updated values and formulas in ${updatedTabs.length} sheet${updatedTabs.length === 1 ? "" : "s"}; existing formatting was preserved` : updatedTabs.length ? `Updated ${updatedTabs.length} checked sheet${updatedTabs.length === 1 ? "" : "s"}${missingUpdateTabs.length ? `; ${missingUpdateTabs.length} new tab${missingUpdateTabs.length === 1 ? "" : "s"} skipped — use Add selected tab` : ""}. Unchecked tabs were unchanged` : created ? `Created Google Sheet with ${addedTabs.length} tab${addedTabs.length === 1 ? "" : "s"}` : addedTabs.length ? `Added ${addedTabs.length} new tab${addedTabs.length === 1 ? "" : "s"}; existing data was left unchanged` : onlyTabTitle ? `Tab "${onlyTabTitle}" already exists; no data was changed` : "No new tabs to add; existing Google Sheet data was left unchanged";
       const exactHint = requiresExactTabs.length ? `${requiresExactTabs.length} sheet${requiresExactTabs.length === 1 ? "" : "s"} need Exact rebuild because their generated layout dimensions changed.` : "";
-      const syncHint = [trimHint, pasteSumHint, exactHint].filter(Boolean).join(" ");
+      const frozenHint = frozenSkippedTabs.length ? `${frozenSkippedTabs.length} sheet${frozenSkippedTabs.length === 1 ? "" : "s"} were rebuilt but could not keep frozen rows/columns — a merged cell crosses the freeze line. Freeze them by hand in Google Sheets if you need it.` : "";
+      const syncHint = [trimHint, pasteSumHint, exactHint, frozenHint].filter(Boolean).join(" ");
       const pasteSumSuffix = pasteSumInstalled ? " · paste-to-sum enabled" : "";
       const durationSuffix = ` · ${(durationMs / 1e3).toFixed(1)}s`;
       setToast({ type: syncHint ? "err" : "ok", msg: (syncHint || successMsg + pasteSumSuffix) + durationSuffix });
