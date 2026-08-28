@@ -10194,6 +10194,12 @@ https://bit.ly/4vrcu64`;
       return String(value || '').length;
     }
 
+    // What this state will weigh as a Firestore document.
+    function stateByteLength(value) {
+      try { return new TextEncoder().encode(JSON.stringify(value ?? null)).length; }
+      catch { return 0; }
+    }
+
     function decodeImageDataUrl(dataUrl) {
       return new Promise((resolve, reject) => {
         const img = new Image();
@@ -10714,10 +10720,7 @@ https://bit.ly/4vrcu64`;
       // run per keystroke while someone types a step description.
       const [stateBytes, setStateBytes] = useState(0);
       useEffect(() => {
-        const timer = setTimeout(() => {
-          try { setStateBytes(new TextEncoder().encode(JSON.stringify(state)).length); }
-          catch { setStateBytes(0); }
-        }, 600);
+        const timer = setTimeout(() => setStateBytes(stateByteLength(state)), 600);
         return () => clearTimeout(timer);
       }, [state]);
       const imageBytes = useMemo(() => {
@@ -15703,8 +15706,43 @@ match /shared/whitelistSmsTestNumbers {
           setSync({ status: 'signed-out', uid: null, email: null, role: 'semi_admin', message: null });
           return;
         }
+        // An oversized document is the one failure Retry could never fix on its
+        // own: hydrateUserState PULLS from the cloud, while what is stuck is the
+        // PUSH. Re-reading just replays the same rejected save. Offer the repair
+        // here so it is reachable from every module — the Compact images button
+        // lives in Procedure, which is superOnly and easy to miss.
+        const currentBytes = stateByteLength(stateRef.current);
+        if (currentBytes > FIRESTORE_DOC_LIMIT) {
+          const kb = (bytes) => Math.round(bytes / 1024).toLocaleString();
+          const ok = await confirmDialog({
+            title: 'Compact images to restore cloud sync?',
+            message: `Your saved data is ${kb(currentBytes)} KB, over the ${kb(FIRESTORE_DOC_LIMIT)} KB limit for one cloud document, so nothing can upload. Compacting re-encodes stored screenshots, signatures and the RCA logo at display size. Images already small enough are left untouched, and nothing else in your data is changed.`,
+            confirmText: 'Compact and sync',
+          });
+          if (!ok) return;
+          setSync(s => ({ ...s, status: 'saving', message: null }));
+          try {
+            const result = await compactStateImages(stateRef.current || DEFAULT_STATE);
+            if (!result.changed) {
+              setSync(s => ({ ...s, status: 'offline', message: `Still ${kb(currentBytes)} KB and no image could be shrunk further. The images need to move out of the main document — see PROJECT_RESUME.md.` }));
+              return;
+            }
+            setState(s => ({
+              ...s,
+              procedure: result.next.procedure,
+              rcaSignatories: result.next.rcaSignatories,
+              rcaCompany: result.next.rcaCompany,
+            }));
+            setToast({ type: 'ok', msg: `Compacted ${result.changed} image${result.changed === 1 ? '' : 's'}, freed ${kb(result.savedBytes)} KB — syncing now` });
+            setTimeout(() => setToast(null), 5000);
+          } catch (e) {
+            console.warn('Compacting images failed', e);
+            setSync(s => ({ ...s, status: 'offline', message: 'Could not compact images: ' + (e?.message || 'unknown error') }));
+          }
+          return;
+        }
         await hydrateUserState(user);
-      }, [hydrateUserState]);
+      }, [hydrateUserState, setState]);
 
       useEffect(() => {
         __dialogHandler = (req) => setDialog(req);
