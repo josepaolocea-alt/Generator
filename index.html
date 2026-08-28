@@ -2915,11 +2915,21 @@ async function downloadBmrClientData(bmr) {
     usageRules
   });
 }
+function sheetHasDataValidation(ws) {
+  try {
+    const model = ws?.dataValidations?.model;
+    if (!model || typeof model !== "object") return true;
+    return Object.keys(model).length > 0;
+  } catch {
+    return true;
+  }
+}
 function collectSheetGridDims(wb) {
   return wb.worksheets.map((ws) => ({
     title: ws.name,
     rows: ws.rowCount || 0,
-    cols: ws.columnCount || 0
+    cols: ws.columnCount || 0,
+    hasDataValidation: sheetHasDataValidation(ws)
   }));
 }
 function retainRequestedWorkbookSheets(wb, requestedTitles) {
@@ -4845,14 +4855,16 @@ const googleSheetsSync = (() => {
             pasteOrientation: "NORMAL"
           }
         });
-        requests.push({
-          copyPaste: {
-            source: sourceRange,
-            destination: destinationRange,
-            pasteType: "PASTE_DATA_VALIDATION",
-            pasteOrientation: "NORMAL"
-          }
-        });
+        if (item.dim.hasDataValidation !== false) {
+          requests.push({
+            copyPaste: {
+              source: sourceRange,
+              destination: destinationRange,
+              pasteType: "PASTE_DATA_VALIDATION",
+              pasteOrientation: "NORMAL"
+            }
+          });
+        }
         requests.push({
           copyPaste: {
             source: sourceRange,

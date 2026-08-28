@@ -925,11 +925,23 @@
     // sheet's grid back to exactly this range. Drive's xlsx→Sheets conversion
     // pads every tab out to its 1000-row default, leaving empty rows below the
     // totals row; this lets us trim them off so the last row is the totals row.
+    // True unless we can positively prove the sheet carries no data validation.
+    // Being wrong in the "false" direction would silently stop clearing stale
+    // validation in a destination tab, so anything unexpected answers true.
+    function sheetHasDataValidation(ws) {
+      try {
+        const model = ws?.dataValidations?.model;
+        if (!model || typeof model !== 'object') return true;
+        return Object.keys(model).length > 0;
+      } catch { return true; }
+    }
+
     function collectSheetGridDims(wb) {
       return wb.worksheets.map(ws => ({
         title: ws.name,
         rows: ws.rowCount || 0,
         cols: ws.columnCount || 0,
+        hasDataValidation: sheetHasDataValidation(ws),
       }));
     }
 
@@ -3171,14 +3183,23 @@
                 pasteOrientation: 'NORMAL',
               },
             });
-            requests.push({
-              copyPaste: {
-                source: sourceRange,
-                destination: destinationRange,
-                pasteType: 'PASTE_DATA_VALIDATION',
-                pasteOrientation: 'NORMAL',
-              },
-            });
+            // Each copyPaste is a server-side pass over the whole grid — 485 x
+            // 302 cells for a BMR tab — and applyReplacement is 91% of an Exact
+            // sync's wall time. BMR VOIP and BMR SMS generate no data validation
+            // at all, so this pass moved nothing. Skip it when the generated
+            // sheet provably has none; sheets that do have it (SIP/FCS) still
+            // paste, which is also what clears stale validation in the
+            // destination. collectSheetGridDims defaults this to true.
+            if (item.dim.hasDataValidation !== false) {
+              requests.push({
+                copyPaste: {
+                  source: sourceRange,
+                  destination: destinationRange,
+                  pasteType: 'PASTE_DATA_VALIDATION',
+                  pasteOrientation: 'NORMAL',
+                },
+              });
+            }
             requests.push({
               copyPaste: {
                 source: sourceRange,
