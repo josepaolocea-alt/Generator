@@ -2525,9 +2525,10 @@
       // contents are deliberately never fetched, cleared or updated.
       async function getSheetTabs(fileId, operation = 'reading the destination tab list') {
         const token = await getToken();
-        const r = await fetch(
+        const r = await fetchWithGoogleRetry(
           'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + '?fields=sheets.properties(sheetId,title,index,gridProperties(rowCount,columnCount))',
           { headers: { Authorization: 'Bearer ' + token } },
+          6,
         );
         if (!r.ok) throw await driveError(r, operation);
         const body = await r.json();
@@ -2557,10 +2558,11 @@
         const rangeQuery = [...new Set((ranges || []).filter(Boolean))]
           .map(range => '&ranges=' + encodeURIComponent(range))
           .join('');
-        const r = await fetch(
+        const r = await fetchWithGoogleRetry(
           'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) +
           '?fields=' + encodeURIComponent(fields) + rangeQuery,
           { headers: { Authorization: 'Bearer ' + token } },
+          6,
         );
         if (!r.ok) throw await driveError(r, operation);
         const body = await r.json();
@@ -2570,13 +2572,14 @@
       async function batchUpdateSheets(fileId, requests, operation = 'applying the sheet update') {
         if (!requests.length) return null;
         const token = await getToken();
-        const r = await fetch(
+        const r = await fetchWithGoogleRetry(
           'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + ':batchUpdate',
           {
             method: 'POST',
             headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
             body: JSON.stringify({ requests }),
           },
+          6,
         );
         if (!r.ok) throw await driveError(r, operation);
         return await r.json();
@@ -2700,7 +2703,7 @@
             headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
             body: JSON.stringify({ destinationSpreadsheetId: destinationFileId }),
           },
-          4,
+          6,
           [429, 503],
         );
         if (!copyResp.ok) throw await driveError(copyResp, 'copying a generated tab into the destination');
@@ -3182,9 +3185,9 @@
         if (byTitle.size !== wanted.length) {
           const token = await getToken();
           const base = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId);
-          const metaResp = await fetch(base + '?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))', {
+          const metaResp = await fetchWithGoogleRetry(base + '?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))', {
             headers: { Authorization: 'Bearer ' + token },
-          });
+          }, 6);
           if (!metaResp.ok) throw await driveError(metaResp);
           const meta = await metaResp.json();
           (meta.sheets || []).forEach((sheet) => {
