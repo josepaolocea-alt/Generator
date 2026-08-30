@@ -2012,6 +2012,97 @@
       box-shadow: var(--glass-focus) !important;
     }
 
+    /* Operational clarity pass -------------------------------------------
+       The app is a dense internal tool. These rules raise functional text,
+       keep form hints readable, reserve elevation for major surfaces, and
+       make compact controls easier to acquire without changing behavior. */
+    body > #root > div .text-\[9px\]  { font-size: 10.5px !important; }
+    body > #root > div .text-\[10px\] { font-size: 11px !important; }
+    body > #root > div .text-\[11px\] { font-size: 12px !important; }
+
+    .premium-input::placeholder,
+    .premium-textarea::placeholder {
+      color: #a4a9b8 !important;
+      opacity: 1;
+    }
+    html.light .premium-input::placeholder,
+    html.light .premium-textarea::placeholder {
+      color: #626b7b !important;
+    }
+    body > #root > div > aside .premium-input::placeholder,
+    body > #root > div > aside .premium-textarea::placeholder,
+    html.light body > #root > div > aside .premium-input::placeholder,
+    html.light body > #root > div > aside .premium-textarea::placeholder {
+      color: rgba(255,255,255,0.78) !important;
+    }
+
+    body > #root > div button { min-height: 32px; }
+    body > #root > div button:has(> svg:only-child) {
+      min-width: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    body > #root > div input[type="checkbox"] {
+      min-width: 16px;
+      min-height: 16px;
+    }
+
+    body > #root > div > main .premium-card,
+    body > #root > div > main details,
+    body > #root > div > main [class~="bg-neutral-950/60"],
+    body > #root > div > main [class~="bg-neutral-950/50"],
+    body > #root > div > main [class~="bg-neutral-900/40"] {
+      box-shadow: var(--glass-inset) !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    body > #root > div > main .premium-card:hover {
+      transform: none !important;
+      box-shadow: var(--glass-inset) !important;
+    }
+
+    .app-topbar {
+      padding: 16px 18px !important;
+      gap: 12px !important;
+    }
+    .app-header-controls {
+      flex-wrap: nowrap !important;
+      align-items: center;
+      min-width: 0;
+    }
+    .app-header-controls > .app-segmented {
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+    .app-header-controls > .app-tab-nav {
+      flex: 0 0 auto;
+    }
+    @media (max-width: 1450px) {
+      .app-pill-row { display: none !important; }
+    }
+
+    .client-list-viewport {
+      max-height: min(68dvh, 760px);
+      overscroll-behavior: contain;
+      border-radius: 14px;
+      background: rgba(8,11,22,0.16);
+      scrollbar-gutter: stable;
+    }
+    .client-list-header {
+      background: rgba(22,25,39,0.96);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.06), 0 8px 18px rgba(2,5,18,0.14);
+      backdrop-filter: blur(18px);
+    }
+    html.light .client-list-viewport { background: rgba(255,255,255,0.30); }
+    html.light .client-list-header {
+      background: rgba(246,248,252,0.97);
+      box-shadow: 0 1px 0 rgba(73,91,123,0.08), 0 8px 18px rgba(55,67,96,0.08);
+    }
+
+    .mobile-sidebar-toggle,
+    .mobile-sidebar-backdrop { display: none; }
+
     @media (max-width: 1180px) {
       body > #root > div {
         gap: 10px;
@@ -2033,28 +2124,177 @@
     }
     @media (max-width: 900px) {
       body > #root > div {
-        gap: 8px;
+        display: block !important;
+        width: 100%;
         padding: 8px;
+      }
+      body > #root > div button {
+        min-width: 44px;
+        min-height: 44px !important;
+      }
+      body > #root > div button:has(> svg:only-child) {
+        min-width: 44px !important;
+      }
+      body > #root > div input[type="checkbox"] {
+        min-width: 20px;
+        min-height: 20px;
+      }
+      body > #root > div > aside:first-of-type {
+        display: flex !important;
+        position: fixed !important;
+        inset: 8px auto 8px 8px !important;
+        z-index: 90;
+        width: min(340px, calc(100vw - 40px)) !important;
+        height: auto !important;
+        max-height: calc(100dvh - 16px);
+        transform: translateX(calc(-100% - 18px));
+        transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+        box-shadow: 0 30px 90px rgba(2,5,18,0.46), var(--glass-inset) !important;
+      }
+      html.mobile-sidebar-open body > #root > div > aside:first-of-type {
+        transform: translateX(0);
+      }
+      .uploaded-sidebar-rail {
+        display: flex !important;
+        position: fixed !important;
+        inset: auto 14px 14px auto !important;
+        width: 48px !important;
+        height: auto !important;
+        z-index: 70;
+        padding: 6px !important;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        border-radius: 14px;
+        box-shadow: 0 18px 46px rgba(2,5,18,0.34);
+      }
+      .uploaded-sidebar-panel {
+        display: flex !important;
+        position: fixed !important;
+        inset: 8px 8px 8px auto !important;
+        width: min(280px, calc(100vw - 40px)) !important;
+        height: auto !important;
+        z-index: 95;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        border-radius: 20px;
+        box-shadow: 0 30px 90px rgba(2,5,18,0.46);
+      }
+      body > #root > div > main {
+        width: 100%;
+        min-width: 0;
+      }
+      html.mobile-sidebar-open body { overflow: hidden; }
+      .mobile-sidebar-toggle {
+        display: inline-flex;
+        position: fixed;
+        z-index: 110;
+        left: 18px;
+        top: 18px;
+        min-height: 44px !important;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 10px;
+        padding: 0 12px;
+        color: #f7f8ff;
+        background: rgba(22,25,40,0.92);
+        box-shadow: 0 10px 28px rgba(2,5,18,0.28), var(--glass-inset);
+        backdrop-filter: blur(18px);
+        font-size: 12px;
+        font-weight: 650;
+      }
+      html.light .mobile-sidebar-toggle {
+        color: #24324b;
+        border-color: rgba(73,91,123,0.14);
+        background: rgba(250,252,255,0.94);
+      }
+      html.mobile-sidebar-open .mobile-sidebar-toggle {
+        left: min(calc(100vw - 82px), 286px);
+      }
+      .mobile-sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        width: 100%;
+        height: 100dvh;
+        border: 0;
+        background: rgba(4,6,14,0.58);
+        backdrop-filter: blur(5px);
       }
       .app-topbar {
         top: 8px !important;
         margin: 8px 8px 0;
-        padding: 18px !important;
+        padding: 14px 14px 14px 92px !important;
         border-radius: 18px;
+      }
+      .app-header-controls {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        align-items: stretch !important;
+        width: 100%;
+      }
+      .app-segmented {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+      .app-tab-nav {
+        flex: 1 1 auto;
+        width: auto;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+      .app-tab-nav {
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
+      }
+      .app-tab-nav button {
+        flex: 1 0 auto !important;
       }
       body > #root > div > main > header + div {
         padding: 24px 18px 34px !important;
       }
+      body > #root > div > main > footer {
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        padding-inline: 18px !important;
+      }
     }
     @media (max-width: 560px) {
+      .app-header-controls {
+        flex-wrap: wrap !important;
+      }
+      .app-header-controls > .app-segmented,
+      .app-header-controls > .app-tab-nav {
+        width: 100%;
+      }
       .app-tab-nav {
         gap: 3px !important;
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
       }
       .app-tab-nav button {
-        flex: 1 1 calc(50% - 3px);
+        flex: 0 0 auto !important;
       }
       body > #root > div > main {
         border-radius: 20px;
+      }
+      body > #root > div > main > header + div {
+        padding: 20px 14px 30px !important;
+      }
+      .section-label {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .client-list-viewport { max-height: 62dvh; }
+    }
+    @media (pointer: coarse) {
+      body > #root > div button { min-height: 44px; }
+      body > #root > div button:has(> svg:only-child) { min-width: 44px; }
+      body > #root > div input[type="checkbox"] {
+        min-width: 20px;
+        min-height: 20px;
       }
     }
   </style>
@@ -5940,7 +6180,7 @@ function Btn({ children, onClick, variant = "primary", size = "md", disabled, cl
   );
 }
 function SectionLabel({ children, hint }) {
-  return /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline justify-between mb-3 gap-4" }, /* @__PURE__ */ React.createElement("h3", { className: "text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-500" }, children), hint && /* @__PURE__ */ React.createElement("span", { className: "text-[10px] text-neutral-600" }, hint));
+  return /* @__PURE__ */ React.createElement("div", { className: "section-label flex items-baseline justify-between mb-3 gap-4" }, /* @__PURE__ */ React.createElement("h3", { className: "text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-500" }, children), hint && /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-600" }, hint));
 }
 function PremiumTooltipLayer() {
   const [tooltip, setTooltip] = useState(null);
@@ -5962,14 +6202,24 @@ function PremiumTooltipLayer() {
     if (!(node instanceof Element)) return null;
     return node.closest("[title], [data-premium-tooltip]");
   }, []);
+  const ensureAccessibleName = useCallback((target, text) => {
+    if (!(target instanceof Element) || !text) return;
+    const isInteractive = target.matches('button, a, input, select, textarea, [role="button"], [role="menuitem"], [role="option"], [role="combobox"]');
+    if (!isInteractive) return;
+    const hasName = target.hasAttribute("aria-label") || target.hasAttribute("aria-labelledby") || String(target.textContent || "").trim() || target.labels && target.labels.length;
+    if (!hasName) target.setAttribute("aria-label", text);
+  }, []);
   const tooltipText = useCallback((target) => {
     const nativeTitle = target.getAttribute("title");
     if (nativeTitle) {
       target.dataset.premiumTooltip = nativeTitle;
+      ensureAccessibleName(target, nativeTitle);
       target.removeAttribute("title");
     }
-    return String(target.dataset.premiumTooltip || "").trim();
-  }, []);
+    const text = String(target.dataset.premiumTooltip || "").trim();
+    ensureAccessibleName(target, text);
+    return text;
+  }, [ensureAccessibleName]);
   const queueShow = useCallback((target, delay) => {
     const text = tooltipText(target);
     if (!text) return;
@@ -5986,12 +6236,20 @@ function PremiumTooltipLayer() {
       const title = element.getAttribute("title");
       if (!title) return;
       element.dataset.premiumTooltip = title;
+      ensureAccessibleName(element, title);
       element.removeAttribute("title");
+      if (activeTargetRef.current === element) setTooltip({ target: element, text: title });
+    };
+    const upgradeTooltipName = (element) => {
+      if (!(element instanceof Element)) return;
+      ensureAccessibleName(element, String(element.dataset.premiumTooltip || "").trim());
     };
     const upgradeTree = (root) => {
       if (!(root instanceof Element)) return;
       upgradeTitle(root);
+      upgradeTooltipName(root);
       root.querySelectorAll("[title]").forEach(upgradeTitle);
+      root.querySelectorAll("[data-premium-tooltip]").forEach(upgradeTooltipName);
     };
     upgradeTree(document.body);
     const titleObserver = new MutationObserver((mutations) => {
@@ -6019,11 +6277,13 @@ function PremiumTooltipLayer() {
     const onFocusOut = (event) => {
       if (activeTargetRef.current && !activeTargetRef.current.contains(event.relatedTarget)) hide();
     };
+    const onPointerDown = () => hide();
     const onKeyDown = (event) => {
       if (event.key === "Escape") hide();
     };
     document.addEventListener("pointerover", onPointerOver, true);
     document.addEventListener("pointerout", onPointerOut, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("focusin", onFocusIn, true);
     document.addEventListener("focusout", onFocusOut, true);
     document.addEventListener("keydown", onKeyDown, true);
@@ -6034,13 +6294,14 @@ function PremiumTooltipLayer() {
       clearShowTimer();
       document.removeEventListener("pointerover", onPointerOver, true);
       document.removeEventListener("pointerout", onPointerOut, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("focusin", onFocusIn, true);
       document.removeEventListener("focusout", onFocusOut, true);
       document.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("scroll", hide, true);
       window.removeEventListener("resize", hide);
     };
-  }, [clearShowTimer, hide, queueShow, tooltipTarget]);
+  }, [clearShowTimer, ensureAccessibleName, hide, queueShow, tooltipTarget]);
   useLayoutEffect(() => {
     if (!tooltip?.target || !tooltipRef.current) return;
     const targetRect = tooltip.target.getBoundingClientRect();
@@ -6076,6 +6337,50 @@ function PremiumTooltipLayer() {
         }
       )
     ),
+    document.body
+  );
+}
+function MobileWorkspaceController() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    document.documentElement.classList.toggle("mobile-sidebar-open", open);
+    return () => document.documentElement.classList.remove("mobile-sidebar-open");
+  }, [open]);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 901px)");
+    const closeForDesktop = (event) => {
+      if (event.matches) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    media.addEventListener?.("change", closeForDesktop);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      media.removeEventListener?.("change", closeForDesktop);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+  return ReactDOM.createPortal(
+    /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "mobile-sidebar-toggle no-press",
+        "aria-expanded": open,
+        "aria-label": open ? "Close workspace settings" : "Open workspace settings",
+        onClick: () => setOpen((value) => !value)
+      },
+      open ? "Close" : "Settings"
+    ), open && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        className: "mobile-sidebar-backdrop no-press",
+        "aria-label": "Close workspace settings",
+        onClick: () => setOpen(false)
+      }
+    )),
     document.body
   );
 }
@@ -7256,18 +7561,21 @@ function UploadedSidebar({ state, setState }) {
       return { ...s, sheets: [...s.sheets, copy], selectedSheetId: copy.id };
     });
   };
+  if (collapsed && imported.length === 0) return null;
   if (collapsed) {
-    return /* @__PURE__ */ React.createElement("aside", { className: "w-10 shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col items-center py-4 gap-3" }, /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("aside", { className: "uploaded-sidebar-rail w-12 shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col items-center py-4 gap-3" }, /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => setCollapsed(false),
-        title: "Expand uploaded sheets",
-        className: "text-neutral-500 hover:text-neutral-200 transition-colors"
+        title: `Open ${imported.length} uploaded sheet${imported.length === 1 ? "" : "s"}`,
+        "aria-label": `Open ${imported.length} uploaded sheet${imported.length === 1 ? "" : "s"}`,
+        className: "relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100 transition-colors"
       },
-      /* @__PURE__ */ React.createElement("svg", { className: "w-4 h-4", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("polyline", { points: "9 18 15 12 9 6" }))
-    ), /* @__PURE__ */ React.createElement("div", { className: "[writing-mode:vertical-rl] rotate-180 text-[10px] uppercase tracking-[0.2em] text-neutral-500 mt-2" }, "Uploaded ", imported.length ? `· ${imported.length}` : ""));
+      /* @__PURE__ */ React.createElement(IconUpload, null),
+      /* @__PURE__ */ React.createElement("span", { className: "absolute -right-1 -top-1 min-w-4 rounded-full bg-blue-500 px-1 text-[9px] font-semibold leading-4 text-white" }, imported.length)
+    ));
   }
-  return /* @__PURE__ */ React.createElement("aside", { className: "w-[280px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: imported.length ? `${imported.length} sheet${imported.length === 1 ? "" : "s"}` : "" }, "Uploaded"), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("aside", { className: "uploaded-sidebar-panel w-[280px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col" }, /* @__PURE__ */ React.createElement("div", { className: "p-5 border-b border-neutral-900" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between gap-2" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: imported.length ? `${imported.length} sheet${imported.length === 1 ? "" : "s"}` : "" }, "Uploaded"), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => setCollapsed(true),
@@ -8901,7 +9209,7 @@ const BmrClientRow = React.memo(function BmrClientRow2({
         setOverIndex(null);
         setDragRow(null);
       },
-      className: `grid grid-cols-[20px_20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? "opacity-50" : ""} ${selected ? "bg-blue-500/10" : ""} ${isDragging ? "opacity-30" : ""} ${above ? "border-t-2 border-blue-500/70" : ""} ${below ? "border-b-2 border-blue-500/70" : ""} hover:bg-neutral-900/40`
+      className: `grid grid-cols-[20px_36px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_36px_84px_36px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? "opacity-50" : ""} ${selected ? "bg-blue-500/10" : ""} ${isDragging ? "opacity-30" : ""} ${above ? "border-t-2 border-blue-500/70" : ""} ${below ? "border-b-2 border-blue-500/70" : ""} hover:bg-neutral-900/40`
     },
     /* @__PURE__ */ React.createElement(
       "input",
@@ -8914,14 +9222,16 @@ const BmrClientRow = React.memo(function BmrClientRow2({
       }
     ),
     /* @__PURE__ */ React.createElement(
-      "span",
+      "button",
       {
+        type: "button",
         onMouseDown: () => setDragRow(index),
         onMouseUp: () => setDragRow(null),
         onTouchStart: () => setDragRow(index),
         onTouchEnd: () => setDragRow(null),
-        className: "cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none",
-        title: "Drag to reorder"
+        className: "no-press cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none",
+        title: "Drag to reorder",
+        "aria-label": `Drag ${client.name || `client ${index + 1}`} to reorder`
       },
       /* @__PURE__ */ React.createElement(IconGrip, null)
     ),
@@ -8935,19 +9245,31 @@ const BmrClientRow = React.memo(function BmrClientRow2({
       {
         onClick: () => updateClient(client.id, { hidden: !client.hidden }),
         className: `p-1 rounded ${client.hidden ? "text-amber-400" : "text-neutral-500 hover:text-neutral-200"}`,
-        title: client.hidden ? "Hidden — click to show" : "Hide row in generated file"
+        title: client.hidden ? "Hidden - click to show" : "Hide row in generated file",
+        "aria-label": client.hidden ? `Show ${client.name || `client ${index + 1}`} in generated file` : `Hide ${client.name || `client ${index + 1}`} in generated file`
       },
       client.hidden ? /* @__PURE__ */ React.createElement(IconEyeOff, null) : /* @__PURE__ */ React.createElement(IconEye, null)
     ),
     /* @__PURE__ */ React.createElement("span", { className: "flex items-center justify-center" }, /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: client.color, onChange: (color) => updateClient(client.id, { color }) })),
-    /* @__PURE__ */ React.createElement("button", { onClick: () => removeClient(client.id), className: "p-1 text-neutral-500 hover:text-red-400", title: "Remove client" }, /* @__PURE__ */ React.createElement(IconX, null))
+    /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => removeClient(client.id),
+        className: "p-1 text-neutral-500 hover:text-red-400",
+        title: "Remove client",
+        "aria-label": `Remove ${client.name || `client ${index + 1}`} from the list`
+      },
+      /* @__PURE__ */ React.createElement(IconX, null)
+    )
   );
 });
+const BMR_CLIENT_PAGE_SIZE = 50;
 function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarrierNameSettings = true }) {
   const [draftName, setDraftName] = useState("");
   const [insertAt, setInsertAt] = useState("");
   const [managerFilter, setManagerFilter] = useState("__all__");
   const [clientSearch, setClientSearch] = useState("");
+  const [clientPage, setClientPage] = useState(1);
   const [selectedClientIds, setSelectedClientIds] = useState([]);
   const [bulkManagerId, setBulkManagerId] = useState("__unchanged__");
   const [bulkColor, setBulkColor] = useState("#FACC15");
@@ -8979,9 +9301,18 @@ function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarr
     const managerName = accountManagersById.get(client.accountManagerId)?.name || "";
     return [client.name, client.allowBalanceLabel, managerName].some((value) => String(value || "").toLowerCase().includes(clientSearchTerm));
   });
+  const clientPageCount = Math.max(1, Math.ceil(filteredClients.length / BMR_CLIENT_PAGE_SIZE));
+  const clientPageStart = (clientPage - 1) * BMR_CLIENT_PAGE_SIZE;
+  const pagedClients = filteredClients.slice(clientPageStart, clientPageStart + BMR_CLIENT_PAGE_SIZE);
   const selectedClientIdSet = new Set(selectedClientIds);
-  const visibleClientIds = filteredClients.map(({ client }) => client.id);
-  const allVisibleSelected = visibleClientIds.length > 0 && visibleClientIds.every((id) => selectedClientIdSet.has(id));
+  const filteredClientIds = filteredClients.map(({ client }) => client.id);
+  const allFilteredSelected = filteredClientIds.length > 0 && filteredClientIds.every((id) => selectedClientIdSet.has(id));
+  useEffect(() => {
+    setClientPage(1);
+  }, [clientSearchTerm, managerFilter]);
+  useEffect(() => {
+    setClientPage((page) => Math.min(page, clientPageCount));
+  }, [clientPageCount]);
   const setClients = useCallback((next) => onChange((prev) => ({
     ...prev,
     clients: typeof next === "function" ? next(prev.clients || []) : next
@@ -9020,10 +9351,10 @@ function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarr
   const toggleSelected = useCallback((id) => setSelectedClientIds(
     (ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]
   ), []);
-  const toggleVisibleSelection = () => setSelectedClientIds((ids) => {
+  const toggleFilteredSelection = () => setSelectedClientIds((ids) => {
     const next = new Set(ids);
-    if (allVisibleSelected) visibleClientIds.forEach((id) => next.delete(id));
-    else visibleClientIds.forEach((id) => next.add(id));
+    if (allFilteredSelected) filteredClientIds.forEach((id) => next.delete(id));
+    else filteredClientIds.forEach((id) => next.add(id));
     return Array.from(next);
   });
   const updateSelectedClients = (patch) => {
@@ -9034,7 +9365,7 @@ function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarr
     if (bulkManagerId === "__unchanged__") return;
     updateSelectedClients({ accountManagerId: bulkManagerId === "__none__" ? "" : bulkManagerId });
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(BmrClientImporter, { bmr, onChange }), showBlockColumnHider && /* @__PURE__ */ React.createElement(BmrBlockColumnHider, { bmr, onChange }), showCarrierNameSettings && /* @__PURE__ */ React.createElement(BmrCarrierNameSettings, { bmr, onChange }), /* @__PURE__ */ React.createElement(BmrBorderSettings, { bmr, onChange }), /* @__PURE__ */ React.createElement(BmrAccountManagersEditor, { bmr, onChange }), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex min-w-0 flex-1 flex-wrap items-end gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-xs" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Search clients"), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement(BmrClientImporter, { bmr, onChange }), showBlockColumnHider && /* @__PURE__ */ React.createElement(BmrBlockColumnHider, { bmr, onChange }), showCarrierNameSettings && /* @__PURE__ */ React.createElement(BmrCarrierNameSettings, { bmr, onChange }), /* @__PURE__ */ React.createElement(BmrBorderSettings, { bmr, onChange }), /* @__PURE__ */ React.createElement(BmrAccountManagersEditor, { bmr, onChange }), /* @__PURE__ */ React.createElement("div", { className: "client-list-toolbar flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex min-w-0 flex-1 flex-wrap items-end gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-xs" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Search clients"), /* @__PURE__ */ React.createElement(
     ClearableInput,
     {
       value: clientSearch,
@@ -9043,17 +9374,18 @@ function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarr
       clearTitle: "Clear client search",
       placeholder: "Client, label, or manager"
     }
-  )), /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-xs" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Account manager filter"), /* @__PURE__ */ React.createElement(Select, { value: managerFilter, onChange: (e) => setManagerFilter(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "__all__" }, "All account managers"), /* @__PURE__ */ React.createElement("option", { value: "__none__" }, "No manager"), accountManagers.map((manager) => /* @__PURE__ */ React.createElement("option", { key: manager.id, value: manager.id }, manager.name || "Unnamed manager"))))), /* @__PURE__ */ React.createElement("span", { className: "pb-2 text-[11px] text-neutral-500" }, filteredClients.length, "/", clients.length, " clients shown")), selectedClientIds.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/40 bg-blue-500/10 p-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${selectedClientIds.length} selected` }, "Bulk edit"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-xs" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Account manager"), /* @__PURE__ */ React.createElement(Select, { value: bulkManagerId, onChange: (e) => setBulkManagerId(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "__unchanged__" }, "Choose manager"), /* @__PURE__ */ React.createElement("option", { value: "__none__" }, "No manager"), accountManagers.map((manager) => /* @__PURE__ */ React.createElement("option", { key: manager.id, value: manager.id }, manager.name || "Unnamed manager")))), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: applyBulkManager, disabled: bulkManagerId === "__unchanged__" }, "Apply manager"), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Client color"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: bulkColor, onChange: setBulkColor, allowClear: false })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ color: bulkColor }) }, "Apply color"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ color: "" }) }, "Clear colors"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ hidden: true }) }, "Hide"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ hidden: false }) }, "Show"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setSelectedClientIds([]) }, "Clear selection"))), /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto pb-1" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-[820px]" }, /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-[20px_20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center" }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-xs" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Account manager filter"), /* @__PURE__ */ React.createElement(Select, { value: managerFilter, onChange: (e) => setManagerFilter(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "__all__" }, "All account managers"), /* @__PURE__ */ React.createElement("option", { value: "__none__" }, "No manager"), accountManagers.map((manager) => /* @__PURE__ */ React.createElement("option", { key: manager.id, value: manager.id }, manager.name || "Unnamed manager"))))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-end gap-2 pb-0.5" }, /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500" }, filteredClients.length ? `${clientPageStart + 1}-${Math.min(clientPageStart + BMR_CLIENT_PAGE_SIZE, filteredClients.length)}` : "0", " of ", filteredClients.length, " matches", filteredClients.length !== clients.length ? ` / ${clients.length} total` : ""), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => setClientPage((page) => Math.max(1, page - 1)), disabled: clientPage <= 1 }, "Previous"), /* @__PURE__ */ React.createElement("span", { className: "min-w-14 text-center text-[11px] font-mono text-neutral-500" }, clientPage, "/", clientPageCount), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => setClientPage((page) => Math.min(clientPageCount, page + 1)), disabled: clientPage >= clientPageCount }, "Next"))), selectedClientIds.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/40 bg-blue-500/10 p-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${selectedClientIds.length} selected` }, "Bulk edit"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-xs" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Account manager"), /* @__PURE__ */ React.createElement(Select, { value: bulkManagerId, onChange: (e) => setBulkManagerId(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "__unchanged__" }, "Choose manager"), /* @__PURE__ */ React.createElement("option", { value: "__none__" }, "No manager"), accountManagers.map((manager) => /* @__PURE__ */ React.createElement("option", { key: manager.id, value: manager.id }, manager.name || "Unnamed manager")))), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: applyBulkManager, disabled: bulkManagerId === "__unchanged__" }, "Apply manager"), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Client color"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: bulkColor, onChange: setBulkColor, allowClear: false })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ color: bulkColor }) }, "Apply color"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ color: "" }) }, "Clear colors"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ hidden: true }) }, "Hide"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedClients({ hidden: false }) }, "Show"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setSelectedClientIds([]) }, "Clear selection"))), /* @__PURE__ */ React.createElement("div", { className: "client-list-viewport overflow-auto pb-1", role: "region", "aria-label": "Client list" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-[820px]" }, /* @__PURE__ */ React.createElement("div", { className: "client-list-header sticky top-0 z-10 grid grid-cols-[20px_36px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_36px_84px_36px] gap-2 px-1 py-2 text-[11px] uppercase tracking-wide text-neutral-500" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "checkbox",
-      checked: allVisibleSelected,
-      onChange: toggleVisibleSelection,
-      disabled: !visibleClientIds.length,
-      title: "Select shown clients",
+      checked: allFilteredSelected,
+      onChange: toggleFilteredSelection,
+      disabled: !filteredClientIds.length,
+      title: "Select all filtered clients",
+      "aria-label": "Select all filtered clients",
       className: "h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
     }
-  )), /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null, "Client name"), /* @__PURE__ */ React.createElement("div", null, "Allow Bal label"), /* @__PURE__ */ React.createElement("div", null, "Account manager"), /* @__PURE__ */ React.createElement("div", { className: "text-center" }, "Hide"), /* @__PURE__ */ React.createElement("div", { className: "text-center" }, "Client color"), /* @__PURE__ */ React.createElement("div", null)), /* @__PURE__ */ React.createElement("div", { className: "space-y-1" }, filteredClients.map(({ client: c, index: i }) => /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null, "Client name"), /* @__PURE__ */ React.createElement("div", null, "Allow Bal label"), /* @__PURE__ */ React.createElement("div", null, "Account manager"), /* @__PURE__ */ React.createElement("div", { className: "text-center" }, "Hide"), /* @__PURE__ */ React.createElement("div", { className: "text-center" }, "Client color"), /* @__PURE__ */ React.createElement("div", null)), /* @__PURE__ */ React.createElement("div", { className: "space-y-1" }, pagedClients.map(({ client: c, index: i }) => /* @__PURE__ */ React.createElement(
     BmrClientRow,
     {
       key: c.id,
@@ -12695,9 +13027,16 @@ function ModuleSwitcher({ modules, current, onSelect }) {
     const parent = container.parentElement;
     const parentStyle = parent ? window.getComputedStyle(parent) : null;
     const parentPad = parentStyle ? (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0) : 0;
-    const available = parent ? Math.max(0, parent.clientWidth - parentPad - 8) : container.clientWidth;
+    const siblingWidths = parent ? Array.from(parent.children).filter((child) => child !== container && child instanceof HTMLElement).reduce((sum, child) => sum + child.getBoundingClientRect().width, 0) : 0;
+    const siblingCount = parent ? Math.max(0, parent.children.length - 1) : 0;
+    const stackedNavigation = window.matchMedia("(max-width: 900px)").matches;
+    const available = parent ? Math.max(0, parent.clientWidth - parentPad - (stackedNavigation ? 0 : siblingWidths) - (stackedNavigation ? 0 : siblingCount * 12) - 8) : container.clientWidth;
     const buttons = Array.from(strip.children);
     if (!buttons.length || !available) return;
+    if (stackedNavigation) {
+      setVisibleCount(1);
+      return;
+    }
     const widths = buttons.map((b) => b.offsetWidth);
     const gap = 4;
     const padding = 4;
@@ -12770,6 +13109,7 @@ function ModuleSwitcher({ modules, current, onSelect }) {
         key: m.id,
         type: "button",
         onClick: () => onSelect(m.id),
+        "aria-current": isActive ? "page" : void 0,
         className: `${baseBtn} ${isActive ? activeCls : mutedCls}`
       },
       m.label
@@ -12800,6 +13140,7 @@ function ModuleSwitcher({ modules, current, onSelect }) {
           key: m.id,
           type: "button",
           role: "menuitem",
+          "aria-current": isActive ? "page" : void 0,
           onClick: () => {
             onSelect(m.id);
             setOpen(false);
@@ -13978,11 +14319,12 @@ function App() {
   if (isEditor) {
     const editorGrid = editorNormalizeGrid(editor.cells);
     const activeEditorRules = (editor.rules || []).filter((rule) => rule.enabled !== false).length;
-    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(EditorSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Editor / ", editor.name || "Pasted Table")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, editorGrid.length, " rows"), /* @__PURE__ */ React.createElement(Pill, null, editorGrid[0].length, " columns"), /* @__PURE__ */ React.createElement(Pill, { tone: activeEditorRules ? "accent" : "default" }, activeEditorRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: undoEditor, disabled: !editorUndoStack.length, title: "Undo last Editor change" }, /* @__PURE__ */ React.createElement(IconUndo, null), " Undo"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: resetEditor }, "Reset"), /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" }, EDITOR_TABS.map((t) => /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(EditorSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Editor / ", editor.name || "Pasted Table")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, editorGrid.length, " rows"), /* @__PURE__ */ React.createElement(Pill, null, editorGrid[0].length, " columns"), /* @__PURE__ */ React.createElement(Pill, { tone: activeEditorRules ? "accent" : "default" }, activeEditorRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: undoEditor, disabled: !editorUndoStack.length, title: "Undo last Editor change" }, /* @__PURE__ */ React.createElement(IconUndo, null), " Undo"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: resetEditor }, "Reset"), /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]", "aria-label": "Editor views" }, EDITOR_TABS.map((t) => /* @__PURE__ */ React.createElement(
       "button",
       {
         key: t.id,
         onClick: () => setState((s) => ({ ...s, editorTab: t.id })),
+        "aria-current": editorTab === t.id ? "page" : void 0,
         className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
       },
       t.label
@@ -13992,11 +14334,12 @@ function App() {
     const visibleClients = (bmr.clients || []).filter((c) => !c.hidden).length;
     const bmrClientIds = new Set((bmr.clients || []).map((c) => c.id));
     const activeBmrRules = (bmr.targetRules || []).filter((r) => r.enabled && bmrClientIds.has(r.clientId)).length + (bmr.usageRules || []).filter((r) => r.enabled).length;
-    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(BmrSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "BMR VOIP · ", bmrTodayString())), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, visibleClients, " clients"), /* @__PURE__ */ React.createElement(Pill, null, (bmr.includeDay !== false ? 1 : 0) + (bmr.includeNight !== false ? 1 : 0), " shifts"), /* @__PURE__ */ React.createElement(Pill, { tone: activeBmrRules > 0 ? "accent" : "default" }, activeBmrRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" }, BMR_TABS.map((t) => /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(BmrSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "BMR VOIP · ", bmrTodayString())), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, visibleClients, " clients"), /* @__PURE__ */ React.createElement(Pill, null, (bmr.includeDay !== false ? 1 : 0) + (bmr.includeNight !== false ? 1 : 0), " shifts"), /* @__PURE__ */ React.createElement(Pill, { tone: activeBmrRules > 0 ? "accent" : "default" }, activeBmrRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]", "aria-label": "BMR VOIP views" }, BMR_TABS.map((t) => /* @__PURE__ */ React.createElement(
       "button",
       {
         key: t.id,
         onClick: () => setState((s) => ({ ...s, bmrTab: t.id })),
+        "aria-current": bmrTab === t.id ? "page" : void 0,
         className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrTab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
       },
       t.label
@@ -14020,11 +14363,12 @@ e.g. Added APNTEL with debit-on-zero rule, hid CYN ACOM for the week.`
     const activeBmrSmsRules = (bmrSms.targetRules || []).filter((r) => r.enabled && smsClientIds.has(r.clientId)).length + (bmrSms.overdraftRules || []).filter((r) => r.enabled).length + (bmrSms.usageRules || []).filter((r) => r.enabled).length;
     const shiftCount = (bmrSms.includeDay !== false ? 1 : 0) + (bmrSms.includeNight !== false ? 1 : 0);
     const sheetCount = Math.max(1, shiftCount) * 2;
-    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(BmrSmsSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "BMR SMS · ", bmrTodayString())), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, visibleRetail, " RES"), /* @__PURE__ */ React.createElement(Pill, null, visibleWholesale, " WHS"), /* @__PURE__ */ React.createElement(Pill, null, sheetCount, " sheets"), /* @__PURE__ */ React.createElement(Pill, { tone: activeBmrSmsRules > 0 ? "accent" : "default" }, activeBmrSmsRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" }, BMR_TABS.map((t) => /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(BmrSmsSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "BMR SMS · ", bmrTodayString())), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, visibleRetail, " RES"), /* @__PURE__ */ React.createElement(Pill, null, visibleWholesale, " WHS"), /* @__PURE__ */ React.createElement(Pill, null, sheetCount, " sheets"), /* @__PURE__ */ React.createElement(Pill, { tone: activeBmrSmsRules > 0 ? "accent" : "default" }, activeBmrSmsRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]", "aria-label": "BMR SMS views" }, BMR_TABS.map((t) => /* @__PURE__ */ React.createElement(
       "button",
       {
         key: t.id,
         onClick: () => setState((s) => ({ ...s, bmrSmsTab: t.id })),
+        "aria-current": bmrSmsTab === t.id ? "page" : void 0,
         className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrSmsTab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
       },
       t.label
@@ -14053,11 +14397,12 @@ e.g. Added SMS client, hid old WHS row, adjusted balance rule.`
       { id: "preview", label: "Preview" },
       { id: "notes", label: "Notes" }
     ];
-    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(WlSmsSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, sharedTestNumbers }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "Whitelist SMS", wl.senderId ? ` · ${wl.senderId}` : "")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, (wl.contents || []).length, " contents"), /* @__PURE__ */ React.createElement(Pill, null, numbers.length, " numbers"), /* @__PURE__ */ React.createElement(Pill, { tone: rowCount ? "accent" : "default" }, rowCount, " rows")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" }, WL_TABS.map((t) => /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(WlSmsSidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, sharedTestNumbers }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "Whitelist SMS", wl.senderId ? ` · ${wl.senderId}` : "")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, (wl.contents || []).length, " contents"), /* @__PURE__ */ React.createElement(Pill, null, numbers.length, " numbers"), /* @__PURE__ */ React.createElement(Pill, { tone: rowCount ? "accent" : "default" }, rowCount, " rows")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]", "aria-label": "Whitelist SMS views" }, WL_TABS.map((t) => /* @__PURE__ */ React.createElement(
       "button",
       {
         key: t.id,
         onClick: () => setState((s) => ({ ...s, whitelistSmsTab: t.id })),
+        "aria-current": whitelistSmsTab === t.id ? "page" : void 0,
         className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${whitelistSmsTab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
       },
       t.label
@@ -14080,11 +14425,12 @@ e.g. Sender ID approval ticket, vendor name, request date.`
     const signatories = rcaResolveSignatories(state, rca.signatoryIds);
     return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(RcaSidebar, { state, setState, onGenerateDocx: onGenerate, busy, sync, onRetrySync: retrySync }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "RCA · ", rca.customerCid || "New Incident Report")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, enabledSections, " sections"), /* @__PURE__ */ React.createElement(Pill, { tone: signatories.length ? "accent" : "muted" }, signatories.length, " signers"), /* @__PURE__ */ React.createElement(Pill, null, rca.font, " · ", rca.fontSize, "pt")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1700px]" }, /* @__PURE__ */ React.createElement("div", { className: "anim-fade-in grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(RcaForm, { state, setState, sync })), /* @__PURE__ */ React.createElement("div", { className: "xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Preview"), /* @__PURE__ */ React.createElement(RcaPreview, { state })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "RCA · ", rcaFileNameStem(rca)), /* @__PURE__ */ React.createElement("span", null, enabledSections, " sections · ", signatories.length, " signers"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
-  return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(Sidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement(UploadedSidebar, { state, setState }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Report"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, MONTHS[state.month], " ", state.year)), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, activeCount, " sheets"), /* @__PURE__ */ React.createElement(Pill, null, days, " days"), /* @__PURE__ */ React.createElement(Pill, { tone: activeRules > 0 ? "accent" : "default" }, activeRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" }, TABS.map((t) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(Sidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement(UploadedSidebar, { state, setState }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Report"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, MONTHS[state.month], " ", state.year)), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, activeCount, " sheets"), /* @__PURE__ */ React.createElement(Pill, null, days, " days"), /* @__PURE__ */ React.createElement(Pill, { tone: activeRules > 0 ? "accent" : "default" }, activeRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]", "aria-label": "SIP and FCS views" }, TABS.map((t) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: t.id,
       onClick: () => setState((s) => ({ ...s, tab: t.id })),
+      "aria-current": state.tab === t.id ? "page" : void 0,
       className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
     },
     t.label
@@ -14140,7 +14486,7 @@ window.addEventListener("unhandledrejection", (e) => {
     console.warn("Firebase init promise rejected:", e);
   }
   ReactDOM.createRoot(document.getElementById("root")).render(
-    /* @__PURE__ */ React.createElement(AppErrorBoundary, null, /* @__PURE__ */ React.createElement(App, null), /* @__PURE__ */ React.createElement(PremiumTooltipLayer, null))
+    /* @__PURE__ */ React.createElement(AppErrorBoundary, null, /* @__PURE__ */ React.createElement(App, null), /* @__PURE__ */ React.createElement(PremiumTooltipLayer, null), /* @__PURE__ */ React.createElement(MobileWorkspaceController, null))
   );
 })();
 

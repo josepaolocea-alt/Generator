@@ -4473,9 +4473,9 @@ https://bit.ly/4vrcu64`;
 
     function SectionLabel({ children, hint }) {
       return (
-        <div className="flex items-baseline justify-between mb-3 gap-4">
-          <h3 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-500">{children}</h3>
-          {hint && <span className="text-[10px] text-neutral-600">{hint}</span>}
+        <div className="section-label flex items-baseline justify-between mb-3 gap-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-500">{children}</h3>
+          {hint && <span className="text-[11px] text-neutral-600">{hint}</span>}
         </div>
       );
     }
@@ -4509,14 +4509,28 @@ https://bit.ly/4vrcu64`;
         return node.closest('[title], [data-premium-tooltip]');
       }, []);
 
+      const ensureAccessibleName = useCallback((target, text) => {
+        if (!(target instanceof Element) || !text) return;
+        const isInteractive = target.matches('button, a, input, select, textarea, [role="button"], [role="menuitem"], [role="option"], [role="combobox"]');
+        if (!isInteractive) return;
+        const hasName = target.hasAttribute('aria-label')
+          || target.hasAttribute('aria-labelledby')
+          || String(target.textContent || '').trim()
+          || (target.labels && target.labels.length);
+        if (!hasName) target.setAttribute('aria-label', text);
+      }, []);
+
       const tooltipText = useCallback((target) => {
         const nativeTitle = target.getAttribute('title');
         if (nativeTitle) {
           target.dataset.premiumTooltip = nativeTitle;
+          ensureAccessibleName(target, nativeTitle);
           target.removeAttribute('title');
         }
-        return String(target.dataset.premiumTooltip || '').trim();
-      }, []);
+        const text = String(target.dataset.premiumTooltip || '').trim();
+        ensureAccessibleName(target, text);
+        return text;
+      }, [ensureAccessibleName]);
 
       const queueShow = useCallback((target, delay) => {
         const text = tooltipText(target);
@@ -4535,12 +4549,20 @@ https://bit.ly/4vrcu64`;
           const title = element.getAttribute('title');
           if (!title) return;
           element.dataset.premiumTooltip = title;
+          ensureAccessibleName(element, title);
           element.removeAttribute('title');
+          if (activeTargetRef.current === element) setTooltip({ target: element, text: title });
+        };
+        const upgradeTooltipName = (element) => {
+          if (!(element instanceof Element)) return;
+          ensureAccessibleName(element, String(element.dataset.premiumTooltip || '').trim());
         };
         const upgradeTree = (root) => {
           if (!(root instanceof Element)) return;
           upgradeTitle(root);
+          upgradeTooltipName(root);
           root.querySelectorAll('[title]').forEach(upgradeTitle);
+          root.querySelectorAll('[data-premium-tooltip]').forEach(upgradeTooltipName);
         };
         upgradeTree(document.body);
         const titleObserver = new MutationObserver((mutations) => {
@@ -4569,10 +4591,12 @@ https://bit.ly/4vrcu64`;
         const onFocusOut = (event) => {
           if (activeTargetRef.current && !activeTargetRef.current.contains(event.relatedTarget)) hide();
         };
+        const onPointerDown = () => hide();
         const onKeyDown = (event) => { if (event.key === 'Escape') hide(); };
 
         document.addEventListener('pointerover', onPointerOver, true);
         document.addEventListener('pointerout', onPointerOut, true);
+        document.addEventListener('pointerdown', onPointerDown, true);
         document.addEventListener('focusin', onFocusIn, true);
         document.addEventListener('focusout', onFocusOut, true);
         document.addEventListener('keydown', onKeyDown, true);
@@ -4583,13 +4607,14 @@ https://bit.ly/4vrcu64`;
           clearShowTimer();
           document.removeEventListener('pointerover', onPointerOver, true);
           document.removeEventListener('pointerout', onPointerOut, true);
+          document.removeEventListener('pointerdown', onPointerDown, true);
           document.removeEventListener('focusin', onFocusIn, true);
           document.removeEventListener('focusout', onFocusOut, true);
           document.removeEventListener('keydown', onKeyDown, true);
           window.removeEventListener('scroll', hide, true);
           window.removeEventListener('resize', hide);
         };
-      }, [clearShowTimer, hide, queueShow, tooltipTarget]);
+      }, [clearShowTimer, ensureAccessibleName, hide, queueShow, tooltipTarget]);
 
       useLayoutEffect(() => {
         if (!tooltip?.target || !tooltipRef.current) return;
@@ -4624,6 +4649,40 @@ https://bit.ly/4vrcu64`;
               aria-hidden="true" />
           )}
         </div>,
+        document.body
+      );
+    }
+
+    function MobileWorkspaceController() {
+      const [open, setOpen] = useState(false);
+
+      useEffect(() => {
+        document.documentElement.classList.toggle('mobile-sidebar-open', open);
+        return () => document.documentElement.classList.remove('mobile-sidebar-open');
+      }, [open]);
+
+      useEffect(() => {
+        const media = window.matchMedia('(min-width: 901px)');
+        const closeForDesktop = (event) => { if (event.matches) setOpen(false); };
+        const closeOnEscape = (event) => { if (event.key === 'Escape') setOpen(false); };
+        media.addEventListener?.('change', closeForDesktop);
+        window.addEventListener('keydown', closeOnEscape);
+        return () => {
+          media.removeEventListener?.('change', closeForDesktop);
+          window.removeEventListener('keydown', closeOnEscape);
+        };
+      }, []);
+
+      return ReactDOM.createPortal(
+        <>
+          <button type="button" className="mobile-sidebar-toggle no-press"
+            aria-expanded={open} aria-label={open ? 'Close workspace settings' : 'Open workspace settings'}
+            onClick={() => setOpen(value => !value)}>
+            {open ? 'Close' : 'Settings'}
+          </button>
+          {open && <button type="button" className="mobile-sidebar-backdrop no-press"
+            aria-label="Close workspace settings" onClick={() => setOpen(false)} />}
+        </>,
         document.body
       );
     }
@@ -6009,23 +6068,24 @@ https://bit.ly/4vrcu64`;
         });
       };
 
+      if (collapsed && imported.length === 0) return null;
+
       if (collapsed) {
         return (
-          <aside className="w-10 shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col items-center py-4 gap-3">
+          <aside className="uploaded-sidebar-rail w-12 shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col items-center py-4 gap-3">
             <button onClick={() => setCollapsed(false)}
-              title="Expand uploaded sheets"
-              className="text-neutral-500 hover:text-neutral-200 transition-colors">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+              title={`Open ${imported.length} uploaded sheet${imported.length === 1 ? '' : 's'}`}
+              aria-label={`Open ${imported.length} uploaded sheet${imported.length === 1 ? '' : 's'}`}
+              className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100 transition-colors">
+              <IconUpload />
+              <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-blue-500 px-1 text-[9px] font-semibold leading-4 text-white">{imported.length}</span>
             </button>
-            <div className="[writing-mode:vertical-rl] rotate-180 text-[10px] uppercase tracking-[0.2em] text-neutral-500 mt-2">
-              Uploaded {imported.length ? `· ${imported.length}` : ''}
-            </div>
           </aside>
         );
       }
 
       return (
-        <aside className="w-[280px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
+        <aside className="uploaded-sidebar-panel w-[280px] shrink-0 border-r border-neutral-900 bg-[#17171a] h-screen sticky top-0 flex flex-col">
           <div className="p-5 border-b border-neutral-900">
             <div className="flex items-center justify-between gap-2">
               <SectionLabel hint={imported.length ? `${imported.length} sheet${imported.length === 1 ? '' : 's'}` : ''}>Uploaded</SectionLabel>
@@ -8037,19 +8097,20 @@ https://bit.ly/4vrcu64`;
           onDragLeave={() => { if (overIndex === index) setOverIndex(null); }}
           onDrop={(e) => { e.preventDefault(); if (dragIndex !== null && dragIndex !== index) reorder(dragIndex, index); setDragIndex(null); setOverIndex(null); setDragRow(null); }}
           onDragEnd={() => { setDragIndex(null); setOverIndex(null); setDragRow(null); }}
-          className={`grid grid-cols-[20px_20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${selected ? 'bg-blue-500/10' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
+          className={`grid grid-cols-[20px_36px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_36px_84px_36px] gap-2 items-center rounded-md px-1 py-1 transition-colors ${client.hidden ? 'opacity-50' : ''} ${selected ? 'bg-blue-500/10' : ''} ${isDragging ? 'opacity-30' : ''} ${above ? 'border-t-2 border-blue-500/70' : ''} ${below ? 'border-b-2 border-blue-500/70' : ''} hover:bg-neutral-900/40`}>
           <input type="checkbox" checked={selected} onChange={() => toggleSelected(client.id)}
             title="Select client"
             className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
-          <span
+          <button type="button"
             onMouseDown={() => setDragRow(index)}
             onMouseUp={() => setDragRow(null)}
             onTouchStart={() => setDragRow(index)}
             onTouchEnd={() => setDragRow(null)}
-            className="cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none"
-            title="Drag to reorder">
+            className="no-press cursor-grab active:cursor-grabbing p-0.5 text-neutral-700 hover:text-neutral-300 select-none"
+            title="Drag to reorder"
+            aria-label={`Drag ${client.name || `client ${index + 1}`} to reorder`}>
             <IconGrip />
-          </span>
+          </button>
           <span className="text-[10px] text-neutral-600 font-mono text-right">{String(index + 1).padStart(2, '0')}</span>
           <span className="w-6 h-6 rounded border border-neutral-800" style={clientColor ? { background: clientColor } : {}} title={accountManager?.color ? `${accountManager.name || 'Account manager'} color` : (client.color || 'no color')}></span>
           <Input value={client.name} onChange={e => updateClient(client.id, { name: e.target.value })} placeholder="Client name" className={client.hidden ? 'line-through' : ''} />
@@ -8060,22 +8121,27 @@ https://bit.ly/4vrcu64`;
           </Select>
           <button onClick={() => updateClient(client.id, { hidden: !client.hidden })}
             className={`p-1 rounded ${client.hidden ? 'text-amber-400' : 'text-neutral-500 hover:text-neutral-200'}`}
-            title={client.hidden ? 'Hidden — click to show' : 'Hide row in generated file'}>
+            title={client.hidden ? 'Hidden - click to show' : 'Hide row in generated file'}
+            aria-label={client.hidden ? `Show ${client.name || `client ${index + 1}`} in generated file` : `Hide ${client.name || `client ${index + 1}`} in generated file`}>
             {client.hidden ? <IconEyeOff /> : <IconEye />}
           </button>
           <span className="flex items-center justify-center">
             <BmrColorSwatch value={client.color} onChange={color => updateClient(client.id, { color })} />
           </span>
-          <button onClick={() => removeClient(client.id)} className="p-1 text-neutral-500 hover:text-red-400" title="Remove client"><IconX /></button>
+          <button onClick={() => removeClient(client.id)} className="p-1 text-neutral-500 hover:text-red-400"
+            title="Remove client" aria-label={`Remove ${client.name || `client ${index + 1}`} from the list`}><IconX /></button>
         </div>
       );
     });
+
+    const BMR_CLIENT_PAGE_SIZE = 50;
 
     function BmrClientsEditor({ bmr, onChange, showBlockColumnHider = true, showCarrierNameSettings = true }) {
       const [draftName, setDraftName] = useState('');
       const [insertAt, setInsertAt] = useState('');
       const [managerFilter, setManagerFilter] = useState('__all__');
       const [clientSearch, setClientSearch] = useState('');
+      const [clientPage, setClientPage] = useState(1);
       const [selectedClientIds, setSelectedClientIds] = useState([]);
       const [bulkManagerId, setBulkManagerId] = useState('__unchanged__');
       const [bulkColor, setBulkColor] = useState('#FACC15');
@@ -8112,9 +8178,14 @@ https://bit.ly/4vrcu64`;
           return [client.name, client.allowBalanceLabel, managerName]
             .some(value => String(value || '').toLowerCase().includes(clientSearchTerm));
         });
+      const clientPageCount = Math.max(1, Math.ceil(filteredClients.length / BMR_CLIENT_PAGE_SIZE));
+      const clientPageStart = (clientPage - 1) * BMR_CLIENT_PAGE_SIZE;
+      const pagedClients = filteredClients.slice(clientPageStart, clientPageStart + BMR_CLIENT_PAGE_SIZE);
       const selectedClientIdSet = new Set(selectedClientIds);
-      const visibleClientIds = filteredClients.map(({ client }) => client.id);
-      const allVisibleSelected = visibleClientIds.length > 0 && visibleClientIds.every(id => selectedClientIdSet.has(id));
+      const filteredClientIds = filteredClients.map(({ client }) => client.id);
+      const allFilteredSelected = filteredClientIds.length > 0 && filteredClientIds.every(id => selectedClientIdSet.has(id));
+      useEffect(() => { setClientPage(1); }, [clientSearchTerm, managerFilter]);
+      useEffect(() => { setClientPage(page => Math.min(page, clientPageCount)); }, [clientPageCount]);
       const setClients = useCallback((next) => onChange((prev) => ({
         ...prev,
         clients: typeof next === 'function' ? next(prev.clients || []) : next,
@@ -8155,10 +8226,10 @@ https://bit.ly/4vrcu64`;
       const toggleSelected = useCallback((id) => setSelectedClientIds((ids) =>
         ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id]
       ), []);
-      const toggleVisibleSelection = () => setSelectedClientIds((ids) => {
+      const toggleFilteredSelection = () => setSelectedClientIds((ids) => {
         const next = new Set(ids);
-        if (allVisibleSelected) visibleClientIds.forEach(id => next.delete(id));
-        else visibleClientIds.forEach(id => next.add(id));
+        if (allFilteredSelected) filteredClientIds.forEach(id => next.delete(id));
+        else filteredClientIds.forEach(id => next.add(id));
         return Array.from(next);
       });
       const updateSelectedClients = (patch) => {
@@ -8177,7 +8248,7 @@ https://bit.ly/4vrcu64`;
           {showCarrierNameSettings && <BmrCarrierNameSettings bmr={bmr} onChange={onChange} />}
           <BmrBorderSettings bmr={bmr} onChange={onChange} />
           <BmrAccountManagersEditor bmr={bmr} onChange={onChange} />
-          <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+          <div className="client-list-toolbar flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
             <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
               <div className="w-full max-w-xs">
                 <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search clients</label>
@@ -8194,7 +8265,15 @@ https://bit.ly/4vrcu64`;
                 </Select>
               </div>
             </div>
-            <span className="pb-2 text-[11px] text-neutral-500">{filteredClients.length}/{clients.length} clients shown</span>
+            <div className="flex flex-wrap items-center justify-end gap-2 pb-0.5">
+              <span className="text-[11px] text-neutral-500">
+                {filteredClients.length ? `${clientPageStart + 1}-${Math.min(clientPageStart + BMR_CLIENT_PAGE_SIZE, filteredClients.length)}` : '0'} of {filteredClients.length} matches
+                {filteredClients.length !== clients.length ? ` / ${clients.length} total` : ''}
+              </span>
+              <Btn variant="ghost" size="sm" onClick={() => setClientPage(page => Math.max(1, page - 1))} disabled={clientPage <= 1}>Previous</Btn>
+              <span className="min-w-14 text-center text-[11px] font-mono text-neutral-500">{clientPage}/{clientPageCount}</span>
+              <Btn variant="ghost" size="sm" onClick={() => setClientPage(page => Math.min(clientPageCount, page + 1))} disabled={clientPage >= clientPageCount}>Next</Btn>
+            </div>
           </div>
           {selectedClientIds.length > 0 && (
             <div className="rounded-md border border-blue-500/40 bg-blue-500/10 p-3">
@@ -8221,12 +8300,12 @@ https://bit.ly/4vrcu64`;
               </div>
             </div>
           )}
-          <div className="overflow-x-auto pb-1">
+          <div className="client-list-viewport overflow-auto pb-1" role="region" aria-label="Client list">
             <div className="min-w-[820px]">
-              <div className="grid grid-cols-[20px_20px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_28px_84px_28px] gap-2 px-1 text-[10px] uppercase tracking-wide text-neutral-500">
+              <div className="client-list-header sticky top-0 z-10 grid grid-cols-[20px_36px_28px_28px_minmax(180px,1fr)_minmax(160px,1fr)_minmax(140px,180px)_36px_84px_36px] gap-2 px-1 py-2 text-[11px] uppercase tracking-wide text-neutral-500">
                 <div className="flex items-center">
-                  <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleSelection}
-                    disabled={!visibleClientIds.length} title="Select shown clients"
+                  <input type="checkbox" checked={allFilteredSelected} onChange={toggleFilteredSelection}
+                    disabled={!filteredClientIds.length} title="Select all filtered clients" aria-label="Select all filtered clients"
                     className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" />
                 </div>
                 <div></div><div></div><div></div>
@@ -8238,7 +8317,7 @@ https://bit.ly/4vrcu64`;
                 <div></div>
               </div>
               <div className="space-y-1">
-                {filteredClients.map(({ client: c, index: i }) => (
+                {pagedClients.map(({ client: c, index: i }) => (
                   <BmrClientRow key={c.id}
                     client={c}
                     accountManagers={accountManagers}
@@ -13486,11 +13565,25 @@ match /shared/whitelistSmsTestNumbers {
         const parentPad = parentStyle
           ? (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0)
           : 0;
+        const siblingWidths = parent
+          ? Array.from(parent.children)
+              .filter(child => child !== container && child instanceof HTMLElement)
+              .reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
+          : 0;
+        const siblingCount = parent ? Math.max(0, parent.children.length - 1) : 0;
+        const stackedNavigation = window.matchMedia('(max-width: 900px)').matches;
         const available = parent
-          ? Math.max(0, parent.clientWidth - parentPad - 8)
+          ? Math.max(0, parent.clientWidth - parentPad
+              - (stackedNavigation ? 0 : siblingWidths)
+              - (stackedNavigation ? 0 : siblingCount * 12)
+              - 8)
           : container.clientWidth;
         const buttons = Array.from(strip.children);
         if (!buttons.length || !available) return;
+        if (stackedNavigation) {
+          setVisibleCount(1);
+          return;
+        }
         const widths = buttons.map(b => b.offsetWidth);
         const gap = 4;
         const padding = 4;
@@ -13568,6 +13661,7 @@ match /shared/whitelistSmsTestNumbers {
             const isActive = current === m.id || (m.id === 'sip_fcs' && !current);
             return (
               <button key={m.id} type="button" onClick={() => onSelect(m.id)}
+                aria-current={isActive ? 'page' : undefined}
                 className={`${baseBtn} ${isActive ? activeCls : mutedCls}`}>
                 {m.label}
               </button>
@@ -13590,6 +13684,7 @@ match /shared/whitelistSmsTestNumbers {
                     const isActive = current === m.id;
                     return (
                       <button key={m.id} type="button" role="menuitem"
+                        aria-current={isActive ? 'page' : undefined}
                         onClick={() => { onSelect(m.id); setOpen(false); }}
                         className={`app-segment-more-item ${isActive ? 'is-active bg-blue-500/20 text-blue-200' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100'} block w-full text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap`}>
                         {m.label}
@@ -15039,9 +15134,10 @@ match /shared/whitelistSmsTestNumbers {
                   {ModuleSwitch}
                   <Btn variant="ghost" size="sm" onClick={undoEditor} disabled={!editorUndoStack.length} title="Undo last Editor change"><IconUndo /> Undo</Btn>
                   <Btn variant="ghost" size="sm" onClick={resetEditor}>Reset</Btn>
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" aria-label="Editor views">
                     {EDITOR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, editorTab: t.id }))}
+                        aria-current={editorTab === t.id ? 'page' : undefined}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
@@ -15103,9 +15199,10 @@ match /shared/whitelistSmsTestNumbers {
                 </div>
                 <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" aria-label="BMR VOIP views">
                     {BMR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, bmrTab: t.id }))}
+                        aria-current={bmrTab === t.id ? 'page' : undefined}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
@@ -15184,9 +15281,10 @@ match /shared/whitelistSmsTestNumbers {
                 </div>
                 <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" aria-label="BMR SMS views">
                     {BMR_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, bmrSmsTab: t.id }))}
+                        aria-current={bmrSmsTab === t.id ? 'page' : undefined}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${bmrSmsTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
@@ -15267,9 +15365,10 @@ match /shared/whitelistSmsTestNumbers {
                 </div>
                 <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                   {ModuleSwitch}
-                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
+                  <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" aria-label="Whitelist SMS views">
                     {WL_TABS.map(t => (
                       <button key={t.id} onClick={() => setState(s => ({ ...s, whitelistSmsTab: t.id }))}
+                        aria-current={whitelistSmsTab === t.id ? 'page' : undefined}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${whitelistSmsTab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                         {t.label}
                       </button>
@@ -15400,9 +15499,10 @@ match /shared/whitelistSmsTestNumbers {
               </div>
               <div className="app-header-controls flex flex-wrap items-center gap-2 sm:gap-3">
                 {ModuleSwitch}
-                <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]">
+                <nav className="app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]" aria-label="SIP and FCS views">
                   {TABS.map(t => (
                     <button key={t.id} onClick={() => setState(s => ({ ...s, tab: t.id }))}
+                      aria-current={state.tab === t.id ? 'page' : undefined}
                       className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? 'app-tab-active bg-neutral-800 text-neutral-100' : 'app-tab-muted text-neutral-500 hover:text-neutral-200'}`}>
                       {t.label}
                     </button>
@@ -15524,7 +15624,7 @@ match /shared/whitelistSmsTestNumbers {
         console.warn('Firebase init promise rejected:', e);
       }
       ReactDOM.createRoot(document.getElementById('root')).render(
-        <AppErrorBoundary><App /><PremiumTooltipLayer /></AppErrorBoundary>
+        <AppErrorBoundary><App /><PremiumTooltipLayer /><MobileWorkspaceController /></AppErrorBoundary>
       );
     })();
   
