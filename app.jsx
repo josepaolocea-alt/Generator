@@ -13591,29 +13591,15 @@ match /shared/whitelistSmsTestNumbers {
           ? moreMeasureRef.current.getBoundingClientRect().width
           : 0;
 
-        // How much of the header row this strip may take. The other controls
-        // in the row (a module's view tabs) are reserved at their NATURAL
-        // width — scrollWidth, not the rendered width: they shrink and scroll,
-        // and measuring them already-shrunken would feed one recalculation
-        // into the next. The cap stops a long tab strip from starving the
-        // module buttons on a narrow screen.
+        // The strip owns its whole line — the view tabs sit on their own row
+        // below it (see .app-header-controls in index.html). Deliberately NOT
+        // "the row minus whatever else is in it": that made the fit depend on
+        // the current module's tab strip, so the module buttons landed in a
+        // different place in every module, which is the thing that made the
+        // header hard to navigate.
         const parentStyle = window.getComputedStyle(parent);
-        const parentGap = parseFloat(parentStyle.columnGap) || 0;
         const parentPad = (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0);
-        const row = parent.clientWidth - parentPad;
-        const reserveCap = Math.max(160, row * 0.55);
-        const containerBox = container.getBoundingClientRect();
-        const sameLineSlack = Math.max(8, containerBox.height / 2);
-        const reserved = Array.from(parent.children).reduce((sum, child) => {
-          if (child === container || !(child instanceof HTMLElement)) return sum;
-          if (!child.getClientRects().length) return sum;
-          // A control that wrapped onto its own line is not competing for this
-          // line's width — reserving for it anyway would fold the strip for
-          // space nothing is using.
-          if (Math.abs(child.getBoundingClientRect().top - containerBox.top) > sameLineSlack) return sum;
-          return sum + Math.min(child.scrollWidth, reserveCap) + parentGap;
-        }, 0);
-        const available = row - reserved;
+        const available = parent.clientWidth - parentPad;
         // Nothing is laid out yet (hidden module, first paint) — keep whatever
         // is on screen rather than collapsing to a single button.
         if (!(available > 0)) return;
@@ -13623,29 +13609,34 @@ match /shared/whitelistSmsTestNumbers {
           prev.length === ids.length && prev.every((id, i) => id === ids[i]) ? prev : ids
         ));
 
-        const total = order.reduce((sum, id) => sum + (widths.get(id) || 0), 0)
-          + Math.max(0, order.length - 1) * gap + padding;
-        if (total <= available) { commit(order); return; }
+        const stripWidth = (ids, withMore) => {
+          const count = ids.length + (withMore ? 1 : 0);
+          if (!count) return padding;
+          return padding
+            + ids.reduce((sum, id) => sum + (widths.get(id) || 0), 0)
+            + (withMore ? moreWidth : 0)
+            + (count - 1) * gap;
+        };
 
-        // The active module always keeps its slot, so the strip can never end
-        // up naming a different module as the current one while the real one
-        // hides in the menu.
-        const budget = available - padding - moreWidth - gap;
-        const chosen = [];
-        let used = 0;
-        if (widths.has(activeId)) {
-          chosen.push(activeId);
-          used = widths.get(activeId);
+        if (stripWidth(order, false) <= available) { commit(order); return; }
+
+        // Fold from the END of the list, never around the current module: the
+        // buttons on the left then sit in the same place whichever module is
+        // open, and the rarely-opened admin modules (last in ALL_MODULES) are
+        // the first to move into the menu.
+        let keep = order.length - 1;
+        while (keep > 1 && stripWidth(order.slice(0, keep), true) > available) keep--;
+        let chosen = order.slice(0, keep);
+        // ...except that the current module must be on screen. It takes the
+        // last slot, so only that one slot differs between modules.
+        if (!chosen.includes(activeId) && widths.has(activeId)) {
+          chosen = [...order.slice(0, Math.max(0, keep - 1)), activeId];
+          while (chosen.length > 1 && stripWidth(chosen, true) > available) {
+            chosen = [...chosen.slice(0, chosen.length - 2), activeId];
+          }
         }
-        for (const id of order) {
-          if (chosen.includes(id)) continue;
-          const next = used + (chosen.length ? gap : 0) + (widths.get(id) || 0);
-          if (next > budget) break;
-          used = next;
-          chosen.push(id);
-        }
-        if (!chosen.length && order.length) chosen.push(order[0]);
-        commit(order.filter(id => chosen.includes(id)));
+        if (!chosen.length && order.length) chosen = [order[0]];
+        commit(chosen);
       };
       const recalculate = useCallback(() => { recalcRef.current?.(); }, []);
 
