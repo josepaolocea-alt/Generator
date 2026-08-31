@@ -1276,9 +1276,13 @@
     .app-topbar {
       align-items: flex-start;
     }
+    /* The title takes what it needs and no more. It used to grow (flex: 1 1)
+       alongside the controls, so a two-word module name still claimed ~390px
+       of a 1000px header row and squeezed the module strip into its overflow
+       menu on screens that had room for every module. */
     .app-title-block {
-      flex: 1 1 220px;
-      min-width: min(100%, 220px);
+      flex: 0 1 auto;
+      min-width: min(100%, 180px);
     }
     .app-title-block h2 {
       line-height: 1.16;
@@ -1624,6 +1628,12 @@
       background: rgba(255,255,255,0.065) !important;
       transform: translateY(-1px);
     }
+    /* Written as `<strip> button.<state>` on purpose: the flat-button rule
+       above is `.app-segmented button` (0,1,1), so a bare `.app-segment-active`
+       (0,1,0) loses to it even with !important and the current module / current
+       view kept rendering exactly like the inactive ones. */
+    .app-segmented button.app-segment-active,
+    .app-tab-nav button.app-tab-active,
     .app-segment-active,
     .app-tab-active,
     .app-segmented button.is-active,
@@ -1634,6 +1644,8 @@
         linear-gradient(135deg, rgba(111, 158, 246, 0.92), rgba(109, 109, 210, 0.82)) !important;
       box-shadow: 0 8px 20px rgba(55, 92, 184, 0.24), inset 0 1px 0 rgba(255,255,255,0.25) !important;
     }
+    html.light .app-segmented button.app-segment-active,
+    html.light .app-tab-nav button.app-tab-active,
     html.light .app-segment-active,
     html.light .app-tab-active,
     html.light .app-segmented button.is-active,
@@ -1642,15 +1654,26 @@
       color: #fff !important;
       background: linear-gradient(135deg, #558ee4, #7272cf) !important;
     }
-    .app-segment-more-menu {
-      border: 0 !important;
+    /* A menu has to read as a surface sitting ON the page. The borderless
+       0.92-alpha fill was within a few percent of the canvas behind it, so the
+       open menu looked like two loose labels floating under the button: it
+       needs its own edge and a shadow dark enough to show on a dark canvas.
+       The blur is gone with it — the fill is opaque now, and this menu sits
+       inside the already-frosted .app-topbar, exactly the nested backdrop root
+       the sidebar note above warns about. */
+    /* Written with the #root prefix to outrank the blanket
+       `body > #root > div .border-neutral-800 { border-color: transparent }`
+       above, which strips the edge off every bordered box in the workspace. */
+    body > #root > div .app-segment-more-menu {
+      border: 1px solid rgba(255,255,255,0.10) !important;
       border-radius: 16px !important;
-      background: rgba(24, 27, 42, 0.92) !important;
-      box-shadow: 0 22px 56px rgba(2,5,18,0.34), var(--glass-inset) !important;
-      backdrop-filter: blur(24px);
+      background: #1b1f31 !important;
+      box-shadow: 0 26px 60px rgba(2,5,18,0.62), var(--glass-inset) !important;
     }
-    html.light .app-segment-more-menu {
-      background: rgba(250,252,255,0.94) !important;
+    html.light body > #root > div .app-segment-more-menu {
+      border-color: rgba(73,91,123,0.16) !important;
+      background: #ffffff !important;
+      box-shadow: 0 24px 54px rgba(38,50,78,0.20), inset 0 1px 0 #fff !important;
     }
 
     /* Common surfaces */
@@ -2071,12 +2094,32 @@
       align-items: center;
       min-width: 0;
     }
+    /* The module strip decides for itself how many buttons to show and folds
+       the rest into its own "More" menu, so it must never be squeezed below
+       the width of what it chose to render: it has no overflow of its own, so
+       min-width:0 let the buttons spill out of the pill and sit on top of the
+       view tabs. The view tabs are the control that gives — they shrink and
+       scroll horizontally instead. */
     .app-header-controls > .app-segmented {
-      min-width: 0;
-      flex: 0 1 auto;
+      flex: 0 0 auto;
     }
     .app-header-controls > .app-tab-nav {
-      flex: 0 0 auto;
+      flex: 0 1 auto;
+      min-width: 0;
+      flex-wrap: nowrap !important;
+      overflow-x: auto;
+    }
+    /* Between the desktop layout and the stacked one there is a band where a
+       single row can hold the module strip only by clipping the view tabs into
+       a scroller no mouse can reach — measured: even with the strip folded to
+       the current module plus "More", the widest tab strip still loses ~65px
+       at 1181px. Wrap instead: the module strip keeps the first line (with
+       room for every module) and the tabs take the second. */
+    @media (max-width: 1280px) {
+      .app-header-controls {
+        flex-wrap: wrap !important;
+        justify-content: flex-start;
+      }
     }
     @media (max-width: 1450px) {
       .app-pill-row { display: none !important; }
@@ -13014,62 +13057,108 @@ match /shared/whitelistSmsTestNumbers {
   allow read, write: if request.auth != null;
 }`)));
 }
+const MODULE_MORE_CHEVRON = /* @__PURE__ */ React.createElement("svg", { width: "10", height: "10", viewBox: "0 0 10 10", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "M2 4l3 3 3-3", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }));
 function ModuleSwitcher({ modules, current, onSelect }) {
   const containerRef = useRef(null);
   const measureRef = useRef(null);
+  const moreMeasureRef = useRef(null);
   const moreRef = useRef(null);
-  const [visibleCount, setVisibleCount] = useState(modules.length);
+  const [visibleIds, setVisibleIds] = useState(() => modules.map((m) => m.id));
   const [open, setOpen] = useState(false);
-  const recalculate = useCallback(() => {
+  const moduleSignature = modules.map((m) => `${m.id}:${m.label}`).join("|");
+  const activeId = (modules.find((m) => m.id === current) || modules.find((m) => m.id === "sip_fcs") || modules[0] || {}).id;
+  const recalcRef = useRef(null);
+  recalcRef.current = () => {
     const container = containerRef.current;
     const strip = measureRef.current;
-    if (!container || !strip) return;
-    const parent = container.parentElement;
-    const parentStyle = parent ? window.getComputedStyle(parent) : null;
-    const parentPad = parentStyle ? (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0) : 0;
-    const siblingWidths = parent ? Array.from(parent.children).filter((child) => child !== container && child instanceof HTMLElement).reduce((sum, child) => sum + child.getBoundingClientRect().width, 0) : 0;
-    const siblingCount = parent ? Math.max(0, parent.children.length - 1) : 0;
-    const stackedNavigation = window.matchMedia("(max-width: 900px)").matches;
-    const available = parent ? Math.max(0, parent.clientWidth - parentPad - (stackedNavigation ? 0 : siblingWidths) - (stackedNavigation ? 0 : siblingCount * 12) - 8) : container.clientWidth;
-    const buttons = Array.from(strip.children);
-    if (!buttons.length || !available) return;
-    if (stackedNavigation) {
-      setVisibleCount(1);
+    const parent = container && container.parentElement;
+    if (!container || !strip || !parent) return;
+    const widths = /* @__PURE__ */ new Map();
+    Array.from(strip.children).forEach((node) => {
+      const id = node.getAttribute("data-module-id");
+      if (id) widths.set(id, node.getBoundingClientRect().width);
+    });
+    if (!widths.size) return;
+    const style = window.getComputedStyle(container);
+    const gap = parseFloat(style.columnGap) || 0;
+    const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const moreWidth = moreMeasureRef.current ? moreMeasureRef.current.getBoundingClientRect().width : 0;
+    const parentStyle = window.getComputedStyle(parent);
+    const parentGap = parseFloat(parentStyle.columnGap) || 0;
+    const parentPad = (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0);
+    const row = parent.clientWidth - parentPad;
+    const reserveCap = Math.max(160, row * 0.55);
+    const containerBox = container.getBoundingClientRect();
+    const sameLineSlack = Math.max(8, containerBox.height / 2);
+    const reserved = Array.from(parent.children).reduce((sum, child) => {
+      if (child === container || !(child instanceof HTMLElement)) return sum;
+      if (!child.getClientRects().length) return sum;
+      if (Math.abs(child.getBoundingClientRect().top - containerBox.top) > sameLineSlack) return sum;
+      return sum + Math.min(child.scrollWidth, reserveCap) + parentGap;
+    }, 0);
+    const available = row - reserved;
+    if (!(available > 0)) return;
+    const order = modules.map((m) => m.id);
+    const commit = (ids) => setVisibleIds((prev) => prev.length === ids.length && prev.every((id, i) => id === ids[i]) ? prev : ids);
+    const total = order.reduce((sum, id) => sum + (widths.get(id) || 0), 0) + Math.max(0, order.length - 1) * gap + padding;
+    if (total <= available) {
+      commit(order);
       return;
     }
-    const widths = buttons.map((b) => b.offsetWidth);
-    const gap = 4;
-    const padding = 4;
-    const moreWidth = 78;
-    const allWidth = widths.reduce((s, w) => s + w, 0) + Math.max(0, widths.length - 1) * gap + padding;
-    if (allWidth <= available) {
-      setVisibleCount(modules.length);
-      return;
+    const budget = available - padding - moreWidth - gap;
+    const chosen = [];
+    let used = 0;
+    if (widths.has(activeId)) {
+      chosen.push(activeId);
+      used = widths.get(activeId);
     }
-    let used = padding + moreWidth + gap;
-    let count = 0;
-    for (let i = 0; i < widths.length; i++) {
-      const next = used + widths[i] + (count > 0 ? gap : 0);
-      if (next > available) break;
+    for (const id of order) {
+      if (chosen.includes(id)) continue;
+      const next = used + (chosen.length ? gap : 0) + (widths.get(id) || 0);
+      if (next > budget) break;
       used = next;
-      count++;
+      chosen.push(id);
     }
-    setVisibleCount(Math.max(1, count));
-  }, [modules]);
+    if (!chosen.length && order.length) chosen.push(order[0]);
+    commit(order.filter((id) => chosen.includes(id)));
+  };
+  const recalculate = useCallback(() => {
+    recalcRef.current?.();
+  }, []);
   useLayoutEffect(() => {
     recalculate();
-  }, [recalculate]);
+  }, [recalculate, moduleSignature, activeId]);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const target = container.parentElement || container;
     const ro = new ResizeObserver(() => recalculate());
-    ro.observe(target);
+    const parent = container.parentElement;
+    if (parent) {
+      ro.observe(parent);
+      Array.from(parent.children).forEach((child) => {
+        if (child !== container && child instanceof HTMLElement) ro.observe(child);
+      });
+    } else {
+      ro.observe(container);
+    }
+    if (measureRef.current) ro.observe(measureRef.current);
     window.addEventListener("resize", recalculate);
+    let alive = true;
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => {
+        if (alive) recalculate();
+      }).catch(() => {
+      });
+    }
     return () => {
+      alive = false;
       ro.disconnect();
       window.removeEventListener("resize", recalculate);
     };
+  }, [recalculate]);
+  useEffect(() => {
+    const timers = [0, 120, 400, 1e3].map((ms) => window.setTimeout(recalculate, ms));
+    return () => timers.forEach((id) => window.clearTimeout(id));
   }, [recalculate]);
   useEffect(() => {
     if (!open) return;
@@ -13086,10 +13175,14 @@ function ModuleSwitcher({ modules, current, onSelect }) {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
-  const safeCount = Math.min(visibleCount, modules.length);
-  const visible = modules.slice(0, safeCount);
-  const overflow = modules.slice(safeCount);
-  const overflowHasActive = overflow.some((m) => current === m.id);
+  const visibleSet = new Set(visibleIds);
+  let visible = modules.filter((m) => visibleSet.has(m.id));
+  if (!visible.length) visible = modules;
+  const overflow = modules.filter((m) => !visible.includes(m));
+  const overflowCount = overflow.length;
+  useEffect(() => {
+    if (!overflowCount) setOpen(false);
+  }, [overflowCount]);
   const baseBtn = "px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap";
   const activeCls = "app-segment-active bg-blue-500/20 text-blue-200 border border-blue-500/40";
   const mutedCls = "app-segment-muted text-neutral-500 hover:text-neutral-200";
@@ -13100,9 +13193,20 @@ function ModuleSwitcher({ modules, current, onSelect }) {
       "aria-hidden": "true",
       style: { position: "fixed", left: "-99999px", top: 0, display: "flex", gap: "4px", pointerEvents: "none", visibility: "hidden" }
     },
-    modules.map((m) => /* @__PURE__ */ React.createElement("button", { key: `m-${m.id}`, type: "button", tabIndex: -1, className: `${baseBtn} ${mutedCls}` }, m.label))
+    modules.map((m) => /* @__PURE__ */ React.createElement("button", { key: `m-${m.id}`, "data-module-id": m.id, type: "button", tabIndex: -1, className: `${baseBtn} ${mutedCls}` }, m.label)),
+    /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        ref: moreMeasureRef,
+        type: "button",
+        tabIndex: -1,
+        className: `${baseBtn} ${mutedCls} inline-flex items-center gap-1`
+      },
+      "More",
+      MODULE_MORE_CHEVRON
+    )
   ), visible.map((m) => {
-    const isActive = current === m.id || m.id === "sip_fcs" && !current;
+    const isActive = m.id === activeId;
     return /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -13114,42 +13218,38 @@ function ModuleSwitcher({ modules, current, onSelect }) {
       },
       m.label
     );
-  }), overflow.length > 0 && /* @__PURE__ */ React.createElement("div", { ref: moreRef, className: "relative" }, /* @__PURE__ */ React.createElement(
+  }), overflowCount > 0 && /* @__PURE__ */ React.createElement("div", { ref: moreRef, className: "relative" }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
       onClick: () => setOpen((v) => !v),
       "aria-expanded": open,
       "aria-haspopup": "menu",
-      "aria-label": "More modules",
-      className: `${baseBtn} inline-flex items-center gap-1 ${overflowHasActive ? activeCls : mutedCls}`
+      "aria-label": `More modules (${overflowCount})`,
+      className: `${baseBtn} inline-flex items-center gap-1 ${mutedCls}`
     },
     "More",
-    /* @__PURE__ */ React.createElement("svg", { width: "10", height: "10", viewBox: "0 0 10 10", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "M2 4l3 3 3-3", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", strokeLinejoin: "round" }))
+    MODULE_MORE_CHEVRON
   ), open && /* @__PURE__ */ React.createElement(
     "div",
     {
       role: "menu",
       className: "app-segment-more-menu absolute right-0 top-full z-30 mt-1 min-w-[170px] rounded-md border border-neutral-800 bg-[#232327] p-1 shadow-2xl"
     },
-    overflow.map((m) => {
-      const isActive = current === m.id;
-      return /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          key: m.id,
-          type: "button",
-          role: "menuitem",
-          "aria-current": isActive ? "page" : void 0,
-          onClick: () => {
-            onSelect(m.id);
-            setOpen(false);
-          },
-          className: `app-segment-more-item ${isActive ? "is-active bg-blue-500/20 text-blue-200" : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"} block w-full text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap`
+    overflow.map((m) => /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        key: m.id,
+        type: "button",
+        role: "menuitem",
+        onClick: () => {
+          onSelect(m.id);
+          setOpen(false);
         },
-        m.label
-      );
-    })
+        className: "app-segment-more-item text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100 block w-full text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap"
+      },
+      m.label
+    ))
   )));
 }
 function App() {

@@ -13546,81 +13546,151 @@ match /shared/whitelistSmsTestNumbers {
       );
     }
 
+    // Chevron for the module strip's "More" control. Declared once so the
+    // hidden measuring copy and the real button can never drift apart.
+    const MODULE_MORE_CHEVRON = (
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+        <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    );
+
     function ModuleSwitcher({ modules, current, onSelect }) {
       const containerRef = useRef(null);
       const measureRef = useRef(null);
+      const moreMeasureRef = useRef(null);
       const moreRef = useRef(null);
-      const [visibleCount, setVisibleCount] = useState(modules.length);
+      const [visibleIds, setVisibleIds] = useState(() => modules.map(m => m.id));
       const [open, setOpen] = useState(false);
 
-      const recalculate = useCallback(() => {
+      const moduleSignature = modules.map(m => `${m.id}:${m.label}`).join('|');
+      const activeId = (modules.find(m => m.id === current)
+        || modules.find(m => m.id === 'sip_fcs')
+        || modules[0] || {}).id;
+
+      // Reassigned on every render instead of memoised: App rebuilds `modules`
+      // each render, so a useCallback keyed on it would tear down and rebuild
+      // the ResizeObserver below continuously.
+      const recalcRef = useRef(null);
+      recalcRef.current = () => {
         const container = containerRef.current;
         const strip = measureRef.current;
-        if (!container || !strip) return;
-        // Measure the available width from the parent so the segmented bar
-        // can shrink/grow correctly — its own clientWidth only reflects
-        // what its current children occupy.
-        const parent = container.parentElement;
-        const parentStyle = parent ? window.getComputedStyle(parent) : null;
-        const parentPad = parentStyle
-          ? (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0)
-          : 0;
-        const siblingWidths = parent
-          ? Array.from(parent.children)
-              .filter(child => child !== container && child instanceof HTMLElement)
-              .reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
-          : 0;
-        const siblingCount = parent ? Math.max(0, parent.children.length - 1) : 0;
-        const stackedNavigation = window.matchMedia('(max-width: 900px)').matches;
-        const available = parent
-          ? Math.max(0, parent.clientWidth - parentPad
-              - (stackedNavigation ? 0 : siblingWidths)
-              - (stackedNavigation ? 0 : siblingCount * 12)
-              - 8)
-          : container.clientWidth;
-        const buttons = Array.from(strip.children);
-        if (!buttons.length || !available) return;
-        if (stackedNavigation) {
-          setVisibleCount(1);
-          return;
-        }
-        const widths = buttons.map(b => b.offsetWidth);
-        const gap = 4;
-        const padding = 4;
-        const moreWidth = 78;
-        const allWidth = widths.reduce((s, w) => s + w, 0) + Math.max(0, widths.length - 1) * gap + padding;
-        if (allWidth <= available) {
-          setVisibleCount(modules.length);
-          return;
-        }
-        let used = padding + moreWidth + gap;
-        let count = 0;
-        for (let i = 0; i < widths.length; i++) {
-          const next = used + widths[i] + (count > 0 ? gap : 0);
-          if (next > available) break;
-          used = next;
-          count++;
-        }
-        setVisibleCount(Math.max(1, count));
-      }, [modules]);
+        const parent = container && container.parentElement;
+        if (!container || !strip || !parent) return;
 
-      useLayoutEffect(() => { recalculate(); }, [recalculate]);
+        const widths = new Map();
+        Array.from(strip.children).forEach(node => {
+          const id = node.getAttribute('data-module-id');
+          if (id) widths.set(id, node.getBoundingClientRect().width);
+        });
+        if (!widths.size) return;
+
+        const style = window.getComputedStyle(container);
+        const gap = parseFloat(style.columnGap) || 0;
+        const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+        const moreWidth = moreMeasureRef.current
+          ? moreMeasureRef.current.getBoundingClientRect().width
+          : 0;
+
+        // How much of the header row this strip may take. The other controls
+        // in the row (a module's view tabs) are reserved at their NATURAL
+        // width — scrollWidth, not the rendered width: they shrink and scroll,
+        // and measuring them already-shrunken would feed one recalculation
+        // into the next. The cap stops a long tab strip from starving the
+        // module buttons on a narrow screen.
+        const parentStyle = window.getComputedStyle(parent);
+        const parentGap = parseFloat(parentStyle.columnGap) || 0;
+        const parentPad = (parseFloat(parentStyle.paddingLeft) || 0) + (parseFloat(parentStyle.paddingRight) || 0);
+        const row = parent.clientWidth - parentPad;
+        const reserveCap = Math.max(160, row * 0.55);
+        const containerBox = container.getBoundingClientRect();
+        const sameLineSlack = Math.max(8, containerBox.height / 2);
+        const reserved = Array.from(parent.children).reduce((sum, child) => {
+          if (child === container || !(child instanceof HTMLElement)) return sum;
+          if (!child.getClientRects().length) return sum;
+          // A control that wrapped onto its own line is not competing for this
+          // line's width — reserving for it anyway would fold the strip for
+          // space nothing is using.
+          if (Math.abs(child.getBoundingClientRect().top - containerBox.top) > sameLineSlack) return sum;
+          return sum + Math.min(child.scrollWidth, reserveCap) + parentGap;
+        }, 0);
+        const available = row - reserved;
+        // Nothing is laid out yet (hidden module, first paint) — keep whatever
+        // is on screen rather than collapsing to a single button.
+        if (!(available > 0)) return;
+
+        const order = modules.map(m => m.id);
+        const commit = (ids) => setVisibleIds(prev => (
+          prev.length === ids.length && prev.every((id, i) => id === ids[i]) ? prev : ids
+        ));
+
+        const total = order.reduce((sum, id) => sum + (widths.get(id) || 0), 0)
+          + Math.max(0, order.length - 1) * gap + padding;
+        if (total <= available) { commit(order); return; }
+
+        // The active module always keeps its slot, so the strip can never end
+        // up naming a different module as the current one while the real one
+        // hides in the menu.
+        const budget = available - padding - moreWidth - gap;
+        const chosen = [];
+        let used = 0;
+        if (widths.has(activeId)) {
+          chosen.push(activeId);
+          used = widths.get(activeId);
+        }
+        for (const id of order) {
+          if (chosen.includes(id)) continue;
+          const next = used + (chosen.length ? gap : 0) + (widths.get(id) || 0);
+          if (next > budget) break;
+          used = next;
+          chosen.push(id);
+        }
+        if (!chosen.length && order.length) chosen.push(order[0]);
+        commit(order.filter(id => chosen.includes(id)));
+      };
+      const recalculate = useCallback(() => { recalcRef.current?.(); }, []);
+
+      useLayoutEffect(() => { recalculate(); }, [recalculate, moduleSignature, activeId]);
 
       useEffect(() => {
         const container = containerRef.current;
         if (!container) return;
-        // Observe the parent element — the segmented bar itself only resizes
-        // when its children change, so watching it would miss viewport
-        // resizes when the visible-count is already accurate. The parent
-        // (app-header-controls) reflects the actual available width.
-        const target = container.parentElement || container;
         const ro = new ResizeObserver(() => recalculate());
-        ro.observe(target);
+        const parent = container.parentElement;
+        if (parent) {
+          // The row keeps its own width when the strip folds, so watching only
+          // the parent would miss the sibling controls changing size.
+          ro.observe(parent);
+          Array.from(parent.children).forEach(child => {
+            if (child !== container && child instanceof HTMLElement) ro.observe(child);
+          });
+        } else {
+          ro.observe(container);
+        }
+        // The hidden measuring strip is styled by the Tailwind CDN sheet, which
+        // is injected after the first paint. Without this the very first fit is
+        // computed from unstyled buttons and nothing ever revisits it — the bar
+        // stayed wrong until the window was resized.
+        if (measureRef.current) ro.observe(measureRef.current);
         window.addEventListener('resize', recalculate);
+        let alive = true;
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(() => { if (alive) recalculate(); }).catch(() => {});
+        }
         return () => {
+          alive = false;
           ro.disconnect();
           window.removeEventListener('resize', recalculate);
         };
+      }, [recalculate]);
+
+      // Belt and braces for the first fit: the Tailwind CDN build injects its
+      // utility styles after the first paint and web fonts land later still,
+      // and both change the measured button widths. The observers above catch
+      // that in a live tab, but a tab whose rendering is throttled delivers no
+      // resize records at all — these passes do not depend on a frame.
+      useEffect(() => {
+        const timers = [0, 120, 400, 1000].map(ms => window.setTimeout(recalculate, ms));
+        return () => timers.forEach(id => window.clearTimeout(id));
       }, [recalculate]);
 
       useEffect(() => {
@@ -13639,10 +13709,15 @@ match /shared/whitelistSmsTestNumbers {
         };
       }, [open]);
 
-      const safeCount = Math.min(visibleCount, modules.length);
-      const visible = modules.slice(0, safeCount);
-      const overflow = modules.slice(safeCount);
-      const overflowHasActive = overflow.some(m => current === m.id);
+      const visibleSet = new Set(visibleIds);
+      let visible = modules.filter(m => visibleSet.has(m.id));
+      if (!visible.length) visible = modules;
+      const overflow = modules.filter(m => !visible.includes(m));
+      const overflowCount = overflow.length;
+
+      useEffect(() => {
+        if (!overflowCount) setOpen(false);
+      }, [overflowCount]);
 
       const baseBtn = 'px-3 py-1 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap';
       const activeCls = 'app-segment-active bg-blue-500/20 text-blue-200 border border-blue-500/40';
@@ -13653,12 +13728,17 @@ match /shared/whitelistSmsTestNumbers {
           <div ref={measureRef} aria-hidden="true"
             style={{ position: 'fixed', left: '-99999px', top: 0, display: 'flex', gap: '4px', pointerEvents: 'none', visibility: 'hidden' }}>
             {modules.map(m => (
-              <button key={`m-${m.id}`} type="button" tabIndex={-1} className={`${baseBtn} ${mutedCls}`}>{m.label}</button>
+              <button key={`m-${m.id}`} data-module-id={m.id} type="button" tabIndex={-1} className={`${baseBtn} ${mutedCls}`}>{m.label}</button>
             ))}
+            <button ref={moreMeasureRef} type="button" tabIndex={-1}
+              className={`${baseBtn} ${mutedCls} inline-flex items-center gap-1`}>
+              More
+              {MODULE_MORE_CHEVRON}
+            </button>
           </div>
 
           {visible.map(m => {
-            const isActive = current === m.id || (m.id === 'sip_fcs' && !current);
+            const isActive = m.id === activeId;
             return (
               <button key={m.id} type="button" onClick={() => onSelect(m.id)}
                 aria-current={isActive ? 'page' : undefined}
@@ -13668,29 +13748,24 @@ match /shared/whitelistSmsTestNumbers {
             );
           })}
 
-          {overflow.length > 0 && (
+          {overflowCount > 0 && (
             <div ref={moreRef} className="relative">
-              <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} aria-haspopup="menu" aria-label="More modules"
-                className={`${baseBtn} inline-flex items-center gap-1 ${overflowHasActive ? activeCls : mutedCls}`}>
+              <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} aria-haspopup="menu"
+                aria-label={`More modules (${overflowCount})`}
+                className={`${baseBtn} inline-flex items-center gap-1 ${mutedCls}`}>
                 More
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                  <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                {MODULE_MORE_CHEVRON}
               </button>
               {open && (
                 <div role="menu"
                   className="app-segment-more-menu absolute right-0 top-full z-30 mt-1 min-w-[170px] rounded-md border border-neutral-800 bg-[#232327] p-1 shadow-2xl">
-                  {overflow.map(m => {
-                    const isActive = current === m.id;
-                    return (
-                      <button key={m.id} type="button" role="menuitem"
-                        aria-current={isActive ? 'page' : undefined}
-                        onClick={() => { onSelect(m.id); setOpen(false); }}
-                        className={`app-segment-more-item ${isActive ? 'is-active bg-blue-500/20 text-blue-200' : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100'} block w-full text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap`}>
-                        {m.label}
-                      </button>
-                    );
-                  })}
+                  {overflow.map(m => (
+                    <button key={m.id} type="button" role="menuitem"
+                      onClick={() => { onSelect(m.id); setOpen(false); }}
+                      className="app-segment-more-item text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100 block w-full text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider rounded transition-colors whitespace-nowrap">
+                      {m.label}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
