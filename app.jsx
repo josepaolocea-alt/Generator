@@ -15691,11 +15691,7 @@ match /shared/whitelistSmsTestNumbers {
             </footer>
           </main>
 
-          {toast && (
-            <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-              {toast.msg}
-            </div>
-          )}
+          <Toast toast={toast} onClose={() => setToast(null)} />
 
           {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
 
