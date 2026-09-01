@@ -4957,6 +4957,27 @@ https://bit.ly/4vrcu64`;
       );
     }
 
+    // Toasts stay on screen until dismissed. A sync can run for minutes, so an
+    // auto-hiding toast regularly disappeared before the user looked back at the
+    // tab — the result of the one operation they were waiting on was the thing
+    // most likely to be missed. Every module renders this same component, so the
+    // dismiss control lives in one place.
+    function Toast({ toast, onClose }) {
+      if (!toast) return null;
+      const ok = toast.type === 'ok';
+      return (
+        <div role="status" aria-live="polite"
+          className={`fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${ok ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
+          <div className="min-w-0 flex-1 leading-relaxed">{toast.msg}</div>
+          <button onClick={onClose} title="Dismiss" aria-label="Dismiss notification"
+            className="-mr-1 -mt-0.5 shrink-0 rounded p-1 leading-none opacity-70 hover:opacity-100 hover:bg-white/10 transition-opacity"
+            style={{ cursor: 'pointer' }}>
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      );
+    }
+
     // Compact Google Sheets sync panel shown above the Generate button in the
     // SIP/FCS, BMR VOIP and BMR SMS sidebars. Connect once, then Generate (or
     // "Add new tabs") copies only missing tabs into that module's Google Sheet.
@@ -5090,6 +5111,14 @@ https://bit.ly/4vrcu64`;
                 <div className="text-[10px] text-amber-500 leading-relaxed">{last.pasteSumError}</div>
               )}
             </div>
+          )}
+
+          {moduleId === 'sip_fcs' && conn.connected && (sheetId || targetSheetId) && (
+            <button onClick={() => gsheets.installPasteSum && gsheets.installPasteSum()}
+              disabled={busy}
+              className="w-full rounded-md border border-neutral-800 px-3 py-2 text-[11px] text-neutral-300 hover:border-neutral-700 hover:bg-neutral-900/50 disabled:opacity-50">
+              {busy ? 'Working…' : 'Install paste-to-sum'}
+            </button>
           )}
 
           <BackupControls backup={gsheets.backup} />
@@ -13970,7 +13999,6 @@ match /shared/whitelistSmsTestNumbers {
                     saveSnapshot(localNow, 'pre-sync-overwrite');
                     if (drop >= 2) {
                       setToast({ type: 'err', msg: `Cloud copy has ${drop} fewer clients than this device — a local backup was saved. Open the Backups panel to restore if this was unexpected.` });
-                      setTimeout(() => setToast(null), 10000);
                     }
                   }
                 }
@@ -14056,7 +14084,6 @@ match /shared/whitelistSmsTestNumbers {
               rcaCompany: result.next.rcaCompany,
             }));
             setToast({ type: 'ok', msg: `Compacted ${result.changed} image${result.changed === 1 ? '' : 's'}, freed ${kb(result.savedBytes)} KB — syncing now` });
-            setTimeout(() => setToast(null), 5000);
           } catch (e) {
             console.warn('Compacting images failed', e);
             setSync(s => ({ ...s, status: 'offline', message: 'Could not compact images: ' + (e?.message || 'unknown error') }));
@@ -14174,7 +14201,6 @@ match /shared/whitelistSmsTestNumbers {
             type: 'err',
             msg: `Saving the shared number database failed${code}. ${e?.code === 'permission-denied' ? 'Firestore rules denied the write — verify the deployed rules allow signed-in writes to /shared/whitelistSmsTestNumbers.' : 'Check the browser console for details.'}`,
           });
-          setTimeout(() => setToast(null), 8000);
         }
       }, [sync.uid, sync.role]);
 
@@ -14389,7 +14415,6 @@ match /shared/whitelistSmsTestNumbers {
         const id = googleSpreadsheetId(raw);
         if (raw && !id) {
           setToast({ type: 'err', msg: 'Paste a valid Google Sheets link.' });
-          setTimeout(() => setToast(null), 4000);
           return false;
         }
         setState(s => ({
@@ -14409,7 +14434,6 @@ match /shared/whitelistSmsTestNumbers {
             ? 'Destination saved. Make sure its owner shared it with the connected account as Editor.'
             : 'Pasted destination cleared.',
         });
-        setTimeout(() => setToast(null), 5000);
         return true;
       }, []);
 
@@ -14417,7 +14441,6 @@ match /shared/whitelistSmsTestNumbers {
       const connectGoogle = useCallback(async () => {
         if (!googleSheetsSync.isConfigured()) {
           setToast({ type: 'err', msg: 'Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync.' });
-          setTimeout(() => setToast(null), 5000);
           return;
         }
         setGoogleConn(c => ({ ...c, busyModule: '__connect__', error: null }));
@@ -14428,7 +14451,6 @@ match /shared/whitelistSmsTestNumbers {
           console.warn('Google connect failed', e);
           setGoogleConn(c => ({ ...c, busyModule: null, error: e.message || String(e) }));
           setToast({ type: 'err', msg: 'Google connect failed: ' + (e.message || e) });
-          setTimeout(() => setToast(null), 6000);
         }
       }, []);
 
@@ -14445,7 +14467,6 @@ match /shared/whitelistSmsTestNumbers {
         if (!conf) return;
         if (!googleSheetsSync.isConfigured()) {
           setToast({ type: 'err', msg: 'Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync.' });
-          setTimeout(() => setToast(null), 5000);
           return;
         }
         if (createFresh) {
@@ -14461,7 +14482,6 @@ match /shared/whitelistSmsTestNumbers {
           const checkedCount = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean).length : 0;
           if (!checkedCount) {
             setToast({ type: 'err', msg: 'Check at least one sheet to update.' });
-            setTimeout(() => setToast(null), 4000);
             return;
           }
           const ok = await confirmDialog({
@@ -14691,7 +14711,6 @@ match /shared/whitelistSmsTestNumbers {
           const pasteSumSuffix = pasteSumInstalled ? ' · paste-to-sum enabled' : '';
           const durationSuffix = ` · ${(durationMs / 1000).toFixed(1)}s`;
           setToast({ type: syncHint ? 'err' : 'ok', msg: (syncHint || (successMsg + pasteSumSuffix)) + durationSuffix });
-          setTimeout(() => setToast(null), syncHint ? 10000 : 5000);
           return fileId;
         } catch (e) {
           console.warn('Google Sheets sync failed', { message: e?.message, status: e?.status, operation: e?.operation, reason: e?.reason, error: e });
@@ -14704,14 +14723,12 @@ match /shared/whitelistSmsTestNumbers {
             : '';
           setGoogleConn(c => ({ ...c, busyModule: null, error: (e.message || String(e)) + permissionHint }));
           setToast({ type: 'err', msg: 'Google Sheets sync failed: ' + (e.message || e) + permissionHint });
-          setTimeout(() => setToast(null), e?.status === 403 ? 12000 : 6000);
           throw e;
         }
       }, []);
 
       const showToast = useCallback((type, msg) => {
         setToast({ type, msg });
-        setTimeout(() => setToast(null), 4000);
       }, []);
 
       const backupBusyRef = useRef(false);
@@ -14829,6 +14846,47 @@ match /shared/whitelistSmsTestNumbers {
         }
       }, [showToast]);
 
+      // Run ONLY the SIP/FCS paste-to-sum install, outside a sync. The install
+      // inside syncModuleToSheets is best-effort and reduces whatever Google
+      // said to a short hint, which is not enough to tell "API not enabled"
+      // apart from "you cannot bind a script to a file you do not own". This
+      // reports the raw error and names both accounts involved.
+      const installPasteSum = useCallback(async () => {
+        const st = stateRef.current || DEFAULT_STATE;
+        const fileId = st.googleSheets?.targetSheetIds?.sip_fcs || st.googleSheets?.sheetIds?.sip_fcs || '';
+        if (!fileId) { showToast('err', 'Set or create the SIP/FCS destination Google Sheet first.'); return; }
+        const tabs = (st.sheets || []).filter(sheet => sheet && sheet.active).map(sheet => safeSheetName(sheet.name));
+        setGoogleConn(c => ({ ...c, busyModule: 'sip_fcs', error: null }));
+        try {
+          await googleSheetsSync.getToken({ interactive: true });
+          const remembered = st.googleSheets?.pasteSumScriptIds?.[fileId] || '';
+          const installed = await googleSheetsSync.installSipFcsPasteSum(fileId, remembered, tabs);
+          if (installed.scriptId) {
+            setState(s => ({
+              ...s,
+              googleSheets: {
+                ...(s.googleSheets || {}),
+                pasteSumScriptIds: { ...((s.googleSheets && s.googleSheets.pasteSumScriptIds) || {}), [fileId]: installed.scriptId },
+              },
+            }));
+          }
+          setGoogleConn(c => ({
+            ...c, busyModule: null, connected: true, email: googleSheetsSync.email() || c.email,
+            lastSync: { ...c.lastSync, sip_fcs: { ...(c.lastSync?.sip_fcs || {}), pasteSumInstalled: true, pasteSumError: '' } },
+          }));
+          showToast('ok', `Paste-to-sum installed on ${tabs.length} tab(s).`);
+        } catch (e) {
+          const detail = String(e?.message || e || 'Unknown Google Apps Script error');
+          const owner = `Signed in as ${googleSheetsSync.email() || 'unknown account'}.`;
+          console.warn('Paste-to-sum install failed', e);
+          setGoogleConn(c => ({
+            ...c, busyModule: null,
+            lastSync: { ...c.lastSync, sip_fcs: { ...(c.lastSync?.sip_fcs || {}), pasteSumInstalled: false, pasteSumError: `${detail} — ${owner}` } },
+          }));
+          showToast('err', 'Paste-to-sum failed: ' + detail);
+        }
+      }, [showToast]);
+
       const clearBackupFolder = useCallback(() => {
         setState(s => ({ ...s, googleSheets: { ...(s.googleSheets || {}), backupDestId: '', backupDestName: '' } }));
         showToast('ok', 'Backups will go to Generator Backups in your own Drive.');
@@ -14924,7 +14982,6 @@ match /shared/whitelistSmsTestNumbers {
           setToast({ type: 'err', msg: 'Generation failed: ' + (e.message || e) });
         } finally {
           setBusy(false);
-          setTimeout(() => setToast(null), 4000);
         }
       };
 
@@ -14938,7 +14995,6 @@ match /shared/whitelistSmsTestNumbers {
           setToast({ type: 'err', msg: 'Generation failed: ' + (e.message || e) });
         } finally {
           setBusy(false);
-          setTimeout(() => setToast(null), 4000);
         }
       };
 
@@ -14966,7 +15022,6 @@ match /shared/whitelistSmsTestNumbers {
           setToast({ type: 'err', msg: 'Import failed: ' + (e.message || e) });
         } finally {
           setBusy(false);
-          setTimeout(() => setToast(null), 5000);
         }
       };
 
@@ -14980,7 +15035,6 @@ match /shared/whitelistSmsTestNumbers {
         if (!ok) return;
         setState(s => ({ ...s, procedure: procedureFreshState() }));
         setToast({ type: 'ok', msg: 'Procedure cleared. You can start a new guide.' });
-        setTimeout(() => setToast(null), 4000);
       };
 
       const activeCount = state.sheets.filter(s => s.active).length;
@@ -15003,6 +15057,7 @@ match /shared/whitelistSmsTestNumbers {
         // here; syncModuleToSheets still throws for programmatic callers.
         sync: (moduleId, options) => syncModuleToSheets(moduleId, options).catch(() => {}),
         sheetUrl: googleSheetsSync.sheetUrl,
+        installPasteSum,
         backup: {
           connected: googleConn.connected,
           busy: googleConn.busyModule === '__backup__',
@@ -15177,11 +15232,7 @@ match /shared/whitelistSmsTestNumbers {
                 <span>{procedureStepCount(procedure)} step{procedureStepCount(procedure) === 1 ? '' : 's'} · {procedureInfoCount(procedure)} additional · {procedure.steps.filter(step => step.image).length} screenshots</span>
               </footer>
             </main>
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>
@@ -15212,11 +15263,7 @@ match /shared/whitelistSmsTestNumbers {
                 <span>Signed in as {sync.email || '—'} ({ROLE_LABELS[role] || role})</span>
               </footer>
             </main>
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>
@@ -15278,11 +15325,7 @@ match /shared/whitelistSmsTestNumbers {
                 <span>{editorGrid.length} rows / {editorGrid[0].length} columns / {activeEditorRules} active rules</span>
               </footer>
             </main>
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>
@@ -15354,11 +15397,7 @@ match /shared/whitelistSmsTestNumbers {
               </footer>
             </main>
 
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>
@@ -15436,11 +15475,7 @@ match /shared/whitelistSmsTestNumbers {
               </footer>
             </main>
 
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>
@@ -15529,11 +15564,7 @@ match /shared/whitelistSmsTestNumbers {
               </footer>
             </main>
 
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>
@@ -15580,11 +15611,7 @@ match /shared/whitelistSmsTestNumbers {
                 <span>{enabledSections} sections · {signatories.length} signers</span>
               </footer>
             </main>
-            {toast && (
-              <div className={`fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-red-500/40 bg-red-500/10 text-red-200'}`}>
-                {toast.msg}
-              </div>
-            )}
+            <Toast toast={toast} onClose={() => setToast(null)} />
             {window.__fb && !sync.uid && sync.status !== 'connecting' && <AuthModal />}
             <Dialog dialog={dialog} onResolve={resolveDialog} />
           </div>

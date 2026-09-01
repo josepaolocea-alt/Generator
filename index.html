@@ -6707,6 +6707,30 @@ function BackupControls({ backup }) {
     "Change Picker API key"
   )), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: backup.onBackupNow, disabled: backup.busy || !backup.connected, className: "flex-1" }, backup.busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Backing up…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Back up now")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: toggle }, open ? "Hide" : "Restore")), !backup.connected && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-amber-500/80" }, "Connect Google Drive above to enable Drive backups."), backup.folderUrl && /* @__PURE__ */ React.createElement("a", { href: backup.folderUrl, target: "_blank", rel: "noopener noreferrer", className: "block text-[10px] text-blue-400 hover:text-blue-300 transition-colors" }, "Open backup folder ↗"), open && /* @__PURE__ */ React.createElement("div", { className: "space-y-1 max-h-56 overflow-auto rounded border border-neutral-900 p-1" }, loading && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "Loading…"), !loading && snaps && snaps.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600 px-1 py-2" }, "No local snapshots yet."), !loading && snaps && snaps.map((s) => /* @__PURE__ */ React.createElement("div", { key: s.ts, className: "flex items-center gap-2 text-[10px] px-1 py-1 rounded hover:bg-neutral-900/50" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-neutral-300 truncate" }, new Date(s.ts).toLocaleString()), /* @__PURE__ */ React.createElement("div", { className: "text-neutral-600 truncate" }, s.reason, " · VoIP ", s.counts?.voip ?? "?", " · WHS ", s.counts?.whs ?? "?", " · Retail ", s.counts?.retail ?? "?")), /* @__PURE__ */ React.createElement("button", { onClick: () => restore(s.ts), className: "ml-auto text-blue-400 hover:text-blue-300 shrink-0" }, "Restore")))));
 }
+function Toast({ toast, onClose }) {
+  if (!toast) return null;
+  const ok = toast.type === "ok";
+  return /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      role: "status",
+      "aria-live": "polite",
+      className: `fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${ok ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}`
+    },
+    /* @__PURE__ */ React.createElement("div", { className: "min-w-0 flex-1 leading-relaxed" }, toast.msg),
+    /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: onClose,
+        title: "Dismiss",
+        "aria-label": "Dismiss notification",
+        className: "-mr-1 -mt-0.5 shrink-0 rounded p-1 leading-none opacity-70 hover:opacity-100 hover:bg-white/10 transition-opacity",
+        style: { cursor: "pointer" }
+      },
+      /* @__PURE__ */ React.createElement("svg", { className: "h-3.5 w-3.5", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M18 6 6 18M6 6l12 12" }))
+    )
+  );
+}
 function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selectedTabTitle = "", selectedTabLabel = "", checkedTabTitles = [] }) {
   const [draftId, setDraftId] = useState("");
   const [editing, setEditing] = useState(false);
@@ -6761,7 +6785,15 @@ function GoogleSheetSync({ gsheets, moduleId, sheetId, targetSheetId = "", selec
   ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onSetTargetSheet(moduleId, targetDraft), disabled: !targetDraft.trim(), className: "flex-1" }, "Use this sheet"), targetSheetId && /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => {
     setTargetDraft("");
     onSetTargetSheet(moduleId, "");
-  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "sm", onClick: () => sync(moduleId, { interactive: true, createFresh: true }), disabled: busy, className: "w-full" }, busy ? "Creating…" : `Create my own Google Sheet${conn.email ? ` (${conn.email.split("@")[0]})` : ""}`), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Creates a brand-new spreadsheet in the connected account’s Drive. The shared JPGC file is not changed, and the new personal file becomes this module’s destination."), selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Apply app changes — Exact (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("details", { className: "rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 text-[10px]", open: true }, /* @__PURE__ */ React.createElement("summary", { className: "cursor-pointer font-medium text-neutral-300 select-none" }, "Which sync should I use?"), /* @__PURE__ */ React.createElement("div", { className: "mt-2 space-y-2 leading-relaxed text-neutral-500" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-blue-300" }, "Apply app changes — Exact"), /* @__PURE__ */ React.createElement("div", null, "Choose this after adding, removing, or renaming clients; creating or editing rules; or changing columns, metrics, shifts, colors, widths, merged cells, layout, or other setup.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add selected/new tabs"), " is only for a tab that does not exist in the destination yet."))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600", title: exactTimingTitle || void 0 }, "Synced ", new Date(last.at).toLocaleTimeString(), last.mode ? ` · ${last.mode === "new" ? "Personal copy" : last.mode === "fast" ? "Quick" : "Exact"}` : "", last.durationMs ? ` · ${(last.durationMs / 1e3).toFixed(1)}s` : ""), moduleId === "sip_fcs" && last?.pasteSumInstalled && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-emerald-500" }, "Paste-to-sum enabled for SIP/FCS tabs"), moduleId === "sip_fcs" && last?.pasteSumError && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-amber-500 leading-relaxed" }, last.pasteSumError)), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
+  } }, "Clear")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, conn.email ? /* @__PURE__ */ React.createElement(React.Fragment, null, "The owner must share it with ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, conn.email), " as Editor.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect first to see which email needs Editor access."))), !conn.connected ? /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: connect, disabled: connecting, className: "w-full" }, connecting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Connecting…") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Connect Google Drive")) : /* @__PURE__ */ React.createElement("div", { className: "space-y-1.5" }, /* @__PURE__ */ React.createElement(Btn, { variant: "primary", size: "sm", onClick: () => sync(moduleId, { interactive: true, createFresh: true }), disabled: busy, className: "w-full" }, busy ? "Creating…" : `Create my own Google Sheet${conn.email ? ` (${conn.email.split("@")[0]})` : ""}`), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Creates a brand-new spreadsheet in the connected account’s Drive. The shared JPGC file is not changed, and the new personal file becomes this module’s destination."), selectedTabLabel && /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-500 truncate", title: selectedTabLabel }, "Selected tab: ", /* @__PURE__ */ React.createElement("span", { className: "text-neutral-300" }, selectedTabLabel)), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitle: selectedTabTitle || "" }), disabled: busy || selectedUnavailable, className: "w-full" }, busy ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { className: "loader" }), " Checking tabs…") : /* @__PURE__ */ React.createElement(React.Fragment, null, selectedUnavailable ? "Activate selected tab first" : url ? selectedTabTitle ? "Add selected tab" : "Add new tabs" : "Create Google Sheet")), url && checkedTitles.length > 0 && /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: () => sync(moduleId, { interactive: true, onlyTabTitles: checkedTitles, replaceExisting: true }), disabled: busy, className: "w-full" }, busy ? "Syncing…" : `Apply app changes — Exact (${checkedTitles.length})`), url && /* @__PURE__ */ React.createElement("details", { className: "rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 text-[10px]", open: true }, /* @__PURE__ */ React.createElement("summary", { className: "cursor-pointer font-medium text-neutral-300 select-none" }, "Which sync should I use?"), /* @__PURE__ */ React.createElement("div", { className: "mt-2 space-y-2 leading-relaxed text-neutral-500" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "font-medium text-blue-300" }, "Apply app changes — Exact"), /* @__PURE__ */ React.createElement("div", null, "Choose this after adding, removing, or renaming clients; creating or editing rules; or changing columns, metrics, shifts, colors, widths, merged cells, layout, or other setup.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { className: "text-neutral-400" }, "Add selected/new tabs"), " is only for a tab that does not exist in the destination yet."))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between text-[10px]" }, url ? /* @__PURE__ */ React.createElement("a", { href: url, target: "_blank", rel: "noopener noreferrer", className: "text-blue-400 hover:text-blue-300 transition-colors" }, "Open sheet ↗") : /* @__PURE__ */ React.createElement("span", { className: "text-neutral-600" }, "No sheet yet"), /* @__PURE__ */ React.createElement("button", { onClick: disconnect, className: "text-neutral-500 hover:text-neutral-300 transition-colors" }, "Disconnect")), last?.at && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-neutral-600", title: exactTimingTitle || void 0 }, "Synced ", new Date(last.at).toLocaleTimeString(), last.mode ? ` · ${last.mode === "new" ? "Personal copy" : last.mode === "fast" ? "Quick" : "Exact"}` : "", last.durationMs ? ` · ${(last.durationMs / 1e3).toFixed(1)}s` : ""), moduleId === "sip_fcs" && last?.pasteSumInstalled && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-emerald-500" }, "Paste-to-sum enabled for SIP/FCS tabs"), moduleId === "sip_fcs" && last?.pasteSumError && /* @__PURE__ */ React.createElement("div", { className: "text-[10px] text-amber-500 leading-relaxed" }, last.pasteSumError)), moduleId === "sip_fcs" && conn.connected && (sheetId || targetSheetId) && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => gsheets.installPasteSum && gsheets.installPasteSum(),
+      disabled: busy,
+      className: "w-full rounded-md border border-neutral-800 px-3 py-2 text-[11px] text-neutral-300 hover:border-neutral-700 hover:bg-neutral-900/50 disabled:opacity-50"
+    },
+    busy ? "Working…" : "Install paste-to-sum"
+  ), /* @__PURE__ */ React.createElement(BackupControls, { backup: gsheets.backup }), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => {
@@ -13455,7 +13487,6 @@ function App() {
                 saveSnapshot(localNow, "pre-sync-overwrite");
                 if (drop >= 2) {
                   setToast({ type: "err", msg: `Cloud copy has ${drop} fewer clients than this device — a local backup was saved. Open the Backups panel to restore if this was unexpected.` });
-                  setTimeout(() => setToast(null), 1e4);
                 }
               }
             }
@@ -13536,7 +13567,6 @@ function App() {
           rcaCompany: result.next.rcaCompany
         }));
         setToast({ type: "ok", msg: `Compacted ${result.changed} image${result.changed === 1 ? "" : "s"}, freed ${kb(result.savedBytes)} KB — syncing now` });
-        setTimeout(() => setToast(null), 5e3);
       } catch (e) {
         console.warn("Compacting images failed", e);
         setSync((s) => ({ ...s, status: "offline", message: "Could not compact images: " + (e?.message || "unknown error") }));
@@ -13646,7 +13676,6 @@ function App() {
         type: "err",
         msg: `Saving the shared number database failed${code}. ${e?.code === "permission-denied" ? "Firestore rules denied the write — verify the deployed rules allow signed-in writes to /shared/whitelistSmsTestNumbers." : "Check the browser console for details."}`
       });
-      setTimeout(() => setToast(null), 8e3);
     }
   }, [sync.uid, sync.role]);
   useEffect(() => {
@@ -13823,7 +13852,6 @@ function App() {
     const id = googleSpreadsheetId(raw);
     if (raw && !id) {
       setToast({ type: "err", msg: "Paste a valid Google Sheets link." });
-      setTimeout(() => setToast(null), 4e3);
       return false;
     }
     setState((s) => ({
@@ -13841,13 +13869,11 @@ function App() {
       type: "ok",
       msg: id ? "Destination saved. Make sure its owner shared it with the connected account as Editor." : "Pasted destination cleared."
     });
-    setTimeout(() => setToast(null), 5e3);
     return true;
   }, []);
   const connectGoogle = useCallback(async () => {
     if (!googleSheetsSync.isConfigured()) {
       setToast({ type: "err", msg: "Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync." });
-      setTimeout(() => setToast(null), 5e3);
       return;
     }
     setGoogleConn((c) => ({ ...c, busyModule: "__connect__", error: null }));
@@ -13858,7 +13884,6 @@ function App() {
       console.warn("Google connect failed", e);
       setGoogleConn((c) => ({ ...c, busyModule: null, error: e.message || String(e) }));
       setToast({ type: "err", msg: "Google connect failed: " + (e.message || e) });
-      setTimeout(() => setToast(null), 6e3);
     }
   }, []);
   const disconnectGoogle = useCallback(() => {
@@ -13870,7 +13895,6 @@ function App() {
     if (!conf) return;
     if (!googleSheetsSync.isConfigured()) {
       setToast({ type: "err", msg: "Set GOOGLE_OAUTH_CLIENT_ID in the config to enable Google Sheets sync." });
-      setTimeout(() => setToast(null), 5e3);
       return;
     }
     if (createFresh) {
@@ -13886,7 +13910,6 @@ function App() {
       const checkedCount = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean).length : 0;
       if (!checkedCount) {
         setToast({ type: "err", msg: "Check at least one sheet to update." });
-        setTimeout(() => setToast(null), 4e3);
         return;
       }
       const ok = await confirmDialog({
@@ -14074,20 +14097,17 @@ function App() {
       const pasteSumSuffix = pasteSumInstalled ? " · paste-to-sum enabled" : "";
       const durationSuffix = ` · ${(durationMs / 1e3).toFixed(1)}s`;
       setToast({ type: syncHint ? "err" : "ok", msg: (syncHint || successMsg + pasteSumSuffix) + durationSuffix });
-      setTimeout(() => setToast(null), syncHint ? 1e4 : 5e3);
       return fileId;
     } catch (e) {
       console.warn("Google Sheets sync failed", { message: e?.message, status: e?.status, operation: e?.operation, reason: e?.reason, error: e });
       const permissionHint = e?.status === 403 ? ` — the connected Google account (${googleSheetsSync.email() || "unknown"}) needs Editor access to this spreadsheet, and the Google Sheets API must be enabled in its Cloud project. Signing in to the app with a different account does not change this.` : "";
       setGoogleConn((c) => ({ ...c, busyModule: null, error: (e.message || String(e)) + permissionHint }));
       setToast({ type: "err", msg: "Google Sheets sync failed: " + (e.message || e) + permissionHint });
-      setTimeout(() => setToast(null), e?.status === 403 ? 12e3 : 6e3);
       throw e;
     }
   }, []);
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg });
-    setTimeout(() => setToast(null), 4e3);
   }, []);
   const backupBusyRef = useRef(false);
   const lastBackupAtRef = useRef(0);
@@ -14177,6 +14197,48 @@ function App() {
     } catch (e) {
       console.warn("Folder picker failed", e);
       showToast("err", "Folder picker failed: " + (e.message || e));
+    }
+  }, [showToast]);
+  const installPasteSum = useCallback(async () => {
+    const st = stateRef.current || DEFAULT_STATE;
+    const fileId = st.googleSheets?.targetSheetIds?.sip_fcs || st.googleSheets?.sheetIds?.sip_fcs || "";
+    if (!fileId) {
+      showToast("err", "Set or create the SIP/FCS destination Google Sheet first.");
+      return;
+    }
+    const tabs = (st.sheets || []).filter((sheet) => sheet && sheet.active).map((sheet) => safeSheetName(sheet.name));
+    setGoogleConn((c) => ({ ...c, busyModule: "sip_fcs", error: null }));
+    try {
+      await googleSheetsSync.getToken({ interactive: true });
+      const remembered = st.googleSheets?.pasteSumScriptIds?.[fileId] || "";
+      const installed = await googleSheetsSync.installSipFcsPasteSum(fileId, remembered, tabs);
+      if (installed.scriptId) {
+        setState((s) => ({
+          ...s,
+          googleSheets: {
+            ...s.googleSheets || {},
+            pasteSumScriptIds: { ...s.googleSheets && s.googleSheets.pasteSumScriptIds || {}, [fileId]: installed.scriptId }
+          }
+        }));
+      }
+      setGoogleConn((c) => ({
+        ...c,
+        busyModule: null,
+        connected: true,
+        email: googleSheetsSync.email() || c.email,
+        lastSync: { ...c.lastSync, sip_fcs: { ...c.lastSync?.sip_fcs || {}, pasteSumInstalled: true, pasteSumError: "" } }
+      }));
+      showToast("ok", `Paste-to-sum installed on ${tabs.length} tab(s).`);
+    } catch (e) {
+      const detail = String(e?.message || e || "Unknown Google Apps Script error");
+      const owner = `Signed in as ${googleSheetsSync.email() || "unknown account"}.`;
+      console.warn("Paste-to-sum install failed", e);
+      setGoogleConn((c) => ({
+        ...c,
+        busyModule: null,
+        lastSync: { ...c.lastSync, sip_fcs: { ...c.lastSync?.sip_fcs || {}, pasteSumInstalled: false, pasteSumError: `${detail} — ${owner}` } }
+      }));
+      showToast("err", "Paste-to-sum failed: " + detail);
     }
   }, [showToast]);
   const clearBackupFolder = useCallback(() => {
@@ -14270,7 +14332,6 @@ function App() {
       setToast({ type: "err", msg: "Generation failed: " + (e.message || e) });
     } finally {
       setBusy(false);
-      setTimeout(() => setToast(null), 4e3);
     }
   };
   const onGenerateProcedure = async () => {
@@ -14283,7 +14344,6 @@ function App() {
       setToast({ type: "err", msg: "Generation failed: " + (e.message || e) });
     } finally {
       setBusy(false);
-      setTimeout(() => setToast(null), 4e3);
     }
   };
   const onImportProcedure = async (file) => {
@@ -14306,7 +14366,6 @@ function App() {
       setToast({ type: "err", msg: "Import failed: " + (e.message || e) });
     } finally {
       setBusy(false);
-      setTimeout(() => setToast(null), 5e3);
     }
   };
   const onClearProcedure = async () => {
@@ -14319,7 +14378,6 @@ function App() {
     if (!ok) return;
     setState((s) => ({ ...s, procedure: procedureFreshState() }));
     setToast({ type: "ok", msg: "Procedure cleared. You can start a new guide." });
-    setTimeout(() => setToast(null), 4e3);
   };
   const activeCount = state.sheets.filter((s) => s.active).length;
   const days = daysInMonth(state.year, state.month);
@@ -14343,6 +14401,7 @@ function App() {
     sync: (moduleId, options) => syncModuleToSheets(moduleId, options).catch(() => {
     }),
     sheetUrl: googleSheetsSync.sheetUrl,
+    installPasteSum,
     backup: {
       connected: googleConn.connected,
       busy: googleConn.busyModule === "__backup__",
@@ -14483,10 +14542,10 @@ function App() {
         onImport: onImportProcedure,
         onClear: onClearProcedure
       }
-    ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-amber-400 mb-1" }, "Super admin module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Procedure · ", procedure.title || "Untitled Procedure")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, procedureStepCount(procedure), " step", procedureStepCount(procedure) === 1 ? "" : "s"), procedureInfoCount(procedure) > 0 && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, procedureInfoCount(procedure), " additional"), /* @__PURE__ */ React.createElement(Pill, { tone: procedure.steps.some((step) => step.image) ? "accent" : "muted" }, procedure.steps.filter((step) => step.image).length, " screenshots"), /* @__PURE__ */ React.createElement(Pill, null, "v", procedure.version || "—")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1800px]" }, /* @__PURE__ */ React.createElement("div", { className: "grid gap-6 xl:grid-cols-[minmax(520px,1fr)_minmax(440px,0.9fr)]" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement(ProcedureEditor, { proc: procedure, onChange: setProcedure, onImageError: (message) => showToast("err", message) })), /* @__PURE__ */ React.createElement("div", { className: "min-w-0 xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Document preview"), /* @__PURE__ */ React.createElement(ProcedurePreview, { proc: procedure })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "Procedure · ", procedureFileStem(procedure)), /* @__PURE__ */ React.createElement("span", null, procedureStepCount(procedure), " step", procedureStepCount(procedure) === 1 ? "" : "s", " · ", procedureInfoCount(procedure), " additional · ", procedure.steps.filter((step) => step.image).length, " screenshots"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    ), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-20" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-amber-400 mb-1" }, "Super admin module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Procedure · ", procedure.title || "Untitled Procedure")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, procedureStepCount(procedure), " step", procedureStepCount(procedure) === 1 ? "" : "s"), procedureInfoCount(procedure) > 0 && /* @__PURE__ */ React.createElement(Pill, { tone: "muted" }, procedureInfoCount(procedure), " additional"), /* @__PURE__ */ React.createElement(Pill, { tone: procedure.steps.some((step) => step.image) ? "accent" : "muted" }, procedure.steps.filter((step) => step.image).length, " screenshots"), /* @__PURE__ */ React.createElement(Pill, null, "v", procedure.version || "—")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1800px]" }, /* @__PURE__ */ React.createElement("div", { className: "grid gap-6 xl:grid-cols-[minmax(520px,1fr)_minmax(440px,0.9fr)]" }, /* @__PURE__ */ React.createElement("div", { className: "min-w-0" }, /* @__PURE__ */ React.createElement(ProcedureEditor, { proc: procedure, onChange: setProcedure, onImageError: (message) => showToast("err", message) })), /* @__PURE__ */ React.createElement("div", { className: "min-w-0 xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Document preview"), /* @__PURE__ */ React.createElement(ProcedurePreview, { proc: procedure })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "Procedure · ", procedureFileStem(procedure)), /* @__PURE__ */ React.createElement("span", null, procedureStepCount(procedure), " step", procedureStepCount(procedure) === 1 ? "" : "s", " · ", procedureInfoCount(procedure), " additional · ", procedure.steps.filter((step) => step.image).length, " screenshots"))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isUsers) {
-    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(Sidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Users")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-5xl w-full" }, /* @__PURE__ */ React.createElement("div", { className: "anim-fade-in" }, /* @__PURE__ */ React.createElement(UsersAdminPanel, { sync }))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "collection · userProfiles"), /* @__PURE__ */ React.createElement("span", null, "Signed in as ", sync.email || "—", " (", ROLE_LABELS[role] || role, ")"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(Sidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block min-w-0" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "truncate text-[22px] font-bold tracking-tight" }, "Users")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-5xl w-full" }, /* @__PURE__ */ React.createElement("div", { className: "anim-fade-in" }, /* @__PURE__ */ React.createElement(UsersAdminPanel, { sync }))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "collection · userProfiles"), /* @__PURE__ */ React.createElement("span", null, "Signed in as ", sync.email || "—", " (", ROLE_LABELS[role] || role, ")"))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isEditor) {
     const editorGrid = editorNormalizeGrid(editor.cells);
@@ -14500,7 +14559,7 @@ function App() {
         className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${editorTab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
       },
       t.label
-    ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-[1500px] w-full" }, /* @__PURE__ */ React.createElement("div", { key: editorTab, className: "anim-fade-in" }, editorTab === "table" && /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(EditorPastePanel, { editor, onChange: setEditor }), /* @__PURE__ */ React.createElement(EditorHeaderSettings, { editor, onChange: setEditor }), /* @__PURE__ */ React.createElement(EditorTemplatesPanel, { editor, onChange: setEditor, sync }), /* @__PURE__ */ React.createElement(EditorTable, { editor, onChange: setEditor })), editorTab === "rules" && /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(EditorRulesPanel, { editor, onChange: setEditor }), /* @__PURE__ */ React.createElement(EditorTable, { editor, onChange: setEditor })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage / key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, editorGrid.length, " rows / ", editorGrid[0].length, " columns / ", activeEditorRules, " active rules"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-[1500px] w-full" }, /* @__PURE__ */ React.createElement("div", { key: editorTab, className: "anim-fade-in" }, editorTab === "table" && /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(EditorPastePanel, { editor, onChange: setEditor }), /* @__PURE__ */ React.createElement(EditorHeaderSettings, { editor, onChange: setEditor }), /* @__PURE__ */ React.createElement(EditorTemplatesPanel, { editor, onChange: setEditor, sync }), /* @__PURE__ */ React.createElement(EditorTable, { editor, onChange: setEditor })), editorTab === "rules" && /* @__PURE__ */ React.createElement("div", { className: "space-y-4" }, /* @__PURE__ */ React.createElement(EditorRulesPanel, { editor, onChange: setEditor }), /* @__PURE__ */ React.createElement(EditorTable, { editor, onChange: setEditor })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage / key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, editorGrid.length, " rows / ", editorGrid[0].length, " columns / ", activeEditorRules, " active rules"))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isBmr) {
     const visibleClients = (bmr.clients || []).filter((c) => !c.hidden).length;
@@ -14526,7 +14585,7 @@ function App() {
 
 e.g. Added APNTEL with debit-on-zero rule, hid CYN ACOM for the week.`
       }
-    )))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage · key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, visibleClients, " visible clients · ", activeBmrRules, " active rules · ", bmrTodayString()))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    )))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage · key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, visibleClients, " visible clients · ", activeBmrRules, " active rules · ", bmrTodayString()))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isBmrSms) {
     const visibleRetail = (bmrSms.retailClients || []).filter((c) => !c.hidden).length;
@@ -14555,7 +14614,7 @@ e.g. Added APNTEL with debit-on-zero rule, hid CYN ACOM for the week.`
 
 e.g. Added SMS client, hid old WHS row, adjusted balance rule.`
       }
-    )))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage · key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, visibleRetail, " RES · ", visibleWholesale, " WHS · ", activeBmrSmsRules, " active rules · ", bmrTodayString()))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    )))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage · key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, visibleRetail, " RES · ", visibleWholesale, " WHS · ", activeBmrSmsRules, " active rules · ", bmrTodayString()))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isWlSms) {
     const wl = whitelistSms;
@@ -14589,13 +14648,13 @@ e.g. Added SMS client, hid old WHS row, adjusted balance rule.`
 
 e.g. Sender ID approval ticket, vendor name, request date.`
       }
-    )))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage · key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, (wl.contents || []).length, " contents · ", numbers.length, " numbers · ", rowCount, " rows · ", bmrTodayString()))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    )))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "localStorage · key ", STORAGE_KEY), /* @__PURE__ */ React.createElement("span", null, (wl.contents || []).length, " contents · ", numbers.length, " numbers · ", rowCount, " rows · ", bmrTodayString()))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   if (isRca) {
     const rca = rcaNormalizeState(state.rca);
     const enabledSections = RCA_SECTION_DEFS.filter((def) => rca.sections[def.key]?.show !== false).length;
     const signatories = rcaResolveSignatories(state, rca.signatoryIds);
-    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(RcaSidebar, { state, setState, onGenerateDocx: onGenerate, busy, sync, onRetrySync: retrySync }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "RCA · ", rca.customerCid || "New Incident Report")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, enabledSections, " sections"), /* @__PURE__ */ React.createElement(Pill, { tone: signatories.length ? "accent" : "muted" }, signatories.length, " signers"), /* @__PURE__ */ React.createElement(Pill, null, rca.font, " · ", rca.fontSize, "pt")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1700px]" }, /* @__PURE__ */ React.createElement("div", { className: "anim-fade-in grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(RcaForm, { state, setState, sync })), /* @__PURE__ */ React.createElement("div", { className: "xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Preview"), /* @__PURE__ */ React.createElement(RcaPreview, { state })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "RCA · ", rcaFileNameStem(rca)), /* @__PURE__ */ React.createElement("span", null, enabledSections, " sections · ", signatories.length, " signers"))), toast && /* @__PURE__ */ React.createElement("div", { className: `fixed bottom-6 right-6 rounded-lg border px-4 py-3 text-sm backdrop-blur shadow-xl anim-toast ${toast.type === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}` }, toast.msg), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
+    return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(RcaSidebar, { state, setState, onGenerateDocx: onGenerate, busy, sync, onRetrySync: retrySync }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Module"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, "RCA · ", rca.customerCid || "New Incident Report")), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, enabledSections, " sections"), /* @__PURE__ */ React.createElement(Pill, { tone: signatories.length ? "accent" : "muted" }, signatories.length, " signers"), /* @__PURE__ */ React.createElement(Pill, null, rca.font, " · ", rca.fontSize, "pt")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch)), /* @__PURE__ */ React.createElement("div", { className: "p-4 sm:p-6 lg:p-8 w-full max-w-[1700px]" }, /* @__PURE__ */ React.createElement("div", { className: "anim-fade-in grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(RcaForm, { state, setState, sync })), /* @__PURE__ */ React.createElement("div", { className: "xl:sticky xl:top-[88px] xl:self-start xl:max-h-[calc(100vh-110px)] xl:overflow-y-auto" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Updates live as you edit" }, "Preview"), /* @__PURE__ */ React.createElement(RcaPreview, { state })))), /* @__PURE__ */ React.createElement("footer", { className: "mt-auto border-t border-neutral-900 px-8 py-4 flex items-center justify-between text-[11px] text-neutral-600" }, /* @__PURE__ */ React.createElement("span", { className: "font-mono" }, "RCA · ", rcaFileNameStem(rca)), /* @__PURE__ */ React.createElement("span", null, enabledSections, " sections · ", signatories.length, " signers"))), /* @__PURE__ */ React.createElement(Toast, { toast, onClose: () => setToast(null) }), window.__fb && !sync.uid && sync.status !== "connecting" && /* @__PURE__ */ React.createElement(AuthModal, null), /* @__PURE__ */ React.createElement(Dialog, { dialog, onResolve: resolveDialog }));
   }
   return /* @__PURE__ */ React.createElement("div", { className: "flex min-h-screen text-neutral-100" }, /* @__PURE__ */ React.createElement(Sidebar, { state, setState, onGenerate, busy, sync, onRetrySync: retrySync, gsheets: googleSyncProps }), /* @__PURE__ */ React.createElement(UploadedSidebar, { state, setState }), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-w-0 flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "app-topbar border-b border-neutral-900 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 flex flex-wrap items-start justify-between gap-4 sticky top-0 bg-[#1c1c1f]/95 backdrop-blur z-10" }, /* @__PURE__ */ React.createElement("div", { className: "app-title-block" }, /* @__PURE__ */ React.createElement("div", { className: "text-[10px] uppercase tracking-[0.2em] text-neutral-500 mb-1" }, "Report"), /* @__PURE__ */ React.createElement("h2", { className: "text-[22px] font-bold tracking-tight" }, MONTHS[state.month], " ", state.year)), /* @__PURE__ */ React.createElement("div", { className: "app-pill-row hidden xl:flex items-center gap-2" }, /* @__PURE__ */ React.createElement(Pill, null, activeCount, " sheets"), /* @__PURE__ */ React.createElement(Pill, null, days, " days"), /* @__PURE__ */ React.createElement(Pill, { tone: activeRules > 0 ? "accent" : "default" }, activeRules, " rules")), /* @__PURE__ */ React.createElement("div", { className: "app-header-controls flex flex-wrap items-center gap-2 sm:gap-3" }, ModuleSwitch, /* @__PURE__ */ React.createElement("nav", { className: "app-tab-nav flex flex-wrap items-center gap-0.5 border border-neutral-900 rounded-md p-0.5 bg-[#1a1a1d]", "aria-label": "SIP and FCS views" }, TABS.map((t) => /* @__PURE__ */ React.createElement(
     "button",
