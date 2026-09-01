@@ -32,6 +32,27 @@
       return Array.from({ length: 1440 / interval }, (_, index) => formatReportTime(index * interval));
     }
 
+    // 2 Hour Report only: the sheet leads with the previous month's last day so
+    // the first block of the new month still has yesterday next to it. Sheets
+    // saved before the setting existed have no flag and keep the column.
+    function twoHourIncludesPrevMonthLastDay(sheet) {
+      return sheet?.includePrevMonthLastDay !== false;
+    }
+
+    // Plain parts (not Date objects) so the XLSX builder can make UTC dates and
+    // the preview can make local ones without either drifting a day.
+    function twoHourReportDayParts(sheet, year, month) {
+      const parts = [];
+      if (twoHourIncludesPrevMonthLastDay(sheet)) {
+        const prevYear = month === 0 ? year - 1 : year;
+        const prevMonth = month === 0 ? 11 : month - 1;
+        parts.push({ year: prevYear, month: prevMonth, day: daysInMonth(prevYear, prevMonth) });
+      }
+      const days = daysInMonth(year, month);
+      for (let day = 1; day <= days; day++) parts.push({ year, month, day });
+      return parts;
+    }
+
     function parseReportTime(text) {
       const match = String(text || '').trim().toUpperCase().replace(/\s+/g, '').match(/^(\d{1,2})(?::(\d{2}))?(AM|PM)$/);
       if (!match) return null;
@@ -125,7 +146,7 @@
       { id: 's_kingsf',   name: 'KINGSFORD INOUT', layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound','Current Outbound','Max Outbound'], hourStart: 0, hourEnd: 24, note: '' },
       { id: 's_uno',      name: 'UNOBANK IN',      layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound'], hourStart: 0, hourEnd: 24, note: '' },
       { id: 's_myvelox',  name: 'MYVELOX INOUT',   layout: 'hourly', active: true, metrics: ['Current Inbound','MaxInbound','Current Outbound','Max Outbound'], hourStart: 0, hourEnd: 24, note: '' },
-      { id: 's_2hour',    name: '2 Hour Report',   layout: 'twohour', active: true, metrics: ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'], reportIntervalMinutes: 120, dateFormat: 'd-mmm-yy', note: '' },
+      { id: 's_2hour',    name: '2 Hour Report',   layout: 'twohour', active: true, metrics: ['INX','PLDT SIP','PLDT FCS','ETPI','GSM'], reportIntervalMinutes: 120, dateFormat: 'd-mmm-yy', includePrevMonthLastDay: true, note: '' },
     ];
 
     const STORAGE_KEY = 'mrg_state_v1';
@@ -1359,8 +1380,9 @@
       const metrics = configuredMetrics.length ? configuredMetrics : ['Metric 1'];
       const timeSlots = reportTimeSlots(s);
       const metricCount = metrics.length;
-      const days = daysInMonth(year, month);
-      const totalCols = Math.max(2, (days * 3) - 1);
+      const dayParts = twoHourReportDayParts(s, year, month);
+      const dayCount = dayParts.length;
+      const totalCols = Math.max(2, (dayCount * 3) - 1);
       const blockHeight = metricCount + 4; // date, time, metrics, total, separator
       const rules = rulesForSheet(allRules, s);
       let cur = 1;
@@ -1378,10 +1400,10 @@
         const metricStartRow = cur + 2;
         const totalRow = metricStartRow + metricCount;
 
-        for (let day = 1; day <= days; day++) {
-          const labelCol = 1 + ((day - 1) * 3);
+        dayParts.forEach((part, dayIndex) => {
+          const labelCol = 1 + (dayIndex * 3);
           const valueCol = labelCol + 1;
-          const date = new Date(Date.UTC(year, month, day));
+          const date = new Date(Date.UTC(part.year, part.month, part.day));
 
           const dateCell = ws.getCell(dateRow, labelCol);
           dateCell.value = date;
@@ -1422,22 +1444,22 @@
               ws.getCell(row, col).border = { top: border, bottom: border, left: border, right: border };
             }
           }
-        }
+        });
         cur = totalRow + 2;
       });
 
-      for (let day = 1; day <= days; day++) {
-        const labelCol = 1 + ((day - 1) * 3);
+      for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
+        const labelCol = 1 + (dayIndex * 3);
         ws.getColumn(labelCol).width = 17;
         ws.getColumn(labelCol + 1).width = 10;
-        if (day < days) ws.getColumn(labelCol + 2).width = 3;
+        if (dayIndex < dayCount - 1) ws.getColumn(labelCol + 2).width = 3;
       }
       ws.properties.defaultRowHeight = 18;
       ws.views = [{ state: 'frozen', ySplit: Math.max(0, dataStartRow - 1) }];
 
       // Apply numeric and missing-value rules only to the editable metric rows.
-      for (let day = 1; day <= days; day++) {
-        const valueCol = 2 + ((day - 1) * 3);
+      for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
+        const valueCol = 2 + (dayIndex * 3);
         const col = colLetter(valueCol);
         const ref = `${col}${dataStartRow}:${col}${cur - 2}`;
         const offset = `MOD(ROW()-${dataStartRow},${blockHeight})`;
@@ -6528,7 +6550,7 @@ https://bit.ly/4vrcu64`;
     /* ============================================================
        Sheet Editor
        ============================================================ */
-    function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
+    function SheetEditor({ sheet, onChange, onDelete, onDuplicate, year, month }) {
       if (!sheet) {
         return (
           <div className="rounded-lg border border-dashed border-neutral-800 px-6 py-16 text-center">
@@ -6571,6 +6593,7 @@ https://bit.ly/4vrcu64`;
                 {(sheet.layout === 'hourly' || sheet.layout === 'twohour') && <Pill>{visibleItems(sheet.metrics).length}/{(sheet.metrics || []).length} metrics</Pill>}
                 {sheet.layout === 'hourly' && <Pill>{hourlyHasRowSeparator(sheet) ? 'With separator' : 'No separator'}</Pill>}
                 {sheet.layout === 'twohour' && <Pill>{reportTimeSlots(sheet).length} slots · {REPORT_INTERVAL_OPTIONS.find(option => option.minutes === reportIntervalMinutes(sheet))?.shortLabel}</Pill>}
+                {sheet.layout === 'twohour' && twoHourIncludesPrevMonthLastDay(sheet) && <Pill>+ prev month last day</Pill>}
                 {sheet.layout !== 'hourly' && sheet.layout !== 'twohour' && <Pill>{visibleItems(sheet.columns).length}/{(sheet.columns || []).length} columns</Pill>}
               </div>
             </div>
@@ -6797,6 +6820,25 @@ https://bit.ly/4vrcu64`;
                   </p>
                 </div>
               </CollapsibleSection>
+              {(() => {
+                const on = twoHourIncludesPrevMonthLastDay(sheet);
+                const first = twoHourReportDayParts({ ...sheet, includePrevMonthLastDay: true }, year, month)[0];
+                const label = previewDateFormat(new Date(first.year, first.month, first.day), sheet.dateFormat || 'd-mmm-yy');
+                return (
+                  <CollapsibleSection sid="twohour-prevmonth" title="Previous month's last day"
+                    hint={on ? `${label} leads the sheet` : 'Sheet starts on day 1'}>
+                    <label className="inline-flex min-h-10 items-center gap-3 rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2 text-sm text-neutral-300 hover:border-neutral-800 hover:bg-neutral-900/50 select-none" style={{ cursor: 'pointer' }}>
+                      <input type="checkbox" checked={on}
+                        onChange={e => update({ includePrevMonthLastDay: e.target.checked })}
+                        className="h-4 w-4 shrink-0 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer" />
+                      Include the last day of the previous month
+                    </label>
+                    <p className="text-[11px] text-neutral-500 mt-2">
+                      Adds one extra date column ({label}) before day 1 in every time block, so the first day of {MONTHS[month]} still has yesterday beside it. Applies to the downloaded .xlsx and the Google Sheets sync.
+                    </p>
+                  </CollapsibleSection>
+                );
+              })()}
               <CollapsibleSection sid="twohour-dateformat" title="Date format" hint="Repeated above every time block">
                 {(() => {
                   const fmt = sheet.dateFormat || 'd-mmm-yy';
@@ -7029,8 +7071,10 @@ https://bit.ly/4vrcu64`;
       if (sheet.layout === 'twohour') {
         const metrics = visibleItems(sheet.metrics || []);
         const timeSlots = reportTimeSlots(sheet);
-        const sampleDays = Math.min(2, daysInMonth(year, month));
-        const days = [...Array(sampleDays)].map((_, index) => index + 1);
+        const allDayParts = twoHourReportDayParts(sheet, year, month);
+        const showsPrevMonth = twoHourIncludesPrevMonthLastDay(sheet);
+        const days = allDayParts.slice(0, showsPrevMonth ? 3 : 2);
+        const sampleDays = days.length;
         return (
           <div className="overflow-x-auto rounded-lg border border-neutral-900 bg-[#232327] p-3">
             <table className="min-w-[620px] text-[11px]">
@@ -7038,40 +7082,40 @@ https://bit.ly/4vrcu64`;
                 {timeSlots.slice(0, 2).map((slot, slotIndex) => (
                   <React.Fragment key={slot}>
                     <tr>
-                      {days.map(day => (
-                        <React.Fragment key={day}>
-                          <td className="border border-neutral-800 px-3 py-1.5 text-center font-semibold text-red-300">{previewDateFormat(new Date(year, month, day), sheet.dateFormat || 'd-mmm-yy')}</td>
+                      {days.map((part, dayIndex) => (
+                        <React.Fragment key={dayIndex}>
+                          <td className="border border-neutral-800 px-3 py-1.5 text-center font-semibold text-red-300">{previewDateFormat(new Date(part.year, part.month, part.day), sheet.dateFormat || 'd-mmm-yy')}</td>
                           <td className="border border-neutral-800 px-3 py-1.5"></td>
-                          {day < sampleDays && <td className="w-5"></td>}
+                          {dayIndex < sampleDays - 1 && <td className="w-5"></td>}
                         </React.Fragment>
                       ))}
                     </tr>
                     <tr>
-                      {days.map(day => (
-                        <React.Fragment key={day}>
+                      {days.map((part, dayIndex) => (
+                        <React.Fragment key={dayIndex}>
                           <td className="border border-neutral-800 px-3 py-1.5 text-center font-bold text-red-300">{slot}</td>
                           <td className="border border-neutral-800 px-3 py-1.5"></td>
-                          {day < sampleDays && <td></td>}
+                          {dayIndex < sampleDays - 1 && <td></td>}
                         </React.Fragment>
                       ))}
                     </tr>
                     {metrics.map((metric, metricIndex) => (
                       <tr key={`${slot}-${metricIndex}`}>
-                        {days.map(day => (
-                          <React.Fragment key={day}>
+                        {days.map((part, dayIndex) => (
+                          <React.Fragment key={dayIndex}>
                             <td className="border border-neutral-800 px-3 py-1.5 text-neutral-300" style={itemColor(metric) ? { background: itemColor(metric) } : {}}>{itemLabel(metric)}</td>
                             <td className="border border-neutral-800 px-3 py-1.5 text-center text-neutral-700" style={itemColor(metric) && itemColorExtend(metric) ? { background: itemColor(metric) } : {}}>·</td>
-                            {day < sampleDays && <td></td>}
+                            {dayIndex < sampleDays - 1 && <td></td>}
                           </React.Fragment>
                         ))}
                       </tr>
                     ))}
                     <tr>
-                      {days.map(day => (
-                        <React.Fragment key={day}>
+                      {days.map((part, dayIndex) => (
+                        <React.Fragment key={dayIndex}>
                           <td className="border border-neutral-800 px-3 py-1.5 font-semibold text-neutral-200">Total Calls</td>
                           <td className="border border-neutral-800 px-3 py-1.5 text-center text-neutral-700">0</td>
-                          {day < sampleDays && <td></td>}
+                          {dayIndex < sampleDays - 1 && <td></td>}
                         </React.Fragment>
                       ))}
                     </tr>
@@ -7080,7 +7124,7 @@ https://bit.ly/4vrcu64`;
                 ))}
               </tbody>
             </table>
-            <p className="mt-3 text-[10px] text-neutral-600">Preview shows 2 dates and the first 2 time blocks. The generated sheet includes every date in the month and all {timeSlots.length} time blocks.</p>
+            <p className="mt-3 text-[10px] text-neutral-600">Preview shows {sampleDays} dates and the first 2 time blocks. The generated sheet includes {showsPrevMonth ? 'the last day of the previous month plus every date in the month' : 'every date in the month'} and all {timeSlots.length} time blocks.</p>
           </div>
         );
       }
@@ -15582,7 +15626,7 @@ match /shared/whitelistSmsTestNumbers {
               <div key={state.tab} className="anim-fade-in">
                 {state.tab === 'config' && (
                   <div className="space-y-12">
-                    <SheetEditor sheet={selected} onChange={updateSelectedSheet} onDelete={deleteSelected} onDuplicate={duplicateSelected} />
+                    <SheetEditor sheet={selected} onChange={updateSelectedSheet} onDelete={deleteSelected} onDuplicate={duplicateSelected} year={state.year} month={state.month} />
                     <div>
                       <SectionLabel hint="Save & share full configurations">Templates</SectionLabel>
                       <TemplateBar state={state} setState={setState} sync={sync} />
@@ -15597,7 +15641,7 @@ match /shared/whitelistSmsTestNumbers {
                 )}
                 {state.tab === 'preview' && (
                   <div>
-                    <SectionLabel hint={selected ? `Showing first 2 days of ${selected.name}` : ''}>Structure preview</SectionLabel>
+                    <SectionLabel hint={selected ? `Showing first ${selected.layout === 'twohour' && twoHourIncludesPrevMonthLastDay(selected) ? 3 : 2} days of ${selected.name}` : ''}>Structure preview</SectionLabel>
                     <Preview sheet={selected} year={state.year} month={state.month} />
                     {selected?.layout === 'hourly' && (
                       <p className="text-[11px] text-neutral-600 mt-3 font-mono">Generated sheet will contain {days} day blocks × {visibleItems(selected.metrics).length} metric rows = {days * visibleItems(selected.metrics).length} data rows{hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : ''}</p>

@@ -2418,6 +2418,20 @@ function reportTimeSlots(sheet) {
   const interval = reportIntervalMinutes(sheet);
   return Array.from({ length: 1440 / interval }, (_, index) => formatReportTime(index * interval));
 }
+function twoHourIncludesPrevMonthLastDay(sheet) {
+  return sheet?.includePrevMonthLastDay !== false;
+}
+function twoHourReportDayParts(sheet, year, month) {
+  const parts = [];
+  if (twoHourIncludesPrevMonthLastDay(sheet)) {
+    const prevYear = month === 0 ? year - 1 : year;
+    const prevMonth = month === 0 ? 11 : month - 1;
+    parts.push({ year: prevYear, month: prevMonth, day: daysInMonth(prevYear, prevMonth) });
+  }
+  const days = daysInMonth(year, month);
+  for (let day = 1; day <= days; day++) parts.push({ year, month, day });
+  return parts;
+}
 function parseReportTime(text) {
   const match = String(text || "").trim().toUpperCase().replace(/\s+/g, "").match(/^(\d{1,2})(?::(\d{2}))?(AM|PM)$/);
   if (!match) return null;
@@ -2504,7 +2518,7 @@ const DEFAULT_SHEETS = [
   { id: "s_kingsf", name: "KINGSFORD INOUT", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound", "Current Outbound", "Max Outbound"], hourStart: 0, hourEnd: 24, note: "" },
   { id: "s_uno", name: "UNOBANK IN", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound"], hourStart: 0, hourEnd: 24, note: "" },
   { id: "s_myvelox", name: "MYVELOX INOUT", layout: "hourly", active: true, metrics: ["Current Inbound", "MaxInbound", "Current Outbound", "Max Outbound"], hourStart: 0, hourEnd: 24, note: "" },
-  { id: "s_2hour", name: "2 Hour Report", layout: "twohour", active: true, metrics: ["INX", "PLDT SIP", "PLDT FCS", "ETPI", "GSM"], reportIntervalMinutes: 120, dateFormat: "d-mmm-yy", note: "" }
+  { id: "s_2hour", name: "2 Hour Report", layout: "twohour", active: true, metrics: ["INX", "PLDT SIP", "PLDT FCS", "ETPI", "GSM"], reportIntervalMinutes: 120, dateFormat: "d-mmm-yy", includePrevMonthLastDay: true, note: "" }
 ];
 const STORAGE_KEY = "mrg_state_v1";
 const TEMPLATES_KEY = "mrg_templates_v1";
@@ -3629,8 +3643,9 @@ function buildTwoHourReportSheet(ws, s, year, month, allRules) {
   const metrics = configuredMetrics.length ? configuredMetrics : ["Metric 1"];
   const timeSlots = reportTimeSlots(s);
   const metricCount = metrics.length;
-  const days = daysInMonth(year, month);
-  const totalCols = Math.max(2, days * 3 - 1);
+  const dayParts = twoHourReportDayParts(s, year, month);
+  const dayCount = dayParts.length;
+  const totalCols = Math.max(2, dayCount * 3 - 1);
   const blockHeight = metricCount + 4;
   const rules = rulesForSheet(allRules, s);
   let cur = 1;
@@ -3645,10 +3660,10 @@ function buildTwoHourReportSheet(ws, s, year, month, allRules) {
     const timeRow = cur + 1;
     const metricStartRow = cur + 2;
     const totalRow = metricStartRow + metricCount;
-    for (let day = 1; day <= days; day++) {
-      const labelCol = 1 + (day - 1) * 3;
+    dayParts.forEach((part, dayIndex) => {
+      const labelCol = 1 + dayIndex * 3;
       const valueCol = labelCol + 1;
-      const date = new Date(Date.UTC(year, month, day));
+      const date = new Date(Date.UTC(part.year, part.month, part.day));
       const dateCell = ws.getCell(dateRow, labelCol);
       dateCell.value = date;
       dateCell.numFmt = s.dateFormat || "d-mmm-yy";
@@ -3684,19 +3699,19 @@ function buildTwoHourReportSheet(ws, s, year, month, allRules) {
           ws.getCell(row, col).border = { top: border, bottom: border, left: border, right: border };
         }
       }
-    }
+    });
     cur = totalRow + 2;
   });
-  for (let day = 1; day <= days; day++) {
-    const labelCol = 1 + (day - 1) * 3;
+  for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
+    const labelCol = 1 + dayIndex * 3;
     ws.getColumn(labelCol).width = 17;
     ws.getColumn(labelCol + 1).width = 10;
-    if (day < days) ws.getColumn(labelCol + 2).width = 3;
+    if (dayIndex < dayCount - 1) ws.getColumn(labelCol + 2).width = 3;
   }
   ws.properties.defaultRowHeight = 18;
   ws.views = [{ state: "frozen", ySplit: Math.max(0, dataStartRow - 1) }];
-  for (let day = 1; day <= days; day++) {
-    const valueCol = 2 + (day - 1) * 3;
+  for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
+    const valueCol = 2 + dayIndex * 3;
     const col = colLetter(valueCol);
     const ref = `${col}${dataStartRow}:${col}${cur - 2}`;
     const offset = `MOD(ROW()-${dataStartRow},${blockHeight})`;
@@ -8087,7 +8102,7 @@ function DropdownOptionsEditor({ options, onChange, columnName }) {
     }
   ), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: add }, "Add option")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 mt-2 leading-relaxed" }, "Applies to ~500 cells below the header in the generated .xlsx (Excel & Google Sheets compatible). Commas inside option text are converted to spaces."));
 }
-function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
+function SheetEditor({ sheet, onChange, onDelete, onDuplicate, year, month }) {
   if (!sheet) {
     return /* @__PURE__ */ React.createElement("div", { className: "rounded-lg border border-dashed border-neutral-800 px-6 py-16 text-center" }, /* @__PURE__ */ React.createElement("p", { className: "text-sm text-neutral-400" }, "No sheet selected"), /* @__PURE__ */ React.createElement("p", { className: "text-xs text-neutral-600 mt-1" }, "Pick a sheet from the sidebar or add a new one."));
   }
@@ -8117,7 +8132,7 @@ function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
       onChange: (e) => update({ name: e.target.value }),
       className: "text-3xl font-bold tracking-tight bg-transparent border-none outline-none w-full focus:bg-neutral-900/50 rounded px-1.5 -mx-1.5 py-0.5"
     }
-  ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mt-3 flex-wrap" }, /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, LAYOUT_LABELS[sheet.layout]), /* @__PURE__ */ React.createElement(Pill, { tone: sheet.active ? "success" : "muted" }, sheet.active ? "● Active" : "○ Inactive"), (sheet.layout === "hourly" || sheet.layout === "twohour") && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.metrics).length, "/", (sheet.metrics || []).length, " metrics"), sheet.layout === "hourly" && /* @__PURE__ */ React.createElement(Pill, null, hourlyHasRowSeparator(sheet) ? "With separator" : "No separator"), sheet.layout === "twohour" && /* @__PURE__ */ React.createElement(Pill, null, reportTimeSlots(sheet).length, " slots · ", REPORT_INTERVAL_OPTIONS.find((option) => option.minutes === reportIntervalMinutes(sheet))?.shortLabel), sheet.layout !== "hourly" && sheet.layout !== "twohour" && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.columns).length, "/", (sheet.columns || []).length, " columns"))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-2 shrink-0 w-44" }, /* @__PURE__ */ React.createElement(Select, { value: sheet.layout, onChange: (e) => setLayout(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "hourly" }, "Hourly Block"), /* @__PURE__ */ React.createElement("option", { value: "twohour" }, "2 Hour Report"), /* @__PURE__ */ React.createElement("option", { value: "flat" }, "Flat Table"), /* @__PURE__ */ React.createElement("option", { value: "alarm" }, "Alarm Log")), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onDuplicate, className: "flex-1" }, "Duplicate"), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onDelete, className: "flex-1" }, "Delete")))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "hdr-note", title: "Header note", hint: "Shown at top of the generated sheet" }, /* @__PURE__ */ React.createElement(Textarea, { rows: 2, value: sheet.note || "", onChange: (e) => update({ note: e.target.value }), placeholder: "Optional instructional note (e.g. 'Highlight peak utilization hours in red')" }), /* @__PURE__ */ React.createElement("div", { className: "mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end" }, /* @__PURE__ */ React.createElement("div", { className: "md:col-span-2" }, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Font family"), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mt-3 flex-wrap" }, /* @__PURE__ */ React.createElement(Pill, { tone: "accent" }, LAYOUT_LABELS[sheet.layout]), /* @__PURE__ */ React.createElement(Pill, { tone: sheet.active ? "success" : "muted" }, sheet.active ? "● Active" : "○ Inactive"), (sheet.layout === "hourly" || sheet.layout === "twohour") && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.metrics).length, "/", (sheet.metrics || []).length, " metrics"), sheet.layout === "hourly" && /* @__PURE__ */ React.createElement(Pill, null, hourlyHasRowSeparator(sheet) ? "With separator" : "No separator"), sheet.layout === "twohour" && /* @__PURE__ */ React.createElement(Pill, null, reportTimeSlots(sheet).length, " slots · ", REPORT_INTERVAL_OPTIONS.find((option) => option.minutes === reportIntervalMinutes(sheet))?.shortLabel), sheet.layout === "twohour" && twoHourIncludesPrevMonthLastDay(sheet) && /* @__PURE__ */ React.createElement(Pill, null, "+ prev month last day"), sheet.layout !== "hourly" && sheet.layout !== "twohour" && /* @__PURE__ */ React.createElement(Pill, null, visibleItems(sheet.columns).length, "/", (sheet.columns || []).length, " columns"))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-2 shrink-0 w-44" }, /* @__PURE__ */ React.createElement(Select, { value: sheet.layout, onChange: (e) => setLayout(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "hourly" }, "Hourly Block"), /* @__PURE__ */ React.createElement("option", { value: "twohour" }, "2 Hour Report"), /* @__PURE__ */ React.createElement("option", { value: "flat" }, "Flat Table"), /* @__PURE__ */ React.createElement("option", { value: "alarm" }, "Alarm Log")), /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: onDuplicate, className: "flex-1" }, "Duplicate"), /* @__PURE__ */ React.createElement(Btn, { variant: "danger", size: "md", onClick: onDelete, className: "flex-1" }, "Delete")))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "hdr-note", title: "Header note", hint: "Shown at top of the generated sheet" }, /* @__PURE__ */ React.createElement(Textarea, { rows: 2, value: sheet.note || "", onChange: (e) => update({ note: e.target.value }), placeholder: "Optional instructional note (e.g. 'Highlight peak utilization hours in red')" }), /* @__PURE__ */ React.createElement("div", { className: "mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end" }, /* @__PURE__ */ React.createElement("div", { className: "md:col-span-2" }, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Font family"), /* @__PURE__ */ React.createElement(
     Select,
     {
       value: sheet.noteFontFamily || DEFAULT_NOTE_STYLE.noteFontFamily,
@@ -8237,7 +8252,29 @@ function SheetEditor({ sheet, onChange, onDelete, onDuplicate }) {
       className: "text-neutral-500 hover:text-neutral-200 transition-colors"
     },
     /* @__PURE__ */ React.createElement(IconReset, null)
-  )))))) : sheet.layout === "twohour" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Card, { className: "p-4 border-blue-500/20 bg-blue-500/[0.04]" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold text-neutral-100" }, "Time-block comparison format"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-xs leading-relaxed text-neutral-500" }, "Generates vertical time blocks beginning at 12AM. Each date uses a label/value pair across the sheet, so yesterday and today stay next to each other for quick copying.")), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "twohour-interval", title: "Time interval", hint: `${reportTimeSlots(sheet).length} blocks per day · starts at 12AM` }, /* @__PURE__ */ React.createElement("div", { className: "max-w-sm" }, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Monitoring frequency"), /* @__PURE__ */ React.createElement(Select, { value: reportIntervalMinutes(sheet), onChange: (e) => update({ reportIntervalMinutes: Number(e.target.value) }) }, REPORT_INTERVAL_OPTIONS.map((option) => /* @__PURE__ */ React.createElement("option", { key: option.minutes, value: option.minutes }, option.label))), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 mt-2 font-mono" }, "12AM → ", reportTimeSlots(sheet).at(-1), " · ", reportTimeSlots(sheet).length, " time blocks"))), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "twohour-dateformat", title: "Date format", hint: "Repeated above every time block" }, (() => {
+  )))))) : sheet.layout === "twohour" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Card, { className: "p-4 border-blue-500/20 bg-blue-500/[0.04]" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm font-semibold text-neutral-100" }, "Time-block comparison format"), /* @__PURE__ */ React.createElement("p", { className: "mt-1 text-xs leading-relaxed text-neutral-500" }, "Generates vertical time blocks beginning at 12AM. Each date uses a label/value pair across the sheet, so yesterday and today stay next to each other for quick copying.")), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "twohour-interval", title: "Time interval", hint: `${reportTimeSlots(sheet).length} blocks per day · starts at 12AM` }, /* @__PURE__ */ React.createElement("div", { className: "max-w-sm" }, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Monitoring frequency"), /* @__PURE__ */ React.createElement(Select, { value: reportIntervalMinutes(sheet), onChange: (e) => update({ reportIntervalMinutes: Number(e.target.value) }) }, REPORT_INTERVAL_OPTIONS.map((option) => /* @__PURE__ */ React.createElement("option", { key: option.minutes, value: option.minutes }, option.label))), /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 mt-2 font-mono" }, "12AM → ", reportTimeSlots(sheet).at(-1), " · ", reportTimeSlots(sheet).length, " time blocks"))), (() => {
+    const on = twoHourIncludesPrevMonthLastDay(sheet);
+    const first = twoHourReportDayParts({ ...sheet, includePrevMonthLastDay: true }, year, month)[0];
+    const label = previewDateFormat(new Date(first.year, first.month, first.day), sheet.dateFormat || "d-mmm-yy");
+    return /* @__PURE__ */ React.createElement(
+      CollapsibleSection,
+      {
+        sid: "twohour-prevmonth",
+        title: "Previous month's last day",
+        hint: on ? `${label} leads the sheet` : "Sheet starts on day 1"
+      },
+      /* @__PURE__ */ React.createElement("label", { className: "inline-flex min-h-10 items-center gap-3 rounded-md border border-neutral-900 bg-neutral-950 px-3 py-2 text-sm text-neutral-300 hover:border-neutral-800 hover:bg-neutral-900/50 select-none", style: { cursor: "pointer" } }, /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "checkbox",
+          checked: on,
+          onChange: (e) => update({ includePrevMonthLastDay: e.target.checked }),
+          className: "h-4 w-4 shrink-0 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer"
+        }
+      ), "Include the last day of the previous month"),
+      /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-500 mt-2" }, "Adds one extra date column (", label, ") before day 1 in every time block, so the first day of ", MONTHS[month], " still has yesterday beside it. Applies to the downloaded .xlsx and the Google Sheets sync.")
+    );
+  })(), /* @__PURE__ */ React.createElement(CollapsibleSection, { sid: "twohour-dateformat", title: "Date format", hint: "Repeated above every time block" }, (() => {
     const fmt = sheet.dateFormat || "d-mmm-yy";
     const isCustom = !DATE_FORMAT_VALUES.has(fmt);
     return /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-3 max-w-lg" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "text-[10px] uppercase tracking-wide text-neutral-500 block mb-1.5" }, "Preset"), /* @__PURE__ */ React.createElement(
@@ -8351,9 +8388,11 @@ function Preview({ sheet, year, month }) {
   if (sheet.layout === "twohour") {
     const metrics = visibleItems(sheet.metrics || []);
     const timeSlots = reportTimeSlots(sheet);
-    const sampleDays = Math.min(2, daysInMonth(year, month));
-    const days = [...Array(sampleDays)].map((_, index) => index + 1);
-    return /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900 bg-[#232327] p-3" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-[620px] text-[11px]" }, /* @__PURE__ */ React.createElement("tbody", null, timeSlots.slice(0, 2).map((slot, slotIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: slot }, /* @__PURE__ */ React.createElement("tr", null, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center font-semibold text-red-300" }, previewDateFormat(new Date(year, month, day), sheet.dateFormat || "d-mmm-yy")), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5" }), day < sampleDays && /* @__PURE__ */ React.createElement("td", { className: "w-5" })))), /* @__PURE__ */ React.createElement("tr", null, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center font-bold text-red-300" }, slot), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5" }), day < sampleDays && /* @__PURE__ */ React.createElement("td", null)))), metrics.map((metric, metricIndex) => /* @__PURE__ */ React.createElement("tr", { key: `${slot}-${metricIndex}` }, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-neutral-300", style: itemColor(metric) ? { background: itemColor(metric) } : {} }, itemLabel(metric)), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center text-neutral-700", style: itemColor(metric) && itemColorExtend(metric) ? { background: itemColor(metric) } : {} }, "·"), day < sampleDays && /* @__PURE__ */ React.createElement("td", null))))), /* @__PURE__ */ React.createElement("tr", null, days.map((day) => /* @__PURE__ */ React.createElement(React.Fragment, { key: day }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 font-semibold text-neutral-200" }, "Total Calls"), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center text-neutral-700" }, "0"), day < sampleDays && /* @__PURE__ */ React.createElement("td", null)))), slotIndex < 1 && /* @__PURE__ */ React.createElement("tr", { className: "h-3" }, /* @__PURE__ */ React.createElement("td", { colSpan: sampleDays * 3 - 1 })))))), /* @__PURE__ */ React.createElement("p", { className: "mt-3 text-[10px] text-neutral-600" }, "Preview shows 2 dates and the first 2 time blocks. The generated sheet includes every date in the month and all ", timeSlots.length, " time blocks."));
+    const allDayParts = twoHourReportDayParts(sheet, year, month);
+    const showsPrevMonth = twoHourIncludesPrevMonthLastDay(sheet);
+    const days = allDayParts.slice(0, showsPrevMonth ? 3 : 2);
+    const sampleDays = days.length;
+    return /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900 bg-[#232327] p-3" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-[620px] text-[11px]" }, /* @__PURE__ */ React.createElement("tbody", null, timeSlots.slice(0, 2).map((slot, slotIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: slot }, /* @__PURE__ */ React.createElement("tr", null, days.map((part, dayIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: dayIndex }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center font-semibold text-red-300" }, previewDateFormat(new Date(part.year, part.month, part.day), sheet.dateFormat || "d-mmm-yy")), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5" }), dayIndex < sampleDays - 1 && /* @__PURE__ */ React.createElement("td", { className: "w-5" })))), /* @__PURE__ */ React.createElement("tr", null, days.map((part, dayIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: dayIndex }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center font-bold text-red-300" }, slot), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5" }), dayIndex < sampleDays - 1 && /* @__PURE__ */ React.createElement("td", null)))), metrics.map((metric, metricIndex) => /* @__PURE__ */ React.createElement("tr", { key: `${slot}-${metricIndex}` }, days.map((part, dayIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: dayIndex }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-neutral-300", style: itemColor(metric) ? { background: itemColor(metric) } : {} }, itemLabel(metric)), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center text-neutral-700", style: itemColor(metric) && itemColorExtend(metric) ? { background: itemColor(metric) } : {} }, "·"), dayIndex < sampleDays - 1 && /* @__PURE__ */ React.createElement("td", null))))), /* @__PURE__ */ React.createElement("tr", null, days.map((part, dayIndex) => /* @__PURE__ */ React.createElement(React.Fragment, { key: dayIndex }, /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 font-semibold text-neutral-200" }, "Total Calls"), /* @__PURE__ */ React.createElement("td", { className: "border border-neutral-800 px-3 py-1.5 text-center text-neutral-700" }, "0"), dayIndex < sampleDays - 1 && /* @__PURE__ */ React.createElement("td", null)))), slotIndex < 1 && /* @__PURE__ */ React.createElement("tr", { className: "h-3" }, /* @__PURE__ */ React.createElement("td", { colSpan: sampleDays * 3 - 1 })))))), /* @__PURE__ */ React.createElement("p", { className: "mt-3 text-[10px] text-neutral-600" }, "Preview shows ", sampleDays, " dates and the first 2 time blocks. The generated sheet includes ", showsPrevMonth ? "the last day of the previous month plus every date in the month" : "every date in the month", " and all ", timeSlots.length, " time blocks."));
   }
   return /* @__PURE__ */ React.createElement("div", { className: "overflow-x-auto rounded-lg border border-neutral-900" }, /* @__PURE__ */ React.createElement("table", { className: "min-w-full text-[11px]" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", { className: "border-b border-neutral-800 bg-neutral-950" }, visibleLabels(sheet.columns).map((c) => /* @__PURE__ */ React.createElement("th", { key: c, className: "text-left px-3 py-2.5 font-semibold text-neutral-300" }, c)))), /* @__PURE__ */ React.createElement("tbody", null, [...Array(3)].map((_, i) => /* @__PURE__ */ React.createElement("tr", { key: i, className: "border-b border-neutral-900/60" }, visibleLabels(sheet.columns).map((c) => /* @__PURE__ */ React.createElement("td", { key: c, className: "px-3 py-1.5 text-neutral-700" }, "·")))))));
 }
@@ -14567,7 +14606,7 @@ e.g. Sender ID approval ticket, vendor name, request date.`
       className: `px-3 py-1.5 text-xs font-medium rounded transition-colors ${state.tab === t.id ? "app-tab-active bg-neutral-800 text-neutral-100" : "app-tab-muted text-neutral-500 hover:text-neutral-200"}`
     },
     t.label
-  ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first 2 days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
+  ))))), /* @__PURE__ */ React.createElement("div", { className: "p-8 max-w-6xl w-full" }, /* @__PURE__ */ React.createElement("div", { key: state.tab, className: "anim-fade-in" }, state.tab === "config" && /* @__PURE__ */ React.createElement("div", { className: "space-y-12" }, /* @__PURE__ */ React.createElement(SheetEditor, { sheet: selected, onChange: updateSelectedSheet, onDelete: deleteSelected, onDuplicate: duplicateSelected, year: state.year, month: state.month }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Save & share full configurations" }, "Templates"), /* @__PURE__ */ React.createElement(TemplateBar, { state, setState, sync }))), state.tab === "rules" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Formula-based · Google-Sheets-compatible" }, "Formatting rules"), /* @__PURE__ */ React.createElement(FormattingRules, { rules: state.rules, sheets: state.sheets, onChange: (r) => setState((s) => ({ ...s, rules: r })) })), state.tab === "preview" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: selected ? `Showing first ${selected.layout === "twohour" && twoHourIncludesPrevMonthLastDay(selected) ? 3 : 2} days of ${selected.name}` : "" }, "Structure preview"), /* @__PURE__ */ React.createElement(Preview, { sheet: selected, year: state.year, month: state.month }), selected?.layout === "hourly" && /* @__PURE__ */ React.createElement("p", { className: "text-[11px] text-neutral-600 mt-3 font-mono" }, "Generated sheet will contain ", days, " day blocks × ", visibleItems(selected.metrics).length, " metric rows = ", days * visibleItems(selected.metrics).length, " data rows", hourlyHasRowSeparator(selected) ? ` + ${Math.max(0, days - 1)} separator rows` : "")), state.tab === "notes" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "Saved per generation · optionally exported as CHANGELOG sheet" }, "Monthly notes"), /* @__PURE__ */ React.createElement(
     Textarea,
     {
       autoGrow: true,
