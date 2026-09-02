@@ -1673,12 +1673,23 @@
       return `IFERROR(VALUE(SUBSTITUTE(${cleanText},",","")),${cellRef})`;
     }
 
+    // Over Draft / OD magnitude for a cell, falling back to 0 when the cell is
+    // blank or holds anything non-numeric. A client with no OD set is treated as
+    // having a zero limit rather than being skipped, and the ABS lives inside the
+    // IFERROR so a text OD cannot leak a #VALUE! into the comparison below.
+    function bmrOverdraftMagnitudeExpression(overdraftRef) {
+      const cleanText = `TRIM(SUBSTITUTE(${overdraftRef}&"",CHAR(160),""))`;
+      return `IFERROR(ABS(VALUE(SUBSTITUTE(${cleanText},",",""))),0)`;
+    }
+
+    // The BALANCE goes red once it reaches its limit (<=, so hitting the limit
+    // exactly counts). An OD of 0 or a blank OD cell is a real limit of 0, not a
+    // reason to skip the row, so a client with no OD reddens at 0.00 and below.
     function bmrSmsOverdraftConditionFormula(balanceRef, overdraftRef) {
       const balanceText = `TRIM(SUBSTITUTE(${balanceRef}&"",CHAR(160),""))`;
-      const overdraftText = `TRIM(SUBSTITUTE(${overdraftRef}&"",CHAR(160),""))`;
       const balanceNum = bmrNumericExpression(balanceRef);
-      const overdraftNum = bmrNumericExpression(overdraftRef);
-      return `AND(LEN(${balanceText})>0,LEN(${overdraftText})>0,ISNUMBER(${balanceNum}),ISNUMBER(${overdraftNum}),${overdraftNum}>0,${balanceNum}<=-ABS(${overdraftNum}))`;
+      const overdraftAbs = bmrOverdraftMagnitudeExpression(overdraftRef);
+      return `AND(LEN(${balanceText})>0,ISNUMBER(${balanceNum}),${balanceNum}<=-${overdraftAbs})`;
     }
 
     // True when the same-row "30mins usage" cell holds a non-zero number. Used to
@@ -1801,8 +1812,8 @@
     // 0/1-per-row expression mirroring bmrSmsOverdraftConditionFormula.
     function bmrSmsOverdraftArrayExpr(balRange, odRange) {
       const balNum = bmrArrayNumericExpr(balRange);
-      const odNum = bmrArrayNumericExpr(odRange);
-      return `${bmrArrayHasValue(balRange)}*${bmrArrayHasValue(odRange)}*ISNUMBER(${balNum})*ISNUMBER(${odNum})*(${odNum}>0)*(${balNum}<=-ABS(${odNum}))`;
+      const odAbs = bmrOverdraftMagnitudeExpression(odRange);
+      return `${bmrArrayHasValue(balRange)}*ISNUMBER(${balNum})*(${balNum}<=-${odAbs})`;
     }
     // Combine the per-row 0/1 expressions into a single count. A cell is red
     // if any expression flags it, so we sum then test >0 to avoid double

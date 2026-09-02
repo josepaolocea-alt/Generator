@@ -3912,12 +3912,15 @@ function bmrNumericExpression(cellRef) {
   const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
   return `IFERROR(VALUE(SUBSTITUTE(${cleanText},",","")),${cellRef})`;
 }
+function bmrOverdraftMagnitudeExpression(overdraftRef) {
+  const cleanText = `TRIM(SUBSTITUTE(${overdraftRef}&"",CHAR(160),""))`;
+  return `IFERROR(ABS(VALUE(SUBSTITUTE(${cleanText},",",""))),0)`;
+}
 function bmrSmsOverdraftConditionFormula(balanceRef, overdraftRef) {
   const balanceText = `TRIM(SUBSTITUTE(${balanceRef}&"",CHAR(160),""))`;
-  const overdraftText = `TRIM(SUBSTITUTE(${overdraftRef}&"",CHAR(160),""))`;
   const balanceNum = bmrNumericExpression(balanceRef);
-  const overdraftNum = bmrNumericExpression(overdraftRef);
-  return `AND(LEN(${balanceText})>0,LEN(${overdraftText})>0,ISNUMBER(${balanceNum}),ISNUMBER(${overdraftNum}),${overdraftNum}>0,${balanceNum}<=-ABS(${overdraftNum}))`;
+  const overdraftAbs = bmrOverdraftMagnitudeExpression(overdraftRef);
+  return `AND(LEN(${balanceText})>0,ISNUMBER(${balanceNum}),${balanceNum}<=-${overdraftAbs})`;
 }
 function bmrSmsUsageNonZeroFormula(usageRef) {
   const usageText = `TRIM(SUBSTITUTE(${usageRef}&"",CHAR(160),""))`;
@@ -4007,8 +4010,8 @@ function bmrClientRulesArrayExpr(ruleEntries, rangeRef, aRangeRef) {
 }
 function bmrSmsOverdraftArrayExpr(balRange, odRange) {
   const balNum = bmrArrayNumericExpr(balRange);
-  const odNum = bmrArrayNumericExpr(odRange);
-  return `${bmrArrayHasValue(balRange)}*${bmrArrayHasValue(odRange)}*ISNUMBER(${balNum})*ISNUMBER(${odNum})*(${odNum}>0)*(${balNum}<=-ABS(${odNum}))`;
+  const odAbs = bmrOverdraftMagnitudeExpression(odRange);
+  return `${bmrArrayHasValue(balRange)}*ISNUMBER(${balNum})*(${balNum}<=-${odAbs})`;
 }
 function bmrRedCountFormula(rowExprs) {
   const parts = (rowExprs || []).filter(Boolean);
