@@ -397,6 +397,9 @@
       managercolour: 'accountManagerColor',
       amcolor: 'accountManagerColor',
       amcolour: 'accountManagerColor',
+      accountmanagerinactive: 'accountManagerInactive',
+      managerinactive: 'accountManagerInactive',
+      aminactive: 'accountManagerInactive',
       hidden: 'hidden',
       hide: 'hidden',
     };
@@ -457,6 +460,16 @@
       const raw = bmrImportKey(value);
       if (['1', 'true', 'yes', 'y', 'hide', 'hidden'].includes(raw)) return true;
       if (['0', 'false', 'no', 'n', 'show', 'visible'].includes(raw)) return false;
+      return undefined;
+    }
+
+    // Account-manager inactive flag. Kept apart from bmrImportBoolean because
+    // there the word "inactive" means false (a disabled rule); in this column it
+    // is the true case, and "Active" is the false one.
+    function bmrImportInactive(value) {
+      const raw = bmrImportKey(value);
+      if (['1', 'true', 'yes', 'y', 'inactive', 'disabled', 'off', 'paused'].includes(raw)) return true;
+      if (['0', 'false', 'no', 'n', 'active', 'enabled', 'on'].includes(raw)) return false;
       return undefined;
     }
 
@@ -628,6 +641,10 @@
             const accountManagerColor = bmrImportColor(read('accountManagerColor'));
             if (accountManagerColor) imported.accountManagerColor = accountManagerColor;
           }
+          if (header.cols.accountManagerInactive) {
+            const accountManagerInactive = bmrImportInactive(read('accountManagerInactive'));
+            if (accountManagerInactive !== undefined) imported.accountManagerInactive = accountManagerInactive;
+          }
           if (header.cols.hidden) {
             const hidden = bmrImportHidden(read('hidden'));
             if (hidden !== undefined) imported.hidden = hidden;
@@ -654,16 +671,21 @@
       const rows = Array.from(compactRowsByName.values());
       const accountManagers = [...(bmr.accountManagers || [])];
       const managerByName = new Map(accountManagers.map(manager => [normalizeName(manager.name), manager]));
-      const ensureManager = (name, color) => {
+      const ensureManager = (name, color, inactive) => {
         const key = normalizeName(name);
         if (!key) return null;
         let manager = managerByName.get(key);
         if (!manager) {
-          manager = { id: bmrId('am'), name: String(name).trim(), color: color || '' };
+          manager = { id: bmrId('am'), name: String(name).trim(), color: color || '', inactive: inactive === true };
           accountManagers.push(manager);
           managerByName.set(key, manager);
-        } else if (color && manager.color !== color) {
-          manager = { ...manager, color };
+          return manager;
+        }
+        const patch = {};
+        if (color && manager.color !== color) patch.color = color;
+        if (inactive !== undefined && !!manager.inactive !== inactive) patch.inactive = inactive;
+        if (Object.keys(patch).length) {
+          manager = { ...manager, ...patch };
           const index = accountManagers.findIndex(item => item.id === manager.id);
           accountManagers[index] = manager;
           managerByName.set(key, manager);
@@ -678,7 +700,9 @@
 
       rows.forEach((row) => {
         const key = normalizeName(row.name);
-        const accountManager = row.accountManagerName ? ensureManager(row.accountManagerName, row.accountManagerColor) : null;
+        const accountManager = row.accountManagerName
+          ? ensureManager(row.accountManagerName, row.accountManagerColor, row.accountManagerInactive)
+          : null;
         const patch = {};
         if (Object.prototype.hasOwnProperty.call(row, 'allowBalanceLabel')) patch.allowBalanceLabel = row.allowBalanceLabel;
         if (row.color) patch.color = row.color;
@@ -820,6 +844,7 @@
       { header: 'Account Manager', key: 'accountManagerName', width: 24 },
       { header: 'Client color', key: 'color', width: 16 },
       { header: 'Account Manager color', key: 'accountManagerColor', width: 24 },
+      { header: 'Account Manager inactive', key: 'accountManagerInactive', width: 24 },
       { header: 'Hidden', key: 'hidden', width: 12 },
     ];
 
@@ -875,8 +900,9 @@
 
     async function downloadBmrClientImportSample() {
       await downloadBmrClientImportWorkbook('Client Import Sample', [
-        { name: 'SAMPLE CLIENT A', allowBalanceLabel: 'Block once debit', accountManagerName: 'Jason Cruz', color: '', accountManagerColor: '#60A5FA', hidden: 'No' },
-        { name: 'SAMPLE CLIENT B', allowBalanceLabel: '$5 debit poc', accountManagerName: 'Jason Cruz', color: '#FACC15', accountManagerColor: '#60A5FA', hidden: 'No' },
+        { name: 'SAMPLE CLIENT A', allowBalanceLabel: 'Block once debit', accountManagerName: 'Jason Cruz', color: '', accountManagerColor: '#60A5FA', accountManagerInactive: 'No', hidden: 'No' },
+        { name: 'SAMPLE CLIENT B', allowBalanceLabel: '$5 debit poc', accountManagerName: 'Jason Cruz', color: '#FACC15', accountManagerColor: '#60A5FA', accountManagerInactive: 'No', hidden: 'No' },
+        { name: 'SAMPLE CLIENT C', allowBalanceLabel: '', accountManagerName: 'Parked accounts', color: '', accountManagerColor: '#9CA3AF', accountManagerInactive: 'Yes', hidden: 'No' },
       ], 'BMR_Client_Import_Sample.xlsx', {
         includeRuleSheets: true,
         targetRules: [
@@ -899,6 +925,7 @@
           accountManagerName: manager?.name || '',
           color: client.color || '',
           accountManagerColor: manager?.color || '',
+          accountManagerInactive: manager ? (manager.inactive ? 'Yes' : 'No') : '',
           hidden: client.hidden ? 'Yes' : 'No',
         };
       });
@@ -1652,6 +1679,38 @@
       return manager?.color || client.color || '';
     }
 
+    // An account manager can be flagged inactive (the greyed-out parked accounts).
+    // Their clients still appear on the sheet in the manager's colour, but every
+    // value-driven colour rule skips them — otherwise a parked account sitting at
+    // 0.00 with no Over Draft reads as "reached its limit" and goes red daily.
+    function bmrClientIsInactive(client, accountManagersById) {
+      if (!client) return false;
+      return !!accountManagersById.get(client.accountManagerId)?.inactive;
+    }
+
+    // Contiguous row bands covering every generated data row EXCEPT the inactive
+    // ones. Used as the conditional-formatting ref so Excel never evaluates the
+    // rule on those rows at all. The blank allowance rows stay in, so anything
+    // pasted below the client list still colours.
+    function bmrActiveRowBands(clients, dataStartRow, dataRowCount, accountManagersById) {
+      const bands = [];
+      for (let i = 0; i < dataRowCount; i++) {
+        if (bmrClientIsInactive(clients[i], accountManagersById)) continue;
+        const row = dataStartRow + i;
+        const last = bands[bands.length - 1];
+        if (last && last.end === row - 1) last.end = row;
+        else bands.push({ start: row, end: row });
+      }
+      return bands;
+    }
+
+    // "F3:F9 F12:F26" for one column over those bands. Excel anchors a rule's
+    // relative references on the first range, so callers must build the formula
+    // against the first band's start row, not dataStartRow.
+    function bmrBandRowRef(col, bands) {
+      return bands.map(band => `${col}${band.start}:${col}${band.end}`).join(' ');
+    }
+
     function bmrBuildConditionFormula(rule, cellRef) {
       const v = (x) => isFinite(Number(x)) ? Number(x) : 0;
       const cleanText = `TRIM(SUBSTITUTE(${cellRef}&"",CHAR(160),""))`;
@@ -1815,13 +1874,26 @@
       const odAbs = bmrOverdraftMagnitudeExpression(odRange);
       return `${bmrArrayHasValue(balRange)}*ISNUMBER(${balNum})*(${balNum}<=-${odAbs})`;
     }
+    // 0/1-per-row mask that is 1 only on the rows the conditional formatting
+    // actually covers, so the tally skips rows under an inactive account manager
+    // exactly like the fills do. Returns null when the bands already cover every
+    // row, which keeps the formula byte-for-byte what it was before.
+    function bmrActiveRowMaskExpr(bands, rangeRef, dataStartRow, dataEndRow) {
+      if (!bands.length) return '0';
+      if (bands.length === 1 && bands[0].start === dataStartRow && bands[0].end === dataEndRow) return null;
+      const rows = `ROW(${rangeRef})`;
+      return bands.map(band => (band.start === band.end
+        ? `(${rows}=${band.start})`
+        : `(${rows}>=${band.start})*(${rows}<=${band.end})`)).join('+');
+    }
     // Combine the per-row 0/1 expressions into a single count. A cell is red
     // if any expression flags it, so we sum then test >0 to avoid double
     // counting a cell matched by more than one rule.
-    function bmrRedCountFormula(rowExprs) {
+    function bmrRedCountFormula(rowExprs, maskExpr) {
       const parts = (rowExprs || []).filter(Boolean);
       if (!parts.length) return null;
-      return `SUMPRODUCT(--((${parts.join('+')})>0))`;
+      const flagged = `--((${parts.join('+')})>0)`;
+      return `SUMPRODUCT(${maskExpr ? `${flagged}*(${maskExpr})` : flagged})`;
     }
 
     const BMR_RED_COUNT_FILL = 'FFFEE2E2';
@@ -2028,17 +2100,27 @@
       // every generated rule is converted, pasted and recalculated — so do not
       // go back to emitting one rule per column here.
       let priorityCounter = 100;
-      const visibleClientsById = new Map(visibleClients.map(c => [c.id, c]));
       const bandRef = (letters) => letters.map(cl => `${cl}${dataStartRow}:${cl}${dataEndRow}`).join(' ');
-      const targetRef = bandRef(BMR_TARGET_COL_LETTERS);
-      const targetAnchor = `${BMR_TARGET_COL_LETTERS[0]}${dataStartRow}`;
-      if (!valuesOnly) bmrTargetRuleBatches(bmr.targetRules, visibleClientsById).forEach((entries) => {
+      // Rows under an inactive account manager drop out of the value-driven rules
+      // (but keep their manager colour below), so the ref bands rows as well as
+      // columns and the formulas anchor on the first active row.
+      const activeBands = bmrActiveRowBands(visibleClients, dataStartRow, dataRowCount, accountManagersById);
+      const anchorRow = activeBands.length ? activeBands[0].start : dataStartRow;
+      const activeBandRef = (letters) => letters
+        .flatMap(cl => activeBands.map(band => `${cl}${band.start}:${cl}${band.end}`))
+        .join(' ');
+      const activeClientsById = new Map(
+        visibleClients.filter(c => !bmrClientIsInactive(c, accountManagersById)).map(c => [c.id, c])
+      );
+      const targetRef = activeBandRef(BMR_TARGET_COL_LETTERS);
+      const targetAnchor = `${BMR_TARGET_COL_LETTERS[0]}${anchorRow}`;
+      if (!valuesOnly && activeBands.length) bmrTargetRuleBatches(bmr.targetRules, activeClientsById).forEach((entries) => {
         const rule = entries[0].rule;
         ws.addConditionalFormatting({
           ref: targetRef,
           rules: [{
             type: 'expression',
-            formulae: [bmrBuildClientRuleBatchFormula(entries, targetAnchor, dataStartRow)],
+            formulae: [bmrBuildClientRuleBatchFormula(entries, targetAnchor, anchorRow)],
             style: bmrStyleFromRule(rule),
             priority: priorityCounter++,
           }],
@@ -2046,9 +2128,9 @@
       });
 
       // 30-min usage rules — same one-rule-per-rule banding.
-      const usageRef = bandRef(BMR_USAGE_COL_LETTERS);
-      const usageAnchor = `${BMR_USAGE_COL_LETTERS[0]}${dataStartRow}`;
-      if (!valuesOnly) (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
+      const usageRef = activeBandRef(BMR_USAGE_COL_LETTERS);
+      const usageAnchor = `${BMR_USAGE_COL_LETTERS[0]}${anchorRow}`;
+      if (!valuesOnly && activeBands.length) (bmr.usageRules || []).filter(r => r.enabled).forEach((rule) => {
         ws.addConditionalFormatting({
           ref: usageRef,
           rules: [{
@@ -2101,19 +2183,20 @@
       const redCountRow = dataEndRow + 2;
       const enabledTargetRules = (bmr.targetRules || [])
         .filter(r => r.enabled)
-        .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
+        .map(rule => ({ rule, client: activeClientsById.get(rule.clientId) }))
         .filter(entry => entry.client?.name);
       if (enabledTargetRules.length) {
         const redCountLabel = ws.getCell(redCountRow, 1);
         if (valuesOnly) redCountLabel.value = 'Colored Amnt Receivable count';
         else applyBmrRedCountLabel(redCountLabel, 'Colored Amnt Receivable count');
         const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
+        const activeMask = bmrActiveRowMaskExpr(activeBands, aRange, dataStartRow, dataEndRow);
         for (let k = 0; k < slots.length; k++) {
           const amntCol = colLetter(3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
           const rangeRef = `${amntCol}${dataStartRow}:${amntCol}${dataEndRow}`;
           const formula = bmrRedCountFormula([
             bmrClientRulesArrayExpr(enabledTargetRules, rangeRef, aRange),
-          ]);
+          ], activeMask);
           const cell = ws.getCell(redCountRow, 3 + k * BMR_BLOCK_COLS + BMR_AMOUNT_OFFSET);
           cell.value = formula ? { formula } : 0;
           if (!valuesOnly) applyBmrRedCountStyle(cell);
@@ -2306,17 +2389,24 @@
       applyBmrBorders(ws, sms, totalCols, dataEndRow, slots.length, BMR_SMS_BLOCK_COLS);
 
       let priorityCounter = 300;
-      const visibleClientsById = new Map(clients.map(c => [c.id, c]));
-      (sms.overdraftRules || []).filter(r => r.enabled).forEach((rule) => {
+      // Rows under an inactive account manager are left out of every value-driven
+      // rule below: the ref lists only the active row bands, and the formulas are
+      // anchored on the first band instead of dataStartRow.
+      const activeBands = bmrActiveRowBands(clients, dataStartRow, dataRowCount, accountManagersById);
+      const anchorRow = activeBands.length ? activeBands[0].start : dataStartRow;
+      const activeClientsById = new Map(
+        clients.filter(c => !bmrClientIsInactive(c, accountManagersById)).map(c => [c.id, c])
+      );
+      if (activeBands.length) (sms.overdraftRules || []).filter(r => r.enabled).forEach((rule) => {
         for (let k = 0; k < slots.length; k++) {
           const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
           const balanceCol = colLetter(baseCol + market.balanceOffset);
           const overdraftCol = colLetter(baseCol + market.overdraftOffset);
           ws.addConditionalFormatting({
-            ref: `${balanceCol}${dataStartRow}:${balanceCol}${dataEndRow}`,
+            ref: bmrBandRowRef(balanceCol, activeBands),
             rules: [{
               type: 'expression',
-              formulae: [bmrSmsOverdraftConditionFormula(`${balanceCol}${dataStartRow}`, `${overdraftCol}${dataStartRow}`)],
+              formulae: [bmrSmsOverdraftConditionFormula(`${balanceCol}${anchorRow}`, `${overdraftCol}${anchorRow}`)],
               style: bmrStyleFromRule(rule),
               priority: priorityCounter++,
             }],
@@ -2324,15 +2414,15 @@
         }
       });
       const targetCols = bmrSmsTargetColLetters(market);
-      (sms.targetRules || []).filter(r => r.enabled).forEach((rule) => {
-        const client = visibleClientsById.get(rule.clientId);
+      if (activeBands.length) (sms.targetRules || []).filter(r => r.enabled).forEach((rule) => {
+        const client = activeClientsById.get(rule.clientId);
         if (!client?.name) return;
         targetCols.forEach((cl) => {
           ws.addConditionalFormatting({
-            ref: `${cl}${dataStartRow}:${cl}${dataEndRow}`,
+            ref: bmrBandRowRef(cl, activeBands),
             rules: [{
               type: 'expression',
-              formulae: [bmrBuildClientConditionFormula(rule, `${cl}${dataStartRow}`, client.name, dataStartRow)],
+              formulae: [bmrBuildClientConditionFormula(rule, `${cl}${anchorRow}`, client.name, anchorRow)],
               style: bmrStyleFromRule(rule),
               priority: priorityCounter++,
             }],
@@ -2340,13 +2430,13 @@
         });
       });
 
-      bmrSmsUsageColLetters().forEach((cl) => {
+      if (activeBands.length) bmrSmsUsageColLetters().forEach((cl) => {
         (sms.usageRules || []).filter(r => r.enabled).forEach((rule) => {
           ws.addConditionalFormatting({
-            ref: `${cl}${dataStartRow}:${cl}${dataEndRow}`,
+            ref: bmrBandRowRef(cl, activeBands),
             rules: [{
               type: 'expression',
-              formulae: [bmrBuildConditionFormula(rule, `${cl}${dataStartRow}`)],
+              formulae: [bmrBuildConditionFormula(rule, `${cl}${anchorRow}`)],
               style: bmrStyleFromRule(rule),
               priority: priorityCounter++,
             }],
@@ -2402,11 +2492,12 @@
       const overdraftEnabled = (sms.overdraftRules || []).some(r => r.enabled);
       const enabledTargetRules = (sms.targetRules || [])
         .filter(r => r.enabled)
-        .map(rule => ({ rule, client: visibleClientsById.get(rule.clientId) }))
+        .map(rule => ({ rule, client: activeClientsById.get(rule.clientId) }))
         .filter(entry => entry.client?.name);
       if (overdraftEnabled || enabledTargetRules.length) {
         applyBmrRedCountLabel(ws.getCell(redCountRow, 1), `Colored ${market.label} balance count`);
         const aRange = `$A${dataStartRow}:$A${dataEndRow}`;
+        const activeMask = bmrActiveRowMaskExpr(activeBands, aRange, dataStartRow, dataEndRow);
         for (let k = 0; k < slots.length; k++) {
           const baseCol = 3 + k * BMR_SMS_BLOCK_COLS;
           const balanceCol = colLetter(baseCol + market.balanceOffset);
@@ -2416,7 +2507,7 @@
           const formula = bmrRedCountFormula([
             overdraftEnabled ? bmrSmsOverdraftArrayExpr(balRange, odRange) : null,
             bmrClientRulesArrayExpr(enabledTargetRules, balRange, aRange),
-          ]);
+          ], activeMask);
           const cell = ws.getCell(redCountRow, baseCol + market.balanceOffset);
           cell.value = formula ? { formula } : 0;
           applyBmrRedCountStyle(cell);
@@ -8136,9 +8227,18 @@ https://bit.ly/4vrcu64`;
           {accountManagers.length > 0 && (
             <div className="space-y-1">
               {accountManagers.map(manager => (
-                <div key={manager.id} className="grid grid-cols-[minmax(180px,1fr)_72px_84px_28px] gap-2 items-center rounded-md px-1 py-1 hover:bg-neutral-900/40">
+                <div key={manager.id} className="grid grid-cols-[minmax(180px,1fr)_72px_72px_84px_28px] gap-2 items-center rounded-md px-1 py-1 hover:bg-neutral-900/40">
                   <Input value={manager.name || ''} onChange={e => updateAccountManager(manager.id, { name: e.target.value })} placeholder="Account manager" />
                   <span className="text-[10px] uppercase tracking-wide text-neutral-500 text-right">{clientCountByManager[manager.id] || 0} clients</span>
+                  <button type="button"
+                    onClick={() => updateAccountManager(manager.id, { inactive: !manager.inactive })}
+                    className={`rounded border px-1.5 py-1 text-[10px] uppercase tracking-wide transition-colors ${manager.inactive ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-neutral-800 bg-neutral-900 text-neutral-500 hover:text-neutral-200'}`}
+                    title={manager.inactive
+                      ? 'Inactive - balance, overdraft and usage color rules skip these clients in generated files'
+                      : 'Active - color rules apply to these clients'}
+                    aria-pressed={!!manager.inactive}>
+                    {manager.inactive ? 'Inactive' : 'Active'}
+                  </button>
                   <span className="flex items-center justify-center">
                     <BmrColorSwatch value={manager.color} onChange={color => updateAccountManager(manager.id, { color })} />
                   </span>
@@ -8146,6 +8246,11 @@ https://bit.ly/4vrcu64`;
                 </div>
               ))}
             </div>
+          )}
+          {accountManagers.some(manager => manager.inactive) && (
+            <p className="text-[10px] leading-relaxed text-neutral-600">
+              An inactive manager's clients still appear in the generated file with the manager's color, but the overdraft, target and 30-min usage color rules skip their rows — and so does the colored balance count.
+            </p>
           )}
           <div className="flex items-end gap-2 flex-wrap">
             <div className="flex-1 min-w-[200px]">
