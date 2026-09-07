@@ -2666,6 +2666,13 @@
         finally { tokenRefresh = null; }
       }
 
+      // A token already in hand, or ''. Never a network call and never a
+      // consent popup, so display-only reads (the destination file name shown
+      // beside the sync buttons) cannot raise an OAuth window on their own.
+      function peekToken() {
+        return (accessToken && Date.now() < tokenExpiry && hasRequiredScopes()) ? accessToken : '';
+      }
+
       async function resolveToken(interactive) {
         try {
           return await requestToken(interactive);
@@ -2787,6 +2794,38 @@
           await new Promise(resolve => setTimeout(resolve, delay));
         }
         throw await driveError(response, operation);
+      }
+
+      // Human-readable name of a destination spreadsheet, cached per file id.
+      // The pasted destination link is otherwise just an opaque id, so an Exact
+      // sync could rebuild a workbook the user had forgotten was still linked.
+      const spreadsheetTitles = new Map();
+      function spreadsheetTitle(fileId) {
+        return (fileId && spreadsheetTitles.get(fileId)) || '';
+      }
+      // Best effort by design: this only labels a confirmation, so a missing
+      // token, an offline tab or a permission error resolves to '' and the
+      // caller falls back to showing the file id. silent:true uses peekToken,
+      // keeping the lookup incapable of triggering consent by itself.
+      async function loadSpreadsheetTitle(fileId, { silent = true, force = false } = {}) {
+        if (!fileId) return '';
+        if (!force && spreadsheetTitles.has(fileId)) return spreadsheetTitles.get(fileId);
+        try {
+          const token = silent ? peekToken() : await getToken();
+          if (!token) return '';
+          const r = await fetchWithGoogleRetry(
+            'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(fileId) + '?fields=properties.title',
+            { headers: { Authorization: 'Bearer ' + token } },
+            3,
+          );
+          if (!r.ok) return '';
+          const title = String(((await r.json()).properties || {}).title || '').trim();
+          if (title) spreadsheetTitles.set(fileId, title);
+          return title;
+        } catch (e) {
+          console.warn('Destination name lookup failed', e);
+          return '';
+        }
       }
 
       // Read only the tab identities needed by append-only sync. Existing tab
@@ -3763,7 +3802,7 @@
         });
       }
 
-      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, ensureFolder, uploadRawFile, folderUrl, folderMeta, setPickerApiKey, hasPickerKey, pickFolder };
+      return { isConfigured, setClientId, gisReady, getToken, connect, silentConnect, disconnect, isConnected, email, createSheet, appendMissingTabs, replaceExistingTabs, updateValuesInPlace, trimSheetGrids, installSipFcsPasteSum, sheetUrl, spreadsheetTitle, loadSpreadsheetTitle, ensureFolder, uploadRawFile, folderUrl, folderMeta, setPickerApiKey, hasPickerKey, pickFolder };
     })();
 
     /* ============================================================
@@ -5090,12 +5129,27 @@ https://bit.ly/4vrcu64`;
       useEffect(() => {
         setTargetDraft(targetSheetId ? `https://docs.google.com/spreadsheets/d/${targetSheetId}/edit` : '');
       }, [targetSheetId]);
+      const destinationId = targetSheetId || sheetId;
+      const [destinationName, setDestinationName] = useState('');
+      const connected = !!gsheets?.conn?.connected;
+      const lastSyncAt = gsheets?.conn?.lastSync?.[moduleId]?.at || 0;
+      const lookupDestinationName = gsheets?.destinationName;
+      // Name the file the sync buttons point at. Re-runs after a sync because
+      // "Create my own Google Sheet" repoints the module, and because the first
+      // attempt resolves to '' while no access token is live yet.
+      useEffect(() => {
+        let alive = true;
+        if (!connected || !destinationId || !lookupDestinationName) { setDestinationName(''); return; }
+        Promise.resolve(lookupDestinationName(destinationId))
+          .then(name => { if (alive) setDestinationName(name || ''); })
+          .catch(() => {});
+        return () => { alive = false; };
+      }, [connected, destinationId, lastSyncAt, lookupDestinationName]);
       if (!gsheets) return null;
       const { conn, connect, disconnect, sync, sheetUrl, configured, clientId, onSetClientId, onSetTargetSheet } = gsheets;
       const busy = conn.busyModule === moduleId;
       const connecting = conn.busyModule === '__connect__';
       const last = conn.lastSync?.[moduleId];
-      const destinationId = targetSheetId || sheetId;
       const url = destinationId ? sheetUrl(destinationId) : null;
       const selectedUnavailable = !!selectedTabLabel && !selectedTabTitle;
       const checkedTitles = Array.isArray(checkedTabTitles) ? checkedTabTitles.filter(Boolean) : [];
@@ -5153,6 +5207,17 @@ https://bit.ly/4vrcu64`;
               <Btn variant="ghost" size="sm" onClick={() => onSetTargetSheet(moduleId, targetDraft)} disabled={!targetDraft.trim()} className="flex-1">Use this sheet</Btn>
               {targetSheetId && <Btn variant="ghost" size="sm" onClick={() => { setTargetDraft(''); onSetTargetSheet(moduleId, ''); }}>Clear</Btn>}
             </div>
+            {destinationId && (
+              <p className="text-[10px] leading-relaxed">
+                <span className="text-neutral-500">Syncing to: </span>
+                <span className="text-neutral-300 break-all" title={destinationId}>
+                  {destinationName || `file ${String(destinationId).slice(0, 8)}…`}
+                </span>
+                <span className={targetSheetId ? 'text-amber-300' : 'text-neutral-500'}>
+                  {targetSheetId ? ' (pasted shared link)' : ' (sheet this app created)'}
+                </span>
+              </p>
+            )}
             <p className="text-[10px] text-neutral-600 leading-relaxed">
               {conn.email
                 ? <>The owner must share it with <span className="text-neutral-400">{conn.email}</span> as Editor.</>
@@ -6065,7 +6130,7 @@ https://bit.ly/4vrcu64`;
             className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#232327] p-6 shadow-2xl anim-panel"
             onClick={e => e.stopPropagation()}>
             {title && <h3 className="text-sm font-bold tracking-tight mb-1.5">{title}</h3>}
-            {message && <p className="text-[12.5px] text-neutral-400 leading-relaxed">{message}</p>}
+            {message && <p className="text-[12.5px] text-neutral-400 leading-relaxed whitespace-pre-line">{message}</p>}
             <div className="flex justify-end gap-2 mt-5">
               {kind === 'confirm' && (
                 <Btn variant="ghost" size="md" onClick={() => onResolve(cancelValue)}>{cancelText}</Btn>
@@ -14575,6 +14640,17 @@ match /shared/whitelistSmsTestNumbers {
         setGoogleConn(c => ({ ...c, connected: false, email: '', busyModule: null, error: null }));
       }, []);
 
+      // Display name for a module's destination spreadsheet. Never triggers an
+      // OAuth popup: with no live token it falls back to the file id, so the
+      // confirmation still identifies the workbook it is about to rebuild.
+      const googleDestinationName = useCallback(async (fileId) => {
+        if (!fileId) return 'no destination set';
+        const cached = googleSheetsSync.spreadsheetTitle(fileId);
+        if (cached) return cached;
+        const fetched = await googleSheetsSync.loadSpreadsheetTitle(fileId);
+        return fetched || `file ${String(fileId).slice(0, 8)}…`;
+      }, []);
+
       // Build the module's workbook and create its Google Sheet on first sync.
       // Later the caller can either append one selected missing tab or explicitly
       // replace every checked existing tab; unchecked tabs stay untouched.
@@ -14595,16 +14671,31 @@ match /shared/whitelistSmsTestNumbers {
           if (!ok) return;
         }
         if (replaceExisting || fastValues) {
-          const checkedCount = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean).length : 0;
+          const checkedTitles = Array.isArray(onlyTabTitles) ? onlyTabTitles.filter(Boolean) : [];
+          const checkedCount = checkedTitles.length;
           if (!checkedCount) {
             setToast({ type: 'err', msg: 'Check at least one sheet to update.' });
             return;
           }
+          // Name the workbook before overwriting anything in it. A destination
+          // link pasted days ago is invisible at click time, and Exact replaces
+          // whatever the matching tabs currently hold in that file.
+          const confirmState = stateRef.current || DEFAULT_STATE;
+          const pastedId = confirmState.googleSheets?.targetSheetIds?.[moduleId] || '';
+          const destinationId = pastedId || confirmState.googleSheets?.sheetIds?.[moduleId] || '';
+          const destinationLine = `Destination: ${await googleDestinationName(destinationId)}`
+            + (pastedId ? '  (pasted shared link)' : '  (sheet this app created)');
+          const tabLine = 'Tabs to rebuild: ' + (checkedTitles.length > 6
+            ? `${checkedTitles.slice(0, 5).join(', ')} +${checkedTitles.length - 5} more`
+            : checkedTitles.join(', '));
           const ok = await confirmDialog({
             title: `${fastValues ? 'Quick refresh' : 'Apply app changes'} to ${checkedCount} checked sheet${checkedCount === 1 ? '' : 's'}?`,
-            message: fastValues
+            message: `${destinationLine}
+${tabLine}
+
+` + (fastValues
               ? `Use this only when you did not change clients, rules, columns, layout, or formatting. Values and formulas will refresh in place while the current Google Sheet formatting is preserved.`
-              : `This applies client, rule, layout, and formatting changes by exactly rebuilding the ${checkedCount} matching Google Sheet tab${checkedCount === 1 ? '' : 's'}. Unchecked and unrelated tabs remain unchanged.`,
+              : `These ${checkedCount} tab${checkedCount === 1 ? '' : 's'} are rebuilt from the app: whatever they currently hold in that file is replaced. Unchecked and unrelated tabs remain unchanged.`),
             confirmText: fastValues ? 'Quick refresh' : 'Apply exact changes',
             tone: fastValues ? 'default' : 'danger',
           });
@@ -15173,6 +15264,7 @@ match /shared/whitelistSmsTestNumbers {
         // here; syncModuleToSheets still throws for programmatic callers.
         sync: (moduleId, options) => syncModuleToSheets(moduleId, options).catch(() => {}),
         sheetUrl: googleSheetsSync.sheetUrl,
+        destinationName: googleDestinationName,
         installPasteSum,
         backup: {
           connected: googleConn.connected,
