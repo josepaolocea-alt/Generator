@@ -1531,8 +1531,16 @@
         linear-gradient(150deg, rgba(255,255,255,0.035), transparent 36%),
         var(--glass-main) !important;
       box-shadow: var(--glass-shadow), var(--glass-inset);
-      backdrop-filter: blur(30px) saturate(1.28);
-      -webkit-backdrop-filter: blur(30px) saturate(1.28);
+      /* Deliberately NO backdrop-filter here either, and for a sharper reason
+         than the sidebar above. Nothing scrolls behind <main>: its backdrop is
+         only the fixed body gradient plus the two fixed body::before/::after
+         overlays, so blurring it was very nearly a no-op. What it did do was
+         make the TALLEST element on the page a backdrop root. A long view --
+         BMR VOIP > Rules renders every rule card, which pushes <main> past
+         10,000px with a 104-rule config -- then forces Chromium to re-derive
+         that root while the page scrolls. Raster falls behind and the
+         compositor is handed stale/unrasterised tiles, which paint as blank
+         bands of page background with half-drawn cards at the seam. */
     }
     html.light body > #root > div > main {
       background:
@@ -1750,6 +1758,24 @@
       -webkit-backdrop-filter: none !important;
     }
 
+    /* Sidebar split handle. It carries the flat theme's bg-[#17171a], which is
+       the DARK-MODE sidebar base colour — right when the whole aside was that
+       charcoal, an opaque black bar across the panel once the aside became
+       translucent purple. The handle only has to read as a divider with a
+       grip, so drop the fill to the same hairline the other sidebar dividers
+       use and let the grip pill carry the affordance. */
+    body > #root > div > aside [role="separator"] {
+      background: transparent !important;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.09) !important;
+    }
+    body > #root > div > aside [role="separator"] > span {
+      background: rgba(255,255,255,0.34) !important;
+    }
+    body > #root > div > aside [role="separator"]:hover > span,
+    body > #root > div > aside [role="separator"]:focus > span {
+      background: rgba(255,255,255,0.72) !important;
+    }
+
     /* Translucent panel fill — FLAT, IN-PAGE SURFACES ONLY.
        `bg-[#232327]` must NOT be listed here. Per the §11d ramp it is the
        "raised card / modal / popover" step, i.e. every floating surface in the
@@ -1882,6 +1908,13 @@
       border-radius: 9px !important;
       background: rgba(255,255,255,0.065) !important;
       box-shadow: var(--glass-inset) !important;
+      /* Same call as the nav strips above: a chip always sits on an already
+         frosted surface (the status pills live inside .app-topbar), so the
+         blur it inherited from the flat theme had nothing left to blur and
+         only nested another backdrop root inside the sticky header -- one
+         that repaints on every scroll frame. */
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
     }
     html.light .premium-chip {
       background: rgba(255,255,255,0.52) !important;
