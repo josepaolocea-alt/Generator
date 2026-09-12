@@ -8624,7 +8624,7 @@ https://bit.ly/4vrcu64`;
       const targetClientMissing = kind === 'target' && rule.clientId && !clients.some(c => c.id === rule.clientId);
       const set = (patch) => onChange({ ...rule, ...patch });
       return (
-        <Card className={`p-3 ${selected ? 'border-blue-500/40 bg-blue-500/10' : ''}`}>
+        <Card className={`bmr-rule-card p-3 ${selected ? 'border-blue-500/40 bg-blue-500/10' : ''}`}>
           <div className="flex items-center gap-2 mb-2">
             <input type="checkbox" checked={!!selected} onChange={onSelect}
               title="Select rule"

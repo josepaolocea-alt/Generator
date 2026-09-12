@@ -230,7 +230,29 @@
       from { opacity: 0; transform: translateY(4px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-    .anim-fade-in { animation: contentFadeIn 240ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+    /* `backwards`, NOT `both`. A forwards fill keeps the last keyframe applied
+       forever, so this wrapper held `transform: translateY(0)` — a non-none
+       transform — for the life of the view. That is a stacking context and a
+       containing block around the ENTIRE module body, which on a long view is
+       a ~20,000px layer (BMR VOIP > Rules with a 104-rule config). Chromium
+       then rasterises that layer in tiles, and scrolling faster than raster
+       shows the not-yet-drawn tiles as bare page background. `backwards` still
+       gives the pre-start state the animation needs, and the end state it
+       releases is the element's natural one, so nothing changes visually. */
+    .anim-fade-in { animation: contentFadeIn 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+
+    /* Same symptom, other half of the cure: skip rendering rule cards that are
+       off-screen, so a fast scroll has almost nothing left to rasterise. Safe
+       for these cards specifically — every popover they open (Select menu,
+       PresetColorPicker) is portalled to document.body, so paint containment
+       cannot clip one, and nothing inside them is position: sticky.
+       `auto` in contain-intrinsic-size makes the browser remember each card's
+       real measured height, so the scrollbar does not jump once a card has
+       been on screen one time. */
+    .bmr-rule-card {
+      content-visibility: auto;
+      contain-intrinsic-size: auto 200px;
+    }
 
     /* Toast slide-up entry */
     @keyframes toastSlideIn {
@@ -9743,7 +9765,7 @@ function BmrRuleEditor({ rule, onChange, onDelete, kind = "target", clients = []
   const ops = kind === "target" ? [{ v: "gte", l: "greater than or equal to" }, { v: "gt", l: "greater than" }, { v: "lte", l: "less than or equal to" }, { v: "lt", l: "less than" }, { v: "eq", l: "equal to" }, { v: "between", l: "between" }] : [{ v: "between", l: "between" }, { v: "gte", l: "greater than or equal to" }, { v: "gt", l: "greater than" }, { v: "lte", l: "less than or equal to" }, { v: "lt", l: "less than" }, { v: "eq", l: "equal to" }];
   const targetClientMissing = kind === "target" && rule.clientId && !clients.some((c) => c.id === rule.clientId);
   const set = (patch) => onChange({ ...rule, ...patch });
-  return /* @__PURE__ */ React.createElement(Card, { className: `p-3 ${selected ? "border-blue-500/40 bg-blue-500/10" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mb-2" }, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { className: `bmr-rule-card p-3 ${selected ? "border-blue-500/40 bg-blue-500/10" : ""}` }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mb-2" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "checkbox",
