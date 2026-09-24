@@ -9785,14 +9785,40 @@ function BmrRuleEditor({ rule, onChange, onDelete, kind = "target", clients = []
     }
   ), /* @__PURE__ */ React.createElement(Input, { value: rule.name || "", onChange: (e) => set({ name: e.target.value }), placeholder: "Rule name" }), /* @__PURE__ */ React.createElement("button", { onClick: onDelete, className: "p-1.5 text-neutral-500 hover:text-red-400", title: "Delete rule" }, /* @__PURE__ */ React.createElement(IconX, null))), kind === "target" && /* @__PURE__ */ React.createElement("div", { className: "mb-2" }, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Client"), /* @__PURE__ */ React.createElement(Select, { value: rule.clientId || "", onChange: (e) => set({ clientId: e.target.value }) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Choose client"), targetClientMissing && /* @__PURE__ */ React.createElement("option", { value: rule.clientId }, "Missing client"), clients.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.id, value: c.id }, c.name || "Unnamed client", c.hidden ? " (hidden)" : "")))), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-[220px_1fr_1fr] gap-2 items-end mb-2" }, /* @__PURE__ */ React.createElement(Select, { value: rule.kind, onChange: (e) => set({ kind: e.target.value }) }, ops.map((o) => /* @__PURE__ */ React.createElement("option", { key: o.v, value: o.v }, o.l))), rule.kind === "between" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Min"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: rule.min ?? "", onChange: (e) => set({ min: Number(e.target.value) }) })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Max"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: rule.max ?? "", onChange: (e) => set({ max: Number(e.target.value) }) }))) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "col-span-2" }, /* @__PURE__ */ React.createElement("label", { className: "block text-[10px] uppercase tracking-wide text-neutral-500 mb-1" }, "Value"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: rule.value ?? "", onChange: (e) => set({ value: Number(e.target.value) }) })))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-3 text-[11px] text-neutral-400" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Fill"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: rule.color, onChange: (v) => set({ color: v }) })), /* @__PURE__ */ React.createElement("span", { className: "inline-flex items-center gap-1" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Font"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: rule.fontColor, onChange: (v) => set({ fontColor: v }) })), /* @__PURE__ */ React.createElement("label", { className: `inline-flex items-center gap-1.5 cursor-pointer ${rule.bold ? "text-neutral-100 font-bold" : ""}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!rule.bold, onChange: (e) => set({ bold: e.target.checked }), className: "w-3.5 h-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "font-bold" }, "B")), /* @__PURE__ */ React.createElement("label", { className: `inline-flex items-center gap-1.5 cursor-pointer ${rule.italic ? "text-neutral-100 italic" : ""}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!rule.italic, onChange: (e) => set({ italic: e.target.checked }), className: "w-3.5 h-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "italic" }, "I")), /* @__PURE__ */ React.createElement("label", { className: `inline-flex items-center gap-1.5 cursor-pointer ${rule.underline ? "text-neutral-100 underline" : ""}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!rule.underline, onChange: (e) => set({ underline: e.target.checked }), className: "w-3.5 h-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "underline" }, "U"))));
 }
+function BmrRulePager({ page, pageCount, pageSize, from, to, total, noun, onPage, onPageSize, showPageSize = true }) {
+  const canPrev = page > 1;
+  const canNext = page < pageCount;
+  return /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500 tabular-nums" }, total ? `Showing ${from}-${to} of ${total} ${noun}` : `No ${noun} to show`), showPageSize && /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1.5" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Per page"), /* @__PURE__ */ React.createElement("div", { className: "w-[88px]" }, /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      value: String(pageSize),
+      title: "Rules per page",
+      onChange: (e) => {
+        onPageSize(e.target.value === "all" ? "all" : Number(e.target.value));
+        onPage(1);
+      }
+    },
+    /* @__PURE__ */ React.createElement("option", { value: "10" }, "10"),
+    /* @__PURE__ */ React.createElement("option", { value: "25" }, "25"),
+    /* @__PURE__ */ React.createElement("option", { value: "50" }, "50"),
+    /* @__PURE__ */ React.createElement("option", { value: "all" }, "All")
+  ))), pageCount > 1 && /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onPage(1), disabled: !canPrev, title: "First page" }, "First"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onPage(page - 1), disabled: !canPrev, title: "Previous page" }, "Prev"), /* @__PURE__ */ React.createElement("span", { className: "px-1 text-[11px] text-neutral-400 tabular-nums" }, "Page ", page, " / ", pageCount), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onPage(page + 1), disabled: !canNext, title: "Next page" }, "Next"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: () => onPage(pageCount), disabled: !canNext, title: "Last page" }, "Last")));
+}
 function BmrRulesPanel({
   bmr,
   onChange,
   targetTitle = "Target column rules - Amnt Receivable",
   targetHint = "Each rule targets one client across all 25 Amnt Receivable columns (L, X, AJ, ..., KN)",
-  usageHint = 'Applies to all 25 "30mins usage" columns (M, Y, AK, ..., KO)'
+  usageHint = 'Applies to all 25 "30mins usage" columns (M, Y, AK, ..., KO)',
+  clientTabLabel = "All clients",
+  usageTabLabel = "30 minutes rules",
+  clientTabExtras = null
 }) {
   const [ruleSearch, setRuleSearch] = useState("");
+  const [rulesView, setRulesView] = useState("target");
+  const [rulePageSize, setRulePageSize] = useState(10);
+  const [targetPage, setTargetPage] = useState(1);
+  const [usagePage, setUsagePage] = useState(1);
   const [selectedRuleKeys, setSelectedRuleKeys] = useState([]);
   const [bulkRuleKind, setBulkRuleKind] = useState("gte");
   const [bulkRuleValue, setBulkRuleValue] = useState("5");
@@ -9809,8 +9835,26 @@ function BmrRulesPanel({
   const targetClients = bmr.clients || [];
   const targetClientsById = useMemo(() => new Map(targetClients.map((client) => [client.id, client])), [targetClients]);
   const defaultTargetClient = targetClients.find((c) => !c.hidden) || targetClients[0];
-  const addTarget = () => onChange({ ...bmr, targetRules: [...bmr.targetRules || [], { id: bmrId("tr"), name: "New client rule", clientId: defaultTargetClient?.id || "", kind: "gte", value: 5, color: "#EF4444", fontColor: "#FFFFFF", bold: true, italic: false, underline: false, enabled: true }] });
-  const addUsage = () => onChange({ ...bmr, usageRules: [...bmr.usageRules || [], { id: bmrId("ur"), name: "New rule", kind: "between", min: -49, max: -1e-3, color: "#F59E0B", fontColor: "#1F2937", bold: true, italic: false, underline: false, enabled: true }] });
+  const revealNewRule = (view, nextCount) => {
+    setRuleSearch("");
+    setRulesView(view);
+    const lastPage = rulePageSize === "all" ? 1 : Math.max(1, Math.ceil(nextCount / rulePageSize));
+    if (view === "target") setTargetPage(lastPage);
+    else setUsagePage(lastPage);
+  };
+  const addTarget = () => {
+    onChange({ ...bmr, targetRules: [...bmr.targetRules || [], { id: bmrId("tr"), name: "New client rule", clientId: defaultTargetClient?.id || "", kind: "gte", value: 5, color: "#EF4444", fontColor: "#FFFFFF", bold: true, italic: false, underline: false, enabled: true }] });
+    revealNewRule("target", (bmr.targetRules || []).length + 1);
+  };
+  const addUsage = () => {
+    onChange({ ...bmr, usageRules: [...bmr.usageRules || [], { id: bmrId("ur"), name: "New rule", kind: "between", min: -49, max: -1e-3, color: "#F59E0B", fontColor: "#1F2937", bold: true, italic: false, underline: false, enabled: true }] });
+    revealNewRule("usage", (bmr.usageRules || []).length + 1);
+  };
+  const changeRuleSearch = (value) => {
+    setRuleSearch(value);
+    setTargetPage(1);
+    setUsagePage(1);
+  };
   const updT = (id, next) => onChange({ ...bmr, targetRules: bmr.targetRules.map((r) => r.id === id ? next : r) });
   const updU = (id, next) => onChange({ ...bmr, usageRules: bmr.usageRules.map((r) => r.id === id ? next : r) });
   const delT = (id) => onChange({ ...bmr, targetRules: bmr.targetRules.filter((r) => r.id !== id) });
@@ -9841,10 +9885,27 @@ function BmrRulesPanel({
   const filteredTargetRuleIds = new Set(filteredTargetRules.map((rule) => rule.id));
   const filteredUsageRuleIds = new Set(filteredUsageRules.map((rule) => rule.id));
   const selectedRuleKeySet = new Set(selectedRuleKeys);
-  const shownRuleKeys = [
-    ...filteredTargetRules.map((rule) => `target:${rule.id}`),
-    ...filteredUsageRules.map((rule) => `usage:${rule.id}`)
-  ];
+  const shownRuleKeys = rulesView === "target" ? filteredTargetRules.map((rule) => `target:${rule.id}`) : filteredUsageRules.map((rule) => `usage:${rule.id}`);
+  const pageCountOf = (count) => rulePageSize === "all" ? 1 : Math.max(1, Math.ceil(count / rulePageSize) || 1);
+  const targetPageCount = pageCountOf(filteredTargetRules.length);
+  const usagePageCount = pageCountOf(filteredUsageRules.length);
+  const safeTargetPage = Math.min(Math.max(1, targetPage), targetPageCount);
+  const safeUsagePage = Math.min(Math.max(1, usagePage), usagePageCount);
+  const targetStart = rulePageSize === "all" ? 0 : (safeTargetPage - 1) * rulePageSize;
+  const usageStart = rulePageSize === "all" ? 0 : (safeUsagePage - 1) * rulePageSize;
+  const pagedTargetRules = rulePageSize === "all" ? filteredTargetRules : filteredTargetRules.slice(targetStart, targetStart + rulePageSize);
+  const pagedUsageRules = rulePageSize === "all" ? filteredUsageRules : filteredUsageRules.slice(usageStart, usageStart + rulePageSize);
+  const targetRangeFrom = filteredTargetRules.length ? targetStart + 1 : 0;
+  const targetRangeTo = targetStart + pagedTargetRules.length;
+  const usageRangeFrom = filteredUsageRules.length ? usageStart + 1 : 0;
+  const usageRangeTo = usageStart + pagedUsageRules.length;
+  useEffect(() => {
+    if (targetPage !== safeTargetPage) setTargetPage(safeTargetPage);
+    if (usagePage !== safeUsagePage) setUsagePage(safeUsagePage);
+  }, [targetPage, usagePage, safeTargetPage, safeUsagePage]);
+  useEffect(() => {
+    setGeneralStyleScope((scope) => scope === "all" ? scope : rulesView === "usage" ? "usage" : "target");
+  }, [rulesView]);
   const allShownRulesSelected = shownRuleKeys.length > 0 && shownRuleKeys.every((key) => selectedRuleKeySet.has(key));
   const toggleSelectedRule = (key) => setSelectedRuleKeys(
     (keys) => keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key]
@@ -9893,12 +9954,28 @@ function BmrRulesPanel({
     }
     updateSelectedRules(patch);
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-10" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-sm" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Search rules"), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "space-y-10" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "premium-tabs inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5", role: "tablist", "aria-label": "Rule groups" }, [
+    { id: "target", label: clientTabLabel, total: targetRules.length, shown: filteredTargetRules.length },
+    { id: "usage", label: usageTabLabel, total: usageRules.length, shown: filteredUsageRules.length }
+  ].map((item) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: item.id,
+      type: "button",
+      role: "tab",
+      "aria-selected": rulesView === item.id,
+      onClick: () => setRulesView(item.id),
+      className: `rounded px-3 py-1.5 text-xs font-medium transition-colors ${rulesView === item.id ? "bg-neutral-800 text-neutral-100" : "text-neutral-500 hover:text-neutral-200"}`
+    },
+    item.label,
+    " · ",
+    ruleSearchTerm ? `${item.shown}/${item.total}` : item.total
+  ))), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "sm", onClick: rulesView === "target" ? addTarget : addUsage }, /* @__PURE__ */ React.createElement(IconPlus, null), " ", rulesView === "target" ? "Add target rule" : "Add usage rule")), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end justify-between gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-sm" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Search rules"), /* @__PURE__ */ React.createElement(
     ClearableInput,
     {
       value: ruleSearch,
-      onChange: (e) => setRuleSearch(e.target.value),
-      onClear: () => setRuleSearch(""),
+      onChange: (e) => changeRuleSearch(e.target.value),
+      onClear: () => changeRuleSearch(""),
       clearTitle: "Clear rules search",
       placeholder: "Rule name, client, or value"
     }
@@ -9911,7 +9988,20 @@ function BmrRulesPanel({
       disabled: !shownRuleKeys.length,
       className: "h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
     }
-  ), "Select shown rules"), /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500" }, filteredTargetRules.length, "/", targetRules.length, " client rules / ", filteredUsageRules.length, "/", usageRules.length, " usage rules"))), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950/60 p-3 space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${generalStyleCount} shown rule${generalStyleCount === 1 ? "" : "s"}` }, "General style edit"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-[240px]" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Apply to"), /* @__PURE__ */ React.createElement(Select, { value: generalStyleScope, onChange: (e) => setGeneralStyleScope(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "target" }, "Target/client rules shown"), /* @__PURE__ */ React.createElement("option", { value: "usage" }, "30-min usage rules shown"), /* @__PURE__ */ React.createElement("option", { value: "all" }, "All shown rules"))), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Fill"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: generalFillColor, onChange: setGeneralFillColor, allowClear: false })), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Font"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: generalFontColor, onChange: setGeneralFontColor, allowClear: false })), /* @__PURE__ */ React.createElement("label", { className: `inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalBold ? "text-neutral-100" : "text-neutral-500"}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: generalBold, onChange: (e) => setGeneralBold(e.target.checked), className: "h-3.5 w-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "font-bold" }, "B")), /* @__PURE__ */ React.createElement("label", { className: `inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalItalic ? "text-neutral-100" : "text-neutral-500"}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: generalItalic, onChange: (e) => setGeneralItalic(e.target.checked), className: "h-3.5 w-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "italic" }, "I")), /* @__PURE__ */ React.createElement("label", { className: `inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalUnderline ? "text-neutral-100" : "text-neutral-500"}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: generalUnderline, onChange: (e) => setGeneralUnderline(e.target.checked), className: "h-3.5 w-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "underline" }, "U")), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "md", onClick: applyGeneralStyle, disabled: !generalStyleCount }, "Apply style"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateGeneralStyleRules({ color: "" }), disabled: !generalStyleCount }, "Clear fill"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateGeneralStyleRules({ fontColor: "" }), disabled: !generalStyleCount }, "Clear font")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Uses the current search filter. Clear search first if you want to update every rule in the selected group.")), selectedRuleKeys.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/40 bg-blue-500/10 p-3 space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${selectedRuleKeys.length} selected` }, "Bulk edit rules"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-[220px]" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Condition"), /* @__PURE__ */ React.createElement(Select, { value: bulkRuleKind, onChange: (e) => setBulkRuleKind(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "gte" }, "greater than or equal to"), /* @__PURE__ */ React.createElement("option", { value: "gt" }, "greater than"), /* @__PURE__ */ React.createElement("option", { value: "lte" }, "less than or equal to"), /* @__PURE__ */ React.createElement("option", { value: "lt" }, "less than"), /* @__PURE__ */ React.createElement("option", { value: "eq" }, "equal to"), /* @__PURE__ */ React.createElement("option", { value: "between" }, "between"))), bulkRuleKind === "between" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "w-28" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Min"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: bulkRuleMin, onChange: (e) => setBulkRuleMin(e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "w-28" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Max"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: bulkRuleMax, onChange: (e) => setBulkRuleMax(e.target.value) }))) : /* @__PURE__ */ React.createElement("div", { className: "w-32" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Value"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: bulkRuleValue, onChange: (e) => setBulkRuleValue(e.target.value) })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: applyBulkCondition }, "Apply condition")), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Fill"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: bulkFillColor, onChange: setBulkFillColor, allowClear: false })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ color: bulkFillColor }) }, "Apply fill"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ color: "" }) }, "Clear fill"), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Font"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: bulkFontColor, onChange: setBulkFontColor, allowClear: false })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ fontColor: bulkFontColor }) }, "Apply font"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ fontColor: "" }) }, "Clear font")), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ enabled: true }) }, "Enable"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ enabled: false }) }, "Disable"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ bold: true }) }, /* @__PURE__ */ React.createElement("span", { className: "font-bold" }, "B")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ italic: true }) }, /* @__PURE__ */ React.createElement("span", { className: "italic" }, "I")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ underline: true }) }, /* @__PURE__ */ React.createElement("span", { className: "underline" }, "U")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ bold: false, italic: false, underline: false }) }, "Clear text style"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setSelectedRuleKeys([]) }, "Clear selection"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: targetHint }, targetTitle), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, filteredTargetRules.map((r) => /* @__PURE__ */ React.createElement(
+  ), "Select shown rules"), /* @__PURE__ */ React.createElement("span", { className: "text-[11px] text-neutral-500" }, filteredTargetRules.length, "/", targetRules.length, " client rules / ", filteredUsageRules.length, "/", usageRules.length, " usage rules")))), /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-neutral-900 bg-neutral-950/60 p-3 space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${generalStyleCount} shown rule${generalStyleCount === 1 ? "" : "s"}` }, "General style edit"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-[240px]" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Apply to"), /* @__PURE__ */ React.createElement(Select, { value: generalStyleScope, onChange: (e) => setGeneralStyleScope(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "target" }, "Target/client rules shown"), /* @__PURE__ */ React.createElement("option", { value: "usage" }, "30-min usage rules shown"), /* @__PURE__ */ React.createElement("option", { value: "all" }, "All shown rules"))), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Fill"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: generalFillColor, onChange: setGeneralFillColor, allowClear: false })), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Font"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: generalFontColor, onChange: setGeneralFontColor, allowClear: false })), /* @__PURE__ */ React.createElement("label", { className: `inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalBold ? "text-neutral-100" : "text-neutral-500"}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: generalBold, onChange: (e) => setGeneralBold(e.target.checked), className: "h-3.5 w-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "font-bold" }, "B")), /* @__PURE__ */ React.createElement("label", { className: `inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalItalic ? "text-neutral-100" : "text-neutral-500"}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: generalItalic, onChange: (e) => setGeneralItalic(e.target.checked), className: "h-3.5 w-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "italic" }, "I")), /* @__PURE__ */ React.createElement("label", { className: `inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-[12px] ${generalUnderline ? "text-neutral-100" : "text-neutral-500"}` }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: generalUnderline, onChange: (e) => setGeneralUnderline(e.target.checked), className: "h-3.5 w-3.5" }), /* @__PURE__ */ React.createElement("span", { className: "underline" }, "U")), /* @__PURE__ */ React.createElement(Btn, { variant: "accent", size: "md", onClick: applyGeneralStyle, disabled: !generalStyleCount }, "Apply style"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateGeneralStyleRules({ color: "" }), disabled: !generalStyleCount }, "Clear fill"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateGeneralStyleRules({ fontColor: "" }), disabled: !generalStyleCount }, "Clear font")), /* @__PURE__ */ React.createElement("p", { className: "text-[10px] text-neutral-600 leading-relaxed" }, "Uses the current search filter. Clear search first if you want to update every rule in the selected group.")), selectedRuleKeys.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "rounded-md border border-blue-500/40 bg-blue-500/10 p-3 space-y-3" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: `${selectedRuleKeys.length} selected` }, "Bulk edit rules"), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-end gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "w-full max-w-[220px]" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Condition"), /* @__PURE__ */ React.createElement(Select, { value: bulkRuleKind, onChange: (e) => setBulkRuleKind(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "gte" }, "greater than or equal to"), /* @__PURE__ */ React.createElement("option", { value: "gt" }, "greater than"), /* @__PURE__ */ React.createElement("option", { value: "lte" }, "less than or equal to"), /* @__PURE__ */ React.createElement("option", { value: "lt" }, "less than"), /* @__PURE__ */ React.createElement("option", { value: "eq" }, "equal to"), /* @__PURE__ */ React.createElement("option", { value: "between" }, "between"))), bulkRuleKind === "between" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "w-28" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Min"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: bulkRuleMin, onChange: (e) => setBulkRuleMin(e.target.value) })), /* @__PURE__ */ React.createElement("div", { className: "w-28" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Max"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: bulkRuleMax, onChange: (e) => setBulkRuleMax(e.target.value) }))) : /* @__PURE__ */ React.createElement("div", { className: "w-32" }, /* @__PURE__ */ React.createElement("label", { className: "mb-1 block text-[10px] uppercase tracking-wide text-neutral-500" }, "Value"), /* @__PURE__ */ React.createElement(Input, { type: "number", step: "0.001", value: bulkRuleValue, onChange: (e) => setBulkRuleValue(e.target.value) })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: applyBulkCondition }, "Apply condition")), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Fill"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: bulkFillColor, onChange: setBulkFillColor, allowClear: false })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ color: bulkFillColor }) }, "Apply fill"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ color: "" }) }, "Clear fill"), /* @__PURE__ */ React.createElement("span", { className: "inline-flex h-9 items-center gap-1 rounded-md border border-neutral-800 bg-neutral-950 px-2" }, /* @__PURE__ */ React.createElement("span", { className: "text-[10px] uppercase tracking-wide text-neutral-500" }, "Font"), /* @__PURE__ */ React.createElement(BmrColorSwatch, { value: bulkFontColor, onChange: setBulkFontColor, allowClear: false })), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ fontColor: bulkFontColor }) }, "Apply font"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ fontColor: "" }) }, "Clear font")), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ enabled: true }) }, "Enable"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ enabled: false }) }, "Disable"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ bold: true }) }, /* @__PURE__ */ React.createElement("span", { className: "font-bold" }, "B")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ italic: true }) }, /* @__PURE__ */ React.createElement("span", { className: "italic" }, "I")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ underline: true }) }, /* @__PURE__ */ React.createElement("span", { className: "underline" }, "U")), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => updateSelectedRules({ bold: false, italic: false, underline: false }) }, "Clear text style"), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "md", onClick: () => setSelectedRuleKeys([]) }, "Clear selection"))), rulesView === "target" ? /* @__PURE__ */ React.createElement("div", { key: "target", className: "anim-fade-in space-y-10" }, clientTabExtras, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: targetHint }, targetTitle), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, /* @__PURE__ */ React.createElement(
+    BmrRulePager,
+    {
+      page: safeTargetPage,
+      pageCount: targetPageCount,
+      pageSize: rulePageSize,
+      from: targetRangeFrom,
+      to: targetRangeTo,
+      total: filteredTargetRules.length,
+      noun: "client rules",
+      onPage: setTargetPage,
+      onPageSize: setRulePageSize
+    }
+  ), pagedTargetRules.map((r) => /* @__PURE__ */ React.createElement(
     BmrRuleEditor,
     {
       key: r.id,
@@ -9923,7 +10013,34 @@ function BmrRulesPanel({
       onChange: (next) => updT(r.id, next),
       onDelete: () => delT(r.id)
     }
-  )), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addTarget }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add target rule"))), /* @__PURE__ */ React.createElement("div", { "aria-hidden": "true", className: "border-t-2 border-neutral-700" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: usageHint }, "30-min usage column rules"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, filteredUsageRules.map((r) => /* @__PURE__ */ React.createElement(
+  )), !pagedTargetRules.length && /* @__PURE__ */ React.createElement("p", { className: "rounded-md border border-dashed border-neutral-700 px-3 py-6 text-center text-[11px] text-neutral-600" }, targetRules.length ? "No client rules match this search." : "No client rules yet."), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3 pt-1" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addTarget }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add target rule"), /* @__PURE__ */ React.createElement(
+    BmrRulePager,
+    {
+      page: safeTargetPage,
+      pageCount: targetPageCount,
+      pageSize: rulePageSize,
+      from: targetRangeFrom,
+      to: targetRangeTo,
+      total: filteredTargetRules.length,
+      noun: "client rules",
+      onPage: setTargetPage,
+      onPageSize: setRulePageSize,
+      showPageSize: false
+    }
+  ))))) : /* @__PURE__ */ React.createElement("div", { key: "usage", className: "anim-fade-in" }, /* @__PURE__ */ React.createElement(SectionLabel, { hint: usageHint }, "30-min usage column rules"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, /* @__PURE__ */ React.createElement(
+    BmrRulePager,
+    {
+      page: safeUsagePage,
+      pageCount: usagePageCount,
+      pageSize: rulePageSize,
+      from: usageRangeFrom,
+      to: usageRangeTo,
+      total: filteredUsageRules.length,
+      noun: "usage rules",
+      onPage: setUsagePage,
+      onPageSize: setRulePageSize
+    }
+  ), pagedUsageRules.map((r) => /* @__PURE__ */ React.createElement(
     BmrRuleEditor,
     {
       key: r.id,
@@ -9934,7 +10051,21 @@ function BmrRulesPanel({
       onChange: (next) => updU(r.id, next),
       onDelete: () => delU(r.id)
     }
-  )), /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addUsage }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add usage rule"))));
+  )), !pagedUsageRules.length && /* @__PURE__ */ React.createElement("p", { className: "rounded-md border border-dashed border-neutral-700 px-3 py-6 text-center text-[11px] text-neutral-600" }, usageRules.length ? "No usage rules match this search." : "No 30-minute usage rules yet."), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-between gap-3 pt-1" }, /* @__PURE__ */ React.createElement(Btn, { variant: "ghost", size: "sm", onClick: addUsage }, /* @__PURE__ */ React.createElement(IconPlus, null), " Add usage rule"), /* @__PURE__ */ React.createElement(
+    BmrRulePager,
+    {
+      page: safeUsagePage,
+      pageCount: usagePageCount,
+      pageSize: rulePageSize,
+      from: usageRangeFrom,
+      to: usageRangeTo,
+      total: filteredUsageRules.length,
+      noun: "usage rules",
+      onPage: setUsagePage,
+      onPageSize: setRulePageSize,
+      showPageSize: false
+    }
+  )))));
 }
 function BmrPreview({ bmr }) {
   const visibleClients = (bmr.clients || []).filter((c) => !c.hidden).slice(0, 8);
@@ -10118,7 +10249,7 @@ function BmrSmsRulesPanel({ sms, onChange }) {
       };
     });
   }, [onChange]);
-  return /* @__PURE__ */ React.createElement("div", { className: "space-y-10" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "BMR SMS only - compares BALANCE with Over Draft / OD in the same time block" }, "Overdraft reached rules"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, overdraftRules.map((rule) => /* @__PURE__ */ React.createElement(
+  const clientTabExtras = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, { hint: "BMR SMS only - compares BALANCE with Over Draft / OD in the same time block" }, "Overdraft reached rules"), /* @__PURE__ */ React.createElement("div", { className: "space-y-2" }, overdraftRules.map((rule) => /* @__PURE__ */ React.createElement(
     BmrSmsOverdraftRuleEditor,
     {
       key: rule.id,
@@ -10134,16 +10265,18 @@ function BmrSmsRulesPanel({ sms, onChange }) {
       onChange: (e) => onChange((prev) => ({ ...prev || DEFAULT_BMR_SMS_STATE, boldBalanceOnUsage: e.target.checked })),
       className: "mt-0.5 h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 cursor-pointer"
     }
-  ), /* @__PURE__ */ React.createElement("span", null, "Bold the BALANCE cell when its 30mins usage is non-zero", /* @__PURE__ */ React.createElement("span", { className: "block text-[11px] text-neutral-500" }, "Only balance cells whose same-row 30mins usage has a value turn bold — makes it easy to spot BALANCE apart from the Over Draft / OD column."))))), /* @__PURE__ */ React.createElement("div", { "aria-hidden": "true", className: "border-t-2 border-neutral-700" }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("span", null, "Bold the BALANCE cell when its 30mins usage is non-zero", /* @__PURE__ */ React.createElement("span", { className: "block text-[11px] text-neutral-500" }, "Only balance cells whose same-row 30mins usage has a value turn bold — makes it easy to spot BALANCE apart from the Over Draft / OD column."))))), /* @__PURE__ */ React.createElement("div", { "aria-hidden": "true", className: "border-t-2 border-neutral-700" }));
+  return /* @__PURE__ */ React.createElement(
     BmrRulesPanel,
     {
       bmr: rulesBmr,
       onChange: setRulesBmr,
       targetTitle: "Balance column rules",
       targetHint: "Each rule targets one SMS client across the 25 Balance columns. Retail uses BALANCE; Wholesale uses BALANCE after OD.",
-      usageHint: "Applies to all 25 SMS 30mins usage columns in RES and WHS sheets."
+      usageHint: "Applies to all 25 SMS 30mins usage columns in RES and WHS sheets.",
+      clientTabExtras
     }
-  ));
+  );
 }
 function BmrSmsPreview({ sms }) {
   const slots = bmrSlotsForShift("day").slice(0, 3);
