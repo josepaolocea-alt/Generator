@@ -8695,14 +8695,59 @@ https://bit.ly/4vrcu64`;
       );
     }
 
+    /* Rule-list pager -------------------------------------------------------
+       BMR rule lists run one card per client, so each list is paged (10 per
+       page by default) rather than rendered as one very tall column. */
+    function BmrRulePager({ page, pageCount, pageSize, from, to, total, noun, onPage, onPageSize, showPageSize = true }) {
+      const canPrev = page > 1;
+      const canNext = page < pageCount;
+      return (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-neutral-500 tabular-nums">
+            {total ? `Showing ${from}-${to} of ${total} ${noun}` : `No ${noun} to show`}
+          </span>
+          {showPageSize && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-neutral-500">Per page</span>
+              <div className="w-[88px]">
+                <Select value={String(pageSize)} title="Rules per page"
+                  onChange={e => { onPageSize(e.target.value === 'all' ? 'all' : Number(e.target.value)); onPage(1); }}>
+                  <option value="10">10</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="all">All</option>
+                </Select>
+              </div>
+            </div>
+          )}
+          {pageCount > 1 && (
+            <div className="flex items-center gap-1">
+              <Btn variant="ghost" size="sm" onClick={() => onPage(1)} disabled={!canPrev} title="First page">First</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => onPage(page - 1)} disabled={!canPrev} title="Previous page">Prev</Btn>
+              <span className="px-1 text-[11px] text-neutral-400 tabular-nums">Page {page} / {pageCount}</span>
+              <Btn variant="ghost" size="sm" onClick={() => onPage(page + 1)} disabled={!canNext} title="Next page">Next</Btn>
+              <Btn variant="ghost" size="sm" onClick={() => onPage(pageCount)} disabled={!canNext} title="Last page">Last</Btn>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function BmrRulesPanel({
       bmr,
       onChange,
       targetTitle = 'Target column rules - Amnt Receivable',
       targetHint = 'Each rule targets one client across all 25 Amnt Receivable columns (L, X, AJ, ..., KN)',
       usageHint = 'Applies to all 25 "30mins usage" columns (M, Y, AK, ..., KO)',
+      clientTabLabel = 'All clients',
+      usageTabLabel = '30 minutes rules',
+      clientTabExtras = null,
     }) {
       const [ruleSearch, setRuleSearch] = useState('');
+      const [rulesView, setRulesView] = useState('target');
+      const [rulePageSize, setRulePageSize] = useState(10);
+      const [targetPage, setTargetPage] = useState(1);
+      const [usagePage, setUsagePage] = useState(1);
       const [selectedRuleKeys, setSelectedRuleKeys] = useState([]);
       const [bulkRuleKind, setBulkRuleKind] = useState('gte');
       const [bulkRuleValue, setBulkRuleValue] = useState('5');
@@ -8719,8 +8764,28 @@ https://bit.ly/4vrcu64`;
       const targetClients = bmr.clients || [];
       const targetClientsById = useMemo(() => new Map(targetClients.map(client => [client.id, client])), [targetClients]);
       const defaultTargetClient = targetClients.find(c => !c.hidden) || targetClients[0];
-      const addTarget = () => onChange({ ...bmr, targetRules: [...(bmr.targetRules || []), { id: bmrId('tr'), name: 'New client rule', clientId: defaultTargetClient?.id || '', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true }] });
-      const addUsage  = () => onChange({ ...bmr, usageRules:  [...(bmr.usageRules  || []), { id: bmrId('ur'), name: 'New rule', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true }] });
+      // New rules are appended, so they land on the last page. Clear the search
+      // and jump to that page so the top Add button always reveals its rule.
+      const revealNewRule = (view, nextCount) => {
+        setRuleSearch('');
+        setRulesView(view);
+        const lastPage = rulePageSize === 'all' ? 1 : Math.max(1, Math.ceil(nextCount / rulePageSize));
+        if (view === 'target') setTargetPage(lastPage);
+        else setUsagePage(lastPage);
+      };
+      const addTarget = () => {
+        onChange({ ...bmr, targetRules: [...(bmr.targetRules || []), { id: bmrId('tr'), name: 'New client rule', clientId: defaultTargetClient?.id || '', kind: 'gte', value: 5, color: '#EF4444', fontColor: '#FFFFFF', bold: true, italic: false, underline: false, enabled: true }] });
+        revealNewRule('target', (bmr.targetRules || []).length + 1);
+      };
+      const addUsage = () => {
+        onChange({ ...bmr, usageRules:  [...(bmr.usageRules  || []), { id: bmrId('ur'), name: 'New rule', kind: 'between', min: -49, max: -0.001, color: '#F59E0B', fontColor: '#1F2937', bold: true, italic: false, underline: false, enabled: true }] });
+        revealNewRule('usage', (bmr.usageRules || []).length + 1);
+      };
+      const changeRuleSearch = (value) => {
+        setRuleSearch(value);
+        setTargetPage(1);
+        setUsagePage(1);
+      };
       const updT = (id, next) => onChange({ ...bmr, targetRules: bmr.targetRules.map(r => r.id === id ? next : r) });
       const updU = (id, next) => onChange({ ...bmr, usageRules:  bmr.usageRules.map(r  => r.id === id ? next : r) });
       const delT = (id) => onChange({ ...bmr, targetRules: bmr.targetRules.filter(r => r.id !== id) });
@@ -8751,10 +8816,33 @@ https://bit.ly/4vrcu64`;
       const filteredTargetRuleIds = new Set(filteredTargetRules.map(rule => rule.id));
       const filteredUsageRuleIds = new Set(filteredUsageRules.map(rule => rule.id));
       const selectedRuleKeySet = new Set(selectedRuleKeys);
-      const shownRuleKeys = [
-        ...filteredTargetRules.map(rule => `target:${rule.id}`),
-        ...filteredUsageRules.map(rule => `usage:${rule.id}`),
-      ];
+      // Selection and the select-shown toggle stay inside the visible sub tab,
+      // so the bulk panel never acts on cards the other tab is hiding.
+      const shownRuleKeys = rulesView === 'target'
+        ? filteredTargetRules.map(rule => `target:${rule.id}`)
+        : filteredUsageRules.map(rule => `usage:${rule.id}`);
+      const pageCountOf = (count) => (rulePageSize === 'all' ? 1 : Math.max(1, Math.ceil(count / rulePageSize) || 1));
+      const targetPageCount = pageCountOf(filteredTargetRules.length);
+      const usagePageCount = pageCountOf(filteredUsageRules.length);
+      const safeTargetPage = Math.min(Math.max(1, targetPage), targetPageCount);
+      const safeUsagePage = Math.min(Math.max(1, usagePage), usagePageCount);
+      const targetStart = rulePageSize === 'all' ? 0 : (safeTargetPage - 1) * rulePageSize;
+      const usageStart = rulePageSize === 'all' ? 0 : (safeUsagePage - 1) * rulePageSize;
+      const pagedTargetRules = rulePageSize === 'all' ? filteredTargetRules : filteredTargetRules.slice(targetStart, targetStart + rulePageSize);
+      const pagedUsageRules = rulePageSize === 'all' ? filteredUsageRules : filteredUsageRules.slice(usageStart, usageStart + rulePageSize);
+      const targetRangeFrom = filteredTargetRules.length ? targetStart + 1 : 0;
+      const targetRangeTo = targetStart + pagedTargetRules.length;
+      const usageRangeFrom = filteredUsageRules.length ? usageStart + 1 : 0;
+      const usageRangeTo = usageStart + pagedUsageRules.length;
+      useEffect(() => {
+        if (targetPage !== safeTargetPage) setTargetPage(safeTargetPage);
+        if (usagePage !== safeUsagePage) setUsagePage(safeUsagePage);
+      }, [targetPage, usagePage, safeTargetPage, safeUsagePage]);
+      // Keep General style edit pointed at the tab you are looking at, unless
+      // it was deliberately widened to every shown rule.
+      useEffect(() => {
+        setGeneralStyleScope(scope => scope === 'all' ? scope : (rulesView === 'usage' ? 'usage' : 'target'));
+      }, [rulesView]);
       const allShownRulesSelected = shownRuleKeys.length > 0 && shownRuleKeys.every(key => selectedRuleKeySet.has(key));
       const toggleSelectedRule = (key) => setSelectedRuleKeys((keys) =>
         keys.includes(key) ? keys.filter(item => item !== key) : [...keys, key]
@@ -8812,21 +8900,40 @@ https://bit.ly/4vrcu64`;
 
       return (
         <div className="space-y-10">
-          <div className="flex flex-wrap items-end justify-between gap-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
-            <div className="w-full max-w-sm">
-              <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search rules</label>
-              <ClearableInput value={ruleSearch} onChange={e => setRuleSearch(e.target.value)}
-                onClear={() => setRuleSearch('')} clearTitle="Clear rules search"
-                placeholder="Rule name, client, or value" />
+          <div className="space-y-3 rounded-md border border-neutral-900 bg-neutral-950/60 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="premium-tabs inline-flex rounded-md border border-neutral-800 bg-neutral-950 p-0.5" role="tablist" aria-label="Rule groups">
+                {[
+                  { id: 'target', label: clientTabLabel, total: targetRules.length, shown: filteredTargetRules.length },
+                  { id: 'usage', label: usageTabLabel, total: usageRules.length, shown: filteredUsageRules.length },
+                ].map(item => (
+                  <button key={item.id} type="button" role="tab" aria-selected={rulesView === item.id}
+                    onClick={() => setRulesView(item.id)}
+                    className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${rulesView === item.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'}`}>
+                    {item.label} · {ruleSearchTerm ? `${item.shown}/${item.total}` : item.total}
+                  </button>
+                ))}
+              </div>
+              <Btn variant="accent" size="sm" onClick={rulesView === 'target' ? addTarget : addUsage}>
+                <IconPlus /> {rulesView === 'target' ? 'Add target rule' : 'Add usage rule'}
+              </Btn>
             </div>
-            <div className="flex flex-wrap items-center gap-3 pb-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
-                <input type="checkbox" checked={allShownRulesSelected} onChange={toggleShownRules}
-                  disabled={!shownRuleKeys.length}
-                  className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40" />
-                Select shown rules
-              </label>
-              <span className="text-[11px] text-neutral-500">{filteredTargetRules.length}/{targetRules.length} client rules / {filteredUsageRules.length}/{usageRules.length} usage rules</span>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="w-full max-w-sm">
+                <label className="mb-1 block text-[10px] uppercase tracking-wide text-neutral-500">Search rules</label>
+                <ClearableInput value={ruleSearch} onChange={e => changeRuleSearch(e.target.value)}
+                  onClear={() => changeRuleSearch('')} clearTitle="Clear rules search"
+                  placeholder="Rule name, client, or value" />
+              </div>
+              <div className="flex flex-wrap items-center gap-3 pb-2">
+                <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
+                  <input type="checkbox" checked={allShownRulesSelected} onChange={toggleShownRules}
+                    disabled={!shownRuleKeys.length}
+                    className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40" />
+                  Select shown rules
+                </label>
+                <span className="text-[11px] text-neutral-500">{filteredTargetRules.length}/{targetRules.length} client rules / {filteredUsageRules.length}/{usageRules.length} usage rules</span>
+              </div>
             </div>
           </div>
           <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-3 space-y-3">
@@ -8927,31 +9034,62 @@ https://bit.ly/4vrcu64`;
               </div>
             </div>
           )}
-          <div>
-            <SectionLabel hint={targetHint}>{targetTitle}</SectionLabel>
-            <div className="space-y-2">
-              {filteredTargetRules.map(r => (
-                <BmrRuleEditor key={r.id} rule={r} kind="target" clients={targetClients}
-                  selected={selectedRuleKeySet.has(`target:${r.id}`)}
-                  onSelect={() => toggleSelectedRule(`target:${r.id}`)}
-                  onChange={(next) => updT(r.id, next)} onDelete={() => delT(r.id)} />
-              ))}
-              <Btn variant="ghost" size="sm" onClick={addTarget}><IconPlus /> Add target rule</Btn>
+          {rulesView === 'target' ? (
+            <div key="target" className="anim-fade-in space-y-10">
+              {clientTabExtras}
+              <div>
+                <SectionLabel hint={targetHint}>{targetTitle}</SectionLabel>
+                <div className="space-y-2">
+                  <BmrRulePager page={safeTargetPage} pageCount={targetPageCount} pageSize={rulePageSize}
+                    from={targetRangeFrom} to={targetRangeTo} total={filteredTargetRules.length} noun="client rules"
+                    onPage={setTargetPage} onPageSize={setRulePageSize} />
+                  {pagedTargetRules.map(r => (
+                    <BmrRuleEditor key={r.id} rule={r} kind="target" clients={targetClients}
+                      selected={selectedRuleKeySet.has(`target:${r.id}`)}
+                      onSelect={() => toggleSelectedRule(`target:${r.id}`)}
+                      onChange={(next) => updT(r.id, next)} onDelete={() => delT(r.id)} />
+                  ))}
+                  {!pagedTargetRules.length && (
+                    <p className="rounded-md border border-dashed border-neutral-700 px-3 py-6 text-center text-[11px] text-neutral-600">
+                      {targetRules.length ? 'No client rules match this search.' : 'No client rules yet.'}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <Btn variant="ghost" size="sm" onClick={addTarget}><IconPlus /> Add target rule</Btn>
+                    <BmrRulePager page={safeTargetPage} pageCount={targetPageCount} pageSize={rulePageSize}
+                      from={targetRangeFrom} to={targetRangeTo} total={filteredTargetRules.length} noun="client rules"
+                      onPage={setTargetPage} onPageSize={setRulePageSize} showPageSize={false} />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          <div aria-hidden="true" className="border-t-2 border-neutral-700"></div>
-          <div>
-            <SectionLabel hint={usageHint}>30-min usage column rules</SectionLabel>
-            <div className="space-y-2">
-              {filteredUsageRules.map(r => (
-                <BmrRuleEditor key={r.id} rule={r} kind="usage"
-                  selected={selectedRuleKeySet.has(`usage:${r.id}`)}
-                  onSelect={() => toggleSelectedRule(`usage:${r.id}`)}
-                  onChange={(next) => updU(r.id, next)} onDelete={() => delU(r.id)} />
-              ))}
-              <Btn variant="ghost" size="sm" onClick={addUsage}><IconPlus /> Add usage rule</Btn>
+          ) : (
+            <div key="usage" className="anim-fade-in">
+              <SectionLabel hint={usageHint}>30-min usage column rules</SectionLabel>
+              <div className="space-y-2">
+                <BmrRulePager page={safeUsagePage} pageCount={usagePageCount} pageSize={rulePageSize}
+                  from={usageRangeFrom} to={usageRangeTo} total={filteredUsageRules.length} noun="usage rules"
+                  onPage={setUsagePage} onPageSize={setRulePageSize} />
+                {pagedUsageRules.map(r => (
+                  <BmrRuleEditor key={r.id} rule={r} kind="usage"
+                    selected={selectedRuleKeySet.has(`usage:${r.id}`)}
+                    onSelect={() => toggleSelectedRule(`usage:${r.id}`)}
+                    onChange={(next) => updU(r.id, next)} onDelete={() => delU(r.id)} />
+                ))}
+                {!pagedUsageRules.length && (
+                  <p className="rounded-md border border-dashed border-neutral-700 px-3 py-6 text-center text-[11px] text-neutral-600">
+                    {usageRules.length ? 'No usage rules match this search.' : 'No 30-minute usage rules yet.'}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <Btn variant="ghost" size="sm" onClick={addUsage}><IconPlus /> Add usage rule</Btn>
+                  <BmrRulePager page={safeUsagePage} pageCount={usagePageCount} pageSize={rulePageSize}
+                    from={usageRangeFrom} to={usageRangeTo} total={filteredUsageRules.length} noun="usage rules"
+                    onPage={setUsagePage} onPageSize={setRulePageSize} showPageSize={false} />
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       );
     }
@@ -9260,8 +9398,10 @@ https://bit.ly/4vrcu64`;
         });
       }, [onChange]);
 
-      return (
-        <div className="space-y-10">
+      // Both SMS-only sections act on BALANCE cells, so they ride along in the
+      // client sub tab and the sub-tab bar stays at the top of the page.
+      const clientTabExtras = (
+        <React.Fragment>
           <div>
             <SectionLabel hint="BMR SMS only - compares BALANCE with Over Draft / OD in the same time block">Overdraft reached rules</SectionLabel>
             <div className="space-y-2">
@@ -9287,14 +9427,18 @@ https://bit.ly/4vrcu64`;
             </div>
           </div>
           <div aria-hidden="true" className="border-t-2 border-neutral-700"></div>
-          <BmrRulesPanel
-            bmr={rulesBmr}
-            onChange={setRulesBmr}
-            targetTitle="Balance column rules"
-            targetHint="Each rule targets one SMS client across the 25 Balance columns. Retail uses BALANCE; Wholesale uses BALANCE after OD."
-            usageHint="Applies to all 25 SMS 30mins usage columns in RES and WHS sheets."
-          />
-        </div>
+        </React.Fragment>
+      );
+
+      return (
+        <BmrRulesPanel
+          bmr={rulesBmr}
+          onChange={setRulesBmr}
+          targetTitle="Balance column rules"
+          targetHint="Each rule targets one SMS client across the 25 Balance columns. Retail uses BALANCE; Wholesale uses BALANCE after OD."
+          usageHint="Applies to all 25 SMS 30mins usage columns in RES and WHS sheets."
+          clientTabExtras={clientTabExtras}
+        />
       );
     }
 
